@@ -1,0 +1,17 @@
+{
+  "name": "dynamic_costumer",
+  "display_name": "Dynamic Costumer",
+  "version": "0.0.1",
+  "author": "Archkr",
+  "description": "Automatically switches character costumes mid-stream based on text content and resets after inactivity.",
+  "license": "AGPL-3.0-or-later",
+  "js": "index.js",
+  "css": "style.css",
+  "html": [
+    {
+      "file": "ui.html",
+      "location": "extensions"
+    }
+  ],
+  "loading_order": 50
+}

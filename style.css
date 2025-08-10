@@ -1,0 +1,28 @@
+.dynamic-costumer-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background-color: var(--bg1, #1f1f1f);
+  color: var(--text1, #ddd);
+}
+
+/* Layout for each row */
+.dynamic-costumer-settings .inline-group {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Make number input compact */
+#dc-timeout-input {
+  width: 120px;
+}
+
+/* Small helper text */
+.dc-note {
+  opacity: 0.8;
+  font-size: 0.85em;
+}
