@@ -1,1 +1,12 @@
+.costume-switcher-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
 
+.costume-switcher-settings.extension_settings_block {
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+}
