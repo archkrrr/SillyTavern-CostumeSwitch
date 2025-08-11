@@ -21,7 +21,7 @@ The **SillyTavern Costume Switcher** extension allows users to automatically swi
 ### Usage
 
 1. Go to the **SillyTavern Extensions** page and enable the **Costume Switcher** extension.
-2. In the extension settings, define the character names you want the extension to listen for. For example: `Shido`, `Kotori`, `Tohka`, `Reine`.
+2. In the extension settings, define the character names you want the extension to listen for. For example: `Char A`, `Char B`, `Char C`, `Char D`.
 3. Set your **default costume** that will be applied when no character name is detected in the conversation.
 4. Optionally, adjust the **timeout** before the costume resets, the **global cooldown** between costume switches, and **repeat suppression** to avoid rapid costume changes.
 5. When a character name from your list is detected, the extension will automatically switch to the corresponding costume.
