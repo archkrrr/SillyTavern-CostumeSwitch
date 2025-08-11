@@ -604,7 +604,7 @@ jQuery(async () => {
 
       const bufKey = messageId != null ? `m${messageId}` : 'live';
 
-      const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$|^Back in Central Park,$/i;
+      const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$/i;
       if (sceneChangeRegex.test(tokenText.trim())) {
           debugLog(settings, `[CostumeSwitch] Scene change detected. Resetting context for: ${bufKey}`);
           perMessageBuffers.delete(bufKey);
