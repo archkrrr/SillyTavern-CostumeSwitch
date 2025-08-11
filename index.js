@@ -364,75 +364,158 @@ jQuery(async () => {
       perMessageBuffers.set(bufKey, combined);
       let matchedName = null;
 
-      // 1) Speaker regex at line starts
-      if (speakerRegex) {
-        const speakerSearchRe = new RegExp(speakerRegex.source, 'gi');
-        let lastSpeakerMatch = null;
-        let m;
-        while ((m = speakerSearchRe.exec(combined)) !== null) lastSpeakerMatch = m;
-        if (lastSpeakerMatch) matchedName = lastSpeakerMatch[1]?.trim();
-      }
-
-      // 2) Attribution ("...", Name said) or (Name said, "...")
-      if (!matchedName && attributionRegex) {
-        const aRe = new RegExp(attributionRegex.source, 'gi');
-        let lastA = null; let am;
-        while ((am = aRe.exec(combined)) !== null) lastA = am;
-        if (lastA) {
-          for (let i = 1; i < lastA.length; i++) {
-            if (lastA[i]) { matchedName = lastA[i].trim(); break; }
+      // QUICK local scan of just the current tokenText first — more responsive for streaming
+      (function quickTokenScan() {
+        try {
+          const short = String(tokenText || '').trim();
+          if (!short) return;
+          // token-level speaker
+          if (speakerRegex) {
+            const m = new RegExp(speakerRegex.source, 'i').exec(short);
+            if (m && m[1]) { matchedName = m[1].trim(); return; }
           }
-        }
-      }
-
-      // 3) Action/narration lines that start with name ("Kotori nodded..." or "Tohka held aloft")
-      if (!matchedName && actionRegex) {
-        const acRe = new RegExp(actionRegex.source, 'gi');
-        let lastAct = null; let am;
-        while ((am = acRe.exec(combined)) !== null) lastAct = am;
-        if (lastAct) {
-          for (let i = 1; i < lastAct.length; i++) if (lastAct[i]) { matchedName = lastAct[i].trim(); break; }
-        }
-      }
-
-      // 4) Vocative ("Shido, stay ready.")
-      if (!matchedName && vocativeRegex) {
-        const vRe = new RegExp(vocativeRegex.source, 'gi');
-        let lastV = null; let vm;
-        while ((vm = vRe.exec(combined)) !== null) lastV = vm;
-        if (lastV) matchedName = lastV[1]?.trim();
-      }
-
-      // 5) Optional narration fallback (loose) -- only if enabled
-      if (!matchedName && nameRegex && settings.narrationSwitch) {
-        const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
-        const narrationRe = new RegExp(nameRegex.source + '\\b\\s+' + actionsOrPossessive + '\\b', 'gi');
-        let lastMatch = null; let mm;
-        while ((mm = narrationRe.exec(combined)) !== null) {
-          if (isInsideQuotes(combined, mm.index)) continue;
-          for (let i = 1; i < mm.length; i++) if (mm[i]) { lastMatch = { name: mm[i], idx: mm.index }; break; }
-        }
-        if (lastMatch) matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
-      }
-
-      // 6) Last-resort: scan for last occurrence of any name in the buffer (prefer not-inside-quotes)
-      if (!matchedName && settings.patterns && settings.patterns.length) {
-        const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-        if (names.length) {
-          const anyNameRe = new RegExp('\\\b(' + names.map(escapeRegex).join('|') + ')\\\b', 'gi');
-          let lastMatch = null; let m;
-          while ((m = anyNameRe.exec(combined)) !== null) {
-            if (isInsideQuotes(combined, m.index)) continue;
-            lastMatch = { name: m[1], idx: m.index };
+          // token-level vocative
+          if (!matchedName && vocativeRegex) {
+            const m = new RegExp(vocativeRegex.source, 'i').exec(short);
+            if (m && m[1]) { matchedName = m[1].trim(); return; }
           }
-          if (lastMatch) matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
-        }
-      }
+          // token-level action
+          if (!matchedName && actionRegex) {
+            const m = new RegExp(actionRegex.source, 'i').exec(short);
+            if (m && m[1]) { matchedName = m[1].trim(); return; }
+          }
+          // token-level any-name
+          if (!matchedName && settings.patterns && settings.patterns.length) {
+            const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+            if (names.length) {
+              const anyNameRe = new RegExp('\(' + names.map(escapeRegex).join('|') + ')\', 'i');
+              const mm = anyNameRe.exec(short);
+              if (mm && mm[1] && !isInsideQuotes(short, mm.index)) matchedName = mm[1].trim();
+            }
+          }
+        } catch (e) { /* ignore token-level scan errors */ }
+      })();
 
+      // If token-scan found a match, issue immediately and skip heavier scanning
       if (matchedName) {
         issueCostumeForName(matchedName);
         scheduleResetIfIdle();
-        perMessageBuffers.set(bufKey, "");
+        // clear only up to the match in the combined buffer to avoid losing context that appears after
+        try {
+          const idx = (combined || '').toLowerCase().lastIndexOf(matchedName.toLowerCase());
+          if (idx >= 0) perMessageBuffers.set(bufKey, (combined || '').slice(idx + matchedName.length));
+          else perMessageBuffers.set(bufKey, '');
+        } catch (e) { perMessageBuffers.set(bufKey, ''); }
+      } else {
+        // --- Heavier tiered scanning across the accumulated buffer ---
+
+        // 1) Speaker regex at line starts
+        let speakerMatchIndex = -1;
+        if (speakerRegex) {
+          const speakerSearchRe = new RegExp(speakerRegex.source, 'gi');
+          let lastSpeakerMatch = null; let m;
+          while ((m = speakerSearchRe.exec(combined)) !== null) lastSpeakerMatch = m;
+          if (lastSpeakerMatch) { matchedName = lastSpeakerMatch[1]?.trim(); speakerMatchIndex = lastSpeakerMatch.index || -1; }
+        }
+
+        // 2) Attribution ("...", Name said) or (Name said, "...")
+        let attributionMatchIndex = -1;
+        if (!matchedName && attributionRegex) {
+          const aRe = new RegExp(attributionRegex.source, 'gi');
+          let lastA = null; let am;
+          while ((am = aRe.exec(combined)) !== null) lastA = am;
+          if (lastA) {
+            for (let i = 1; i < lastA.length; i++) {
+              if (lastA[i]) { matchedName = lastA[i].trim(); attributionMatchIndex = lastA.index || -1; break; }
+            }
+          }
+        }
+
+        // 3) Action/narration lines that start with name
+        let actionMatchIndex = -1;
+        if (!matchedName && actionRegex) {
+          const acRe = new RegExp(actionRegex.source, 'gi');
+          let lastAct = null; let am;
+          while ((am = acRe.exec(combined)) !== null) lastAct = am;
+          if (lastAct) {
+            for (let i = 1; i < lastAct.length; i++) if (lastAct[i]) { matchedName = lastAct[i].trim(); actionMatchIndex = lastAct.index || -1; break; }
+          }
+        }
+
+        // 4) Vocative ("Shido, stay ready.")
+        let vocativeMatchIndex = -1;
+        if (!matchedName && vocativeRegex) {
+          const vRe = new RegExp(vocativeRegex.source, 'gi');
+          let lastV = null; let vm;
+          while ((vm = vRe.exec(combined)) !== null) lastV = vm;
+          if (lastV) { matchedName = lastV[1]?.trim(); vocativeMatchIndex = lastV.index || -1; }
+        }
+
+        // 5) Optional narration fallback (loose) -- only if enabled
+        let narrationMatchIndex = -1;
+        if (!matchedName && nameRegex && settings.narrationSwitch) {
+          const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
+          const narrationRe = new RegExp(nameRegex.source + '\b\s+' + actionsOrPossessive + '\b', 'gi');
+          let lastMatch = null; let mm;
+          while ((mm = narrationRe.exec(combined)) !== null) {
+            if (isInsideQuotes(combined, mm.index)) continue;
+            for (let i = 1; i < mm.length; i++) if (mm[i]) { lastMatch = { name: mm[i], idx: mm.index }; break; }
+          }
+          if (lastMatch) { matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim(); narrationMatchIndex = lastMatch.idx || -1; }
+        }
+
+        // 6) Last-resort: scan for last occurrence of any name in the buffer (prefer not-inside-quotes)
+        let lastOccurIndex = -1;
+        if (!matchedName && settings.patterns && settings.patterns.length) {
+          const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+          if (names.length) {
+            const anyNameRe = new RegExp('\(' + names.map(escapeRegex).join('|') + ')\', 'gi');
+            let lastMatch = null; let m;
+            while ((m = anyNameRe.exec(combined)) !== null) {
+              if (isInsideQuotes(combined, m.index)) continue;
+              lastMatch = { name: m[1], idx: m.index };
+            }
+            if (lastMatch) { matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim(); lastOccurIndex = lastMatch.idx || -1; }
+          }
+        }
+
+        // Heuristic: prefer matches that are recent (close to buffer end). If we have multiple passes above,
+        // choose the one with the highest index (closest to buffer end) among available matches.
+        try {
+          const indices = [speakerMatchIndex, attributionMatchIndex, actionMatchIndex, vocativeMatchIndex, narrationMatchIndex, lastOccurIndex];
+          const namedIndices = { speaker: speakerMatchIndex, attribution: attributionMatchIndex, action: actionMatchIndex, vocative: vocativeMatchIndex, narration: narrationMatchIndex, last: lastOccurIndex };
+          // If multiple matches were found earlier (we set matchedName each time), try picking the most recent one by searching back
+          // for any of the known names in the buffer and selecting the one with highest index
+          if (settings.patterns && settings.patterns.length) {
+            const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+            let chosen = null; let chosenIdx = -1;
+            for (const nm of names) {
+              const low = nm.toLowerCase();
+              const idx = (combined || '').toLowerCase().lastIndexOf(low);
+              if (idx > chosenIdx) { chosen = nm; chosenIdx = idx; }
+            }
+            if (chosen) {
+              // Only override if chosenIdx is reasonably recent (within RECENT_WINDOW) or if we currently have no matchedName
+              const RECENT_WINDOW = 700; // chars
+              if (!matchedName || chosenIdx >= (combined.length - RECENT_WINDOW)) {
+                matchedName = chosen;
+                // trim buffer up to match
+                perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
+              }
+            }
+          }
+        } catch (e) { /* ignore heuristics errors */ }
+
+        if (matchedName) {
+          issueCostumeForName(matchedName);
+          scheduleResetIfIdle();
+          // clear buffer conservatively
+          try {
+            const idx = (combined || '').toLowerCase().lastIndexOf(matchedName.toLowerCase());
+            if (idx >= 0) perMessageBuffers.set(bufKey, (combined || '').slice(idx + matchedName.length));
+            else perMessageBuffers.set(bufKey, '');
+          } catch (e) { perMessageBuffers.set(bufKey, ''); }
+        }
       }
 
       if (settings.debug) console.debug("CS debug: ", { bufKey, recent: combined.slice(-400), matchedName });
