@@ -127,10 +127,10 @@ function findNonQuotedMatches(text, regex, quoteRanges) {
 }
 
 /**
- * Scans a given text window for the best character match based on a priority system.
+ * Scans the full text buffer for the best character match based on a priority system.
  */
-function findBestMatchInWindow(window, regexes, settings, quoteRanges) {
-    if (!window) return null;
+function findBestMatch(buffer, regexes, settings, quoteRanges) {
+    if (!buffer) return null;
 
     const allMatches = [];
     const { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex } = regexes;
@@ -139,38 +139,37 @@ function findBestMatchInWindow(window, regexes, settings, quoteRanges) {
         speaker: 5,
         attribution: 4,
         action: 3,
-        vocative: 3,
-        possessive: 2,
+        vocative: 2, // Lowered priority
         name: 1,
     };
 
-    // Find matches for each type within the window
+    // Find matches for each type
     if (speakerRegex) {
-        findNonQuotedMatches(window, speakerRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(buffer, speakerRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'speaker', matchIndex: m.index, priority: priorities.speaker });
         });
     }
     if (attributionRegex) {
-        findNonQuotedMatches(window, attributionRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(buffer, attributionRegex, quoteRanges).forEach(m => {
             const name = m.groups?.find(g => g)?.trim();
             if (name) allMatches.push({ name, matchKind: 'attribution', matchIndex: m.index, priority: priorities.attribution });
         });
     }
     if (actionRegex) {
-        findNonQuotedMatches(window, actionRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(buffer, actionRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'action', matchIndex: m.index, priority: priorities.action });
         });
     }
     if (vocativeRegex) {
-        findNonQuotedMatches(window, vocativeRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(buffer, vocativeRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'vocative', matchIndex: m.index, priority: priorities.vocative });
         });
     }
     if (nameRegex && settings.narrationSwitch) {
-         findNonQuotedMatches(window, nameRegex, quoteRanges).forEach(m => {
+         findNonQuotedMatches(buffer, nameRegex, quoteRanges).forEach(m => {
             const name = String(m.groups?.[0] || m.match).replace(/-(?:sama|san)$/i, '').trim();
             if (name) allMatches.push({ name, matchKind: 'name', matchIndex: m.index, priority: priorities.name });
         });
@@ -458,34 +457,32 @@ jQuery(async () => {
       perMessageBuffers.set(bufKey, newCombinedBuffer);
 
       if (!perMessageStates.has(bufKey)) {
-          perMessageStates.set(bufKey, { lastAcceptedName: null, lastAcceptedTs: 0 });
+          perMessageStates.set(bufKey, { lastAcceptedName: null, lastAcceptedTs: 0, lastAcceptedIndex: -1 });
       }
       const state = perMessageStates.get(bufKey);
+      const quoteRanges = getQuoteRanges(newCombinedBuffer);
 
-      // Create a scan window of the new token + some context
-      const contextSize = 100;
-      const context = prevBuffer.slice(-contextSize);
-      const scanWindow = context + tokenText;
-      const quoteRanges = getQuoteRanges(scanWindow);
-
-      const bestMatch = findBestMatchInWindow(scanWindow, {
+      const bestMatch = findBestMatch(newCombinedBuffer, {
           speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex
       }, settings, quoteRanges);
 
-      if (bestMatch && bestMatch.matchIndex >= context.length) {
-          let { name: matchedName, matchKind } = bestMatch;
-          const now = Date.now();
+      if (bestMatch) {
+          let { name: matchedName, matchKind, matchIndex } = bestMatch;
+          
+          if (matchIndex > state.lastAcceptedIndex) {
+              const now = Date.now();
+              // Flicker guard
+              if (state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < settings.repeatSuppressMs)) {
+                  if (settings.debug) console.debug('CS debug: suppressing repeat match for same name (flicker guard)', { matchedName });
+                  matchedName = null;
+              }
 
-          // Flicker guard
-          if (state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < settings.repeatSuppressMs)) {
-              if (settings.debug) console.debug('CS debug: suppressing repeat match for same name (flicker guard)', { matchedName });
-              matchedName = null;
-          }
-
-          if (matchedName) {
-              state.lastAcceptedName = matchedName;
-              state.lastAcceptedTs = now;
-              issueCostumeForName(matchedName, { matchKind, bufKey });
+              if (matchedName) {
+                  state.lastAcceptedName = matchedName;
+                  state.lastAcceptedTs = now;
+                  state.lastAcceptedIndex = matchIndex;
+                  issueCostumeForName(matchedName, { matchKind, bufKey });
+              }
           }
       }
 
@@ -526,7 +523,7 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v5.1 — local context fix) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v5.2 — priority fix) loaded.");
 });
 
 function getSettingsObj() {
