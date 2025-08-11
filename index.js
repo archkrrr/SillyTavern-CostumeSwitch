@@ -1,3 +1,11 @@
+/* SillyTavern-CostumeSwitch - Tier-A intelligent attribution
+   Replaces the previous heuristic-only logic with a stateful, quote-aware,
+   recent-speaker-backed attribution pipeline. Fast, in-browser, no external deps.
+   - Keeps quickTokenScan + heavy scan, but uses stronger acceptance rules.
+   - Adds repeat suppression and stricter "matchIndex > lastSpeakerIndex" rule.
+   - Provides tryCorefResolution hook (no-op by default) for future ML integration.
+*/
+
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
@@ -16,17 +24,17 @@ const DEFAULTS = {
   failedTriggerCooldownMs: 10000,
   maxBufferChars: 2000,
 
-  // NEW tunables (safe defaults)
   tokenBoundarySize: 80,        // chars of prev buffer to include when quick-scanning tokens
   pronounLookbackChars: 1400,   // how far back to search for names when resolving pronouns
-  repeatSuppressMs: 800         // suppress repeated accepted matches/logs for this many ms
+  repeatSuppressMs: 800,        // suppress repeated accepted matches/logs for this many ms
+  sentenceFlushThreshold: 120,  // tokens/characters to force a sentence-level decision (trade latency vs accuracy)
 };
 
+// ---------- small helpers ----------
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/* robust pattern parsing (accepts escaped slashes) */
 function parsePatternEntry(raw) {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return null;
@@ -46,7 +54,6 @@ function computeFlagsFromEntries(entries, requireI = true) {
   return Array.from(flagsSet).filter(c => allowed.includes(c)).join('');
 }
 
-/* Build regexes (same logic as before) */
 function buildNameRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -63,19 +70,11 @@ function buildSpeakerRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildSpeakerRegex compile failed:", e); return null; }
 }
-function buildVocativeRegex(patternList) {
-  const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
-  if (!entries.length) return null;
-  const parts = entries.map(e => `(?:${e.body})`);
-  const body = `(?:^|\\n|\\s)(${parts.join('|')})\\s*,`;
-  const flags = computeFlagsFromEntries(entries, true);
-  try { return new RegExp(body, flags); } catch (e) { console.warn("buildVocativeRegex compile failed:", e); return null; }
-}
 function buildAttributionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const names = entries.map(e => `(?:${e.body})`).join('|');
-  const verbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)';
+  const verbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked|ordered|commanded|reported)';
   const patA = '(["\\u201C\\u201D].{0,400}["\\u201C\\u201D])\\s*,?\\s*(' + names + ')\\s+' + verbs;
   const patB = '(?:^|\\n)\\s*(' + names + ')\\s+' + verbs + '\\s*[:,]?\\s*["\\u201C\\u201D]';
   const body = `(?:${patA})|(?:${patB})`;
@@ -86,13 +85,21 @@ function buildActionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
-  const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved)';
+  const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved|offered)';
   const body = `(?:^|\\n)\\s*(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
 }
+function buildVocativeRegex(patternList) {
+  const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
+  if (!entries.length) return null;
+  const parts = entries.map(e => `(?:${e.body})`);
+  const body = `(?:^|\\n|\\s)(${parts.join('|')})\\s*,`;
+  const flags = computeFlagsFromEntries(entries, true);
+  try { return new RegExp(body, flags); } catch (e) { console.warn("buildVocativeRegex compile failed:", e); return null; }
+}
 
-/* Quote ranges helpers (robust inside-quote checks) */
+// Quote helpers
 function getQuoteRanges(s) {
   const q = /["\u201C\u201D]/g;
   const pos = [];
@@ -106,7 +113,6 @@ function isIndexInsideQuotesRanges(ranges, idx) {
   for (const [a, b] of ranges) if (idx > a && idx < b) return true;
   return false;
 }
-
 function posIsInsideQuotes(pos, combined, quoteRanges) {
   if (pos == null || !combined) return false;
   if (quoteRanges && quoteRanges.length) {
@@ -114,7 +120,14 @@ function posIsInsideQuotes(pos, combined, quoteRanges) {
   }
   return isInsideQuotes(combined, pos);
 }
+function isInsideQuotes(text, pos) {
+  if (!text || pos <= 0) return false;
+  const before = text.slice(0, pos);
+  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
+  return (quoteCount % 2) === 1;
+}
 
+// non-quoted match helpers
 function findNonQuotedMatches(combined, regex, quoteRanges) {
   if (!combined || !regex) return [];
   const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
@@ -135,13 +148,7 @@ function lastNonQuotedMatch(combined, regex, quoteRanges) {
   return ms.length ? ms[ms.length - 1] : null;
 }
 
-function isInsideQuotes(text, pos) {
-  if (!text || pos <= 0) return false;
-  const before = text.slice(0, pos);
-  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
-  return (quoteCount % 2) === 1;
-}
-
+// normalize stream token text
 function normalizeStreamText(s) {
   if (!s) return '';
   s = String(s);
@@ -152,6 +159,7 @@ function normalizeStreamText(s) {
   return s;
 }
 
+// clean costume name
 function normalizeCostumeName(n) {
   if (!n) return "";
   let s = String(n).trim();
@@ -160,9 +168,9 @@ function normalizeCostumeName(n) {
   return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
 }
 
-// runtime state
+// ---------- runtime state ----------
 const perMessageBuffers = new Map();
-const perMessageStates = new Map(); // bufKey -> { currentSpeaker, lastSpeakerIndex, lastAcceptedName, lastAcceptedIndex, lastAcceptedTs, lastAlreadyUsingLogTs }
+const perMessageStates = new Map(); // bufKey -> state object
 let lastIssuedCostume = null;
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
@@ -186,14 +194,16 @@ function ensureBufferLimit() {
   }
 }
 
-const recentSpeakers = [];
+// recent speaker stack for simple coref fallback
+const recentSpeakers = []; // {name, ts}
 const RECENT_SPEAKER_MAX = 8;
 function pushRecentSpeaker(name) {
   name = normalizeCostumeName(name || '');
   if (!name) return;
   const ts = Date.now();
   if (recentSpeakers.length && recentSpeakers[recentSpeakers.length-1].name.toLowerCase() === name.toLowerCase()) {
-    recentSpeakers[recentSpeakers.length-1].ts = ts; return;
+    recentSpeakers[recentSpeakers.length-1].ts = ts;
+    return;
   }
   recentSpeakers.push({ name, ts });
   if (recentSpeakers.length > RECENT_SPEAKER_MAX) recentSpeakers.shift();
@@ -205,25 +215,7 @@ function getMostRecentSpeakerBefore(cutoffTs = Date.now()) {
   return null;
 }
 
-function waitForSelector(selector, timeout = 3000, interval = 120) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const iv = setInterval(() => {
-      const el = document.querySelector(selector);
-      if (el) { clearInterval(iv); resolve(true); return; }
-      if (Date.now() - start > timeout) { clearInterval(iv); resolve(false); }
-    }, interval);
-  });
-}
-
-function flagsWithoutG(regex) {
-  if (!regex) return '';
-  return (regex.flags || '').replace(/g/g, '');
-}
-
-let speakerRegexNoG = null;
-let vocativeRegexNoG = null;
-let actionRegexNoG = null;
+// ---------- UI / settings wiring & main ----------
 
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
@@ -240,6 +232,7 @@ jQuery(async () => {
   const ok = await waitForSelector("#cs-save", 3000, 100);
   if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
 
+  // set UI defaults if present
   if (jQuery("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
   if (jQuery("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
   if (jQuery("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
@@ -260,21 +253,22 @@ jQuery(async () => {
 
   const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (!realCtx) { console.error("SillyTavern context not found. Extension won't run."); return; }
-
   const { eventSource, event_types, characters } = realCtx;
 
-  // Build initial regexes and precompute NoG variants
+  // Build initial regexes
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
   let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
   let actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
   let vocativeRegex = buildVocativeRegex(settings.patterns || DEFAULTS.patterns);
 
+  // non-global variants for quick checks
   function buildNoGVariants() {
     speakerRegexNoG = speakerRegex ? new RegExp(speakerRegex.source, flagsWithoutG(speakerRegex) || 'i') : null;
     vocativeRegexNoG = vocativeRegex ? new RegExp(vocativeRegex.source, flagsWithoutG(vocativeRegex) || 'i') : null;
     actionRegexNoG = actionRegex ? new RegExp(actionRegex.source, flagsWithoutG(actionRegex) || 'i') : null;
   }
+  let speakerRegexNoG = null, vocativeRegexNoG = null, actionRegexNoG = null;
   buildNoGVariants();
 
   function tryWireUI() {
@@ -314,6 +308,7 @@ jQuery(async () => {
   }
   tryWireUI(); setTimeout(tryWireUI, 500); setTimeout(tryWireUI, 1500);
 
+  // simulate quick reply clicks
   function triggerQuickReply(labelOrMessage) {
     try {
       const label = String(labelOrMessage || '').trim();
@@ -356,7 +351,7 @@ jQuery(async () => {
         } catch (e) { /* continue */ }
       }
 
-      console.warn(`[CostumeSwitch] Quick Reply not found: "${label}"`);
+      if (settings.debug) console.warn(`[CostumeSwitch] Quick Reply not found: "${label}"`);
       return false;
     } catch (err) {
       console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
@@ -424,15 +419,17 @@ jQuery(async () => {
     else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); setTimeout(()=>$("#cs-status").text(""), 1500); }
   }
 
+  // core function - robust, context-aware issuing
   function issueCostumeForName(name, opts = {}) {
     if (!name) return;
-    name = normalizeCostumeName(name);
+    name = normalizeCostumeName(name || '');
     const now = Date.now();
     const matchKind = opts.matchKind || null;
 
-    // strong kinds that should bypass global cooldown
+    // strong kinds that we allow to bypass global cooldown
     const strongKinds = new Set(['speaker','action','attribution','vocative','narration','pronoun-infer']);
 
+    // early: avoid redundant switches (log suppressed)
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
     if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
       try {
@@ -450,7 +447,7 @@ jQuery(async () => {
       return;
     }
 
-    // --- global cooldown (only after confirming name differs from current) ---
+    // global cooldown: allow bypass for strong kinds
     if (!strongKinds.has(matchKind)) {
       if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
         if (settings.debug) console.debug("CS debug: global cooldown active, skipping switch to", name, {
@@ -459,7 +456,7 @@ jQuery(async () => {
         return;
       }
     } else {
-      if (settings.debug) console.debug("CS debug: bypassing global cooldown for strong match kind", matchKind, "->", name);
+      if (settings.debug) console.debug("CS debug: strong-kind bypass attempt for", name, "kind:", matchKind);
     }
 
     const argFolder = `${name}/${name}`;
@@ -503,8 +500,26 @@ jQuery(async () => {
 
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-  // stream handler
-  _streamHandler = (...args) => {
+  // small utility: try to run optional coref hook if provided by host (no-op by default)
+  // This lets advanced users add a global function `window.tryCorefResolution(text, names)` that returns { name, confidence }
+  async function tryCorefResolutionStub(text, names) {
+    try {
+      if (typeof window !== 'undefined' && typeof window.tryCorefResolution === 'function') {
+        // ensure it's awaited if promise
+        const r = await window.tryCorefResolution(text, names);
+        if (r && r.name) return r;
+      }
+    } catch (e) {
+      if (settings.debug) console.warn("CS debug: tryCorefResolution hook failed:", e);
+    }
+    return null;
+  }
+  const tryCorefResolution = tryCorefResolutionStub; // exported internal
+
+  // -------------------------
+  // STREAM HANDLER
+  // -------------------------
+  _streamHandler = async (...args) => {
     try {
       if (!settings.enabled) return;
       let tokenText = ""; let messageId = null;
@@ -528,26 +543,25 @@ jQuery(async () => {
         lastAcceptedName: null,
         lastAcceptedIndex: -1,
         lastAcceptedTs: 0,
-        lastAlreadyUsingLogTs: 0
+        lastAlreadyUsingLogTs: 0,
       });
       const state = perMessageStates.get(bufKey);
+
+      // compute quick metadata
+      const quoteRanges = getQuoteRanges(combined);
 
       let matchedName = null;
       let matchKind = null;
       let matchIndex = -1;
 
-      const quoteRanges = getQuoteRanges(combined);
-
+      // QUICK: window scan (use non-global regex variants to avoid index drift)
       (function quickTokenScan() {
         try {
           const short = String(tokenText || '').trim();
           if (!short) return;
 
           const systemNoiseRe = /Event emitted:|Added\/edited expression override|Expression set|force redrawing character|Streaming in progress:|Timeout waiting for is_send_press|Invalid URI|Empty string passed to getElementById/i;
-          if (systemNoiseRe.test(short)) {
-            if (settings.debug) console.debug("CS debug: skipping system-noise token:", short.slice(0,120));
-            return;
-          }
+          if (systemNoiseRe.test(short)) { if (settings.debug) console.debug("CS debug: skipping system-noise token"); return; }
 
           const boundarySize = Number(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize) || DEFAULTS.tokenBoundarySize;
           const prevTailStart = Math.max(0, (prev || '').length - boundarySize);
@@ -564,6 +578,7 @@ jQuery(async () => {
 
           const windowQuoteRanges = getQuoteRanges(window);
 
+          // speaker: e.g., "Kotori:" or "Kotori Itsuka:"
           if (speakerRegexNoG) {
             const matches = findNonQuotedMatches(window, speakerRegexNoG, windowQuoteRanges);
             if (matches.length) {
@@ -574,16 +589,18 @@ jQuery(async () => {
                   matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null;
                   matchKind = 'speaker';
                   matchIndex = posInCombined;
+                  // update speaker marker
                   state.currentSpeaker = matchedName;
                   state.lastSpeakerIndex = matchIndex;
                   return;
                 }
               } else {
-                if (settings.debug) console.debug("CS debug: speakerRegex window match ignored (entirely in prev buffer).");
+                if (settings.debug) console.debug("CS debug: speakerRegex window match ignored (in prev buffer).");
               }
             }
           }
 
+          // vocative: "Tohka, ..."
           if (!matchedName && vocativeRegexNoG) {
             const matches = findNonQuotedMatches(window, vocativeRegexNoG, windowQuoteRanges);
             if (matches.length) {
@@ -597,11 +614,12 @@ jQuery(async () => {
                   return;
                 }
               } else {
-                if (settings.debug) console.debug("CS debug: vocativeRegex window match ignored (entirely in prev buffer).");
+                if (settings.debug) console.debug("CS debug: vocativeRegex window match ignored (in prev buffer).");
               }
             }
           }
 
+          // action: "Tohka leaned..."
           if (!matchedName && actionRegexNoG) {
             const matches = findNonQuotedMatches(window, actionRegexNoG, windowQuoteRanges);
             if (matches.length) {
@@ -615,11 +633,12 @@ jQuery(async () => {
                   return;
                 }
               } else {
-                if (settings.debug) console.debug("CS debug: actionRegex window match ignored (entirely in prev buffer).");
+                if (settings.debug) console.debug("CS debug: actionRegex window match ignored (in prev buffer).");
               }
             }
           }
 
+          // simple name in window (small chance)
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names.length) {
@@ -627,18 +646,13 @@ jQuery(async () => {
               const matches = findNonQuotedMatches(window, anyNameRe, windowQuoteRanges);
               if (matches.length) {
                 for (const mm of matches) {
-                  if (!matchOverlapsNewToken(mm.index, mm.match.length)) {
-                    if (settings.debug) console.debug("CS debug: name-in-window match ignored (entirely in prev buffer).", mm);
-                    continue;
-                  }
+                  if (!matchOverlapsNewToken(mm.index, mm.match.length)) continue;
                   const posInCombined = windowOffset + mm.index;
                   if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
                     matchedName = (mm.groups && mm.groups[0]) ? mm.groups[0].trim() : mm.match;
                     matchKind = 'name';
                     matchIndex = posInCombined;
                     break;
-                  } else {
-                    if (settings.debug) console.debug("CS debug: name-in-window match skipped due to quotes", mm);
                   }
                 }
               }
@@ -647,18 +661,16 @@ jQuery(async () => {
         } catch (e) { if (settings.debug) console.warn("quickTokenScan error", e); }
       })();
 
-      // Suppression checks (avoid repeated acceptance)
+      // quick suppress/accept logic
       if (matchedName) {
-        const now = Date.now();
+        const nowT = Date.now();
         const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs) || DEFAULTS.repeatSuppressMs;
-        // skip if same or older occurrence already accepted
         if (typeof matchIndex === 'number' && matchIndex <= (state.lastAcceptedIndex || -1)) {
-          if (settings.debug) console.debug('CS debug: skipping matched occurrence because matchIndex <= lastAcceptedIndex', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
+          if (settings.debug) console.debug('CS debug: skipping quick matched occurrence because matchIndex <= lastAcceptedIndex', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
           matchedName = null;
         }
-        // skip if same name accepted recently
-        if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - (state.lastAcceptedTs || 0) < suppressMs)) {
-          if (settings.debug) console.debug('CS debug: suppressing repeat accepted match for same name (repeatSuppressMs)', { matchedName, sinceMs: now - (state.lastAcceptedTs || 0) });
+        if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (nowT - (state.lastAcceptedTs || 0) < suppressMs)) {
+          if (settings.debug) console.debug('CS debug: suppressing quick repeat accepted match for same name', { matchedName });
           matchedName = null;
         }
         // if a different current speaker exists, only accept strong kinds and require matchIndex > lastSpeakerIndex
@@ -668,19 +680,16 @@ jQuery(async () => {
             if (settings.debug) console.debug("CS debug: suppressed quick-scan match because different currentSpeaker present", { curSpeaker: state.currentSpeaker, matchedName, matchKind });
             matchedName = null;
           } else {
-            // require that this occurrence is after the last speaker token; prevents switching to older mentions
-            if (typeof matchIndex === 'number' && typeof state.lastSpeakerIndex === 'number') {
-              if (matchIndex <= state.lastSpeakerIndex) {
-                if (settings.debug) console.debug("CS debug: suppressed strong quick-scan match because matchIndex <= lastSpeakerIndex", { matchedName, matchIndex, lastSpeakerIndex: state.lastSpeakerIndex });
-                matchedName = null;
-              }
+            if (typeof matchIndex === 'number' && typeof state.lastSpeakerIndex === 'number' && matchIndex <= state.lastSpeakerIndex) {
+              if (settings.debug) console.debug("CS debug: suppressed quick strong match due to matchIndex <= lastSpeakerIndex", { matchedName, matchIndex, lastSpeakerIndex: state.lastSpeakerIndex });
+              matchedName = null;
             }
           }
         }
       }
 
       if (matchedName) {
-        // record acceptance
+        // record acceptance and switch
         const now2 = Date.now();
         state.lastAcceptedName = matchedName;
         state.lastAcceptedIndex = (typeof matchIndex === 'number') ? matchIndex : (state.lastAcceptedIndex || -1);
@@ -697,15 +706,23 @@ jQuery(async () => {
         return;
       }
 
-      // heavy scanning
+      // HEAVY scan: sentence-level & quote-aware attribution
       try {
-        // 1) speakerRegex last non-quoted occurrence
+        // sentence splitting (simple): split by newline or punctuation while keeping offsets
+        // We'll search for last few sentences because attribution should be local
+        const text = combined || '';
+        // We'll analyze the last 1600 chars to keep it fast/targeted
+        const analysisWindow = text.slice(-2000);
+        const analysisOffset = text.length - analysisWindow.length;
+        const qRanges = getQuoteRanges(analysisWindow);
+
+        // 1) try explicit speaker labels (global, not-in-quote)
         if (speakerRegex) {
-          const lastSpeaker = lastNonQuotedMatch(combined, speakerRegex, quoteRanges);
+          const lastSpeaker = lastNonQuotedMatch(analysisWindow, speakerRegex, qRanges);
           if (lastSpeaker) {
             matchedName = lastSpeaker.groups && lastSpeaker.groups[0] ? lastSpeaker.groups[0].trim() : null;
             matchKind = 'speaker';
-            matchIndex = lastSpeaker.index || 0;
+            matchIndex = (lastSpeaker.index || 0) + analysisOffset;
             if (matchedName) {
               state.currentSpeaker = matchedName;
               state.lastSpeakerIndex = matchIndex;
@@ -714,66 +731,67 @@ jQuery(async () => {
           }
         }
 
-        // 2) attribution
+        // 2) attribution (quote then speaker, or Name said ...)
         if (!matchedName && attributionRegex) {
-          const lastA = lastNonQuotedMatch(combined, attributionRegex, quoteRanges);
+          const lastA = lastNonQuotedMatch(analysisWindow, attributionRegex, qRanges);
           if (lastA) {
             if (lastA.groups && lastA.groups.length) {
               for (const g of lastA.groups) {
-                if (g) { matchedName = g.trim(); matchKind = 'attribution'; matchIndex = lastA.index || 0; break; }
+                if (g) { matchedName = g.trim(); matchKind = 'attribution'; matchIndex = (lastA.index || 0) + analysisOffset; break; }
               }
             }
           }
         }
 
-        // 3) action
+        // 3) action pattern
         if (!matchedName && actionRegex) {
-          const lastAct = lastNonQuotedMatch(combined, actionRegex, quoteRanges);
+          const lastAct = lastNonQuotedMatch(analysisWindow, actionRegex, qRanges);
           if (lastAct && lastAct.groups && lastAct.groups.length) {
             matchedName = lastAct.groups[0].trim();
             matchKind = 'action';
-            matchIndex = lastAct.index || 0;
+            matchIndex = (lastAct.index || 0) + analysisOffset;
           }
         }
 
         // 4) vocative
         if (!matchedName && vocativeRegex) {
-          const lastV = lastNonQuotedMatch(combined, vocativeRegex, quoteRanges);
+          const lastV = lastNonQuotedMatch(analysisWindow, vocativeRegex, qRanges);
           if (lastV && lastV.groups && lastV.groups.length) {
             matchedName = lastV.groups[0].trim();
             matchKind = 'vocative';
-            matchIndex = lastV.index || 0;
+            matchIndex = (lastV.index || 0) + analysisOffset;
           }
         }
 
-        // 5a) possessive
+        // 5) possessive "Tohka's ..." detection
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           if (names_poss.length) {
             const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
-            const lastP = lastNonQuotedMatch(combined, possRe, quoteRanges);
+            const lastP = lastNonQuotedMatch(analysisWindow, possRe, qRanges);
             if (lastP && lastP.groups && lastP.groups.length) {
               matchedName = lastP.groups[0].trim();
               matchKind = 'possessive';
-              matchIndex = lastP.index || 0;
+              matchIndex = (lastP.index || 0) + analysisOffset;
             }
           }
         }
 
-        // 5b) pronoun inference
+        // 6) pronoun inference with lookback
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const pronARe = /["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\s*,?\s*(?:he|she|they)\s+(?:said|murmured|whispered|replied|asked|noted|added|sighed|laughed|exclaimed)/i;
-          const pM = pronARe.exec(combined);
+          const pM = pronARe.exec(analysisWindow);
           if (pM) {
+            // check recent speakers stack first
             const chosenFromStack = getMostRecentSpeakerBefore();
             if (chosenFromStack) {
               matchedName = chosenFromStack;
               matchKind = 'pronoun-infer';
-              matchIndex = pM.index || 0;
+              matchIndex = (pM.index || 0) + analysisOffset;
             } else {
               const cutIndex = pM.index || 0;
               const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
-              const sub = (combined || '').slice(lookback, cutIndex);
+              const sub = analysisWindow.slice(lookback, cutIndex);
               const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
               if (names_pron.length) {
                 const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
@@ -781,93 +799,89 @@ jQuery(async () => {
                 if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
                   matchedName = lastMatch.groups[0].trim();
                   matchKind = 'pronoun-infer';
-                  matchIndex = lookback + (lastMatch.index || 0);
+                  matchIndex = lookback + (lastMatch.index || 0) + analysisOffset;
+                } else {
+                  // try optional coref hook (user may provide a window.tryCorefResolution)
+                  const hook = await tryCorefResolution(analysisWindow, settings.patterns || DEFAULTS.patterns);
+                  if (hook && hook.name) {
+                    matchedName = hook.name;
+                    matchKind = 'pronoun-infer';
+                    matchIndex = (pM.index || 0) + analysisOffset;
+                    if (settings.debug) console.debug("CS debug: tryCorefResolution returned:", hook);
+                  }
                 }
               }
             }
           }
         }
 
-        // 5c) narration fallback
+        // 7) narration fallback if enabled
         if (!matchedName && nameRegex && settings.narrationSwitch) {
-          const actionsOrPossessive = "(?:'s|’s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
+          const actionsOrPossessive = "(?:'s|’s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added|offered)";
           const narrationRe = new RegExp(nameRegex.source + '\\b\\s+' + actionsOrPossessive + '\\b', 'gi');
-          const lastMatch = lastNonQuotedMatch(combined, narrationRe, quoteRanges);
+          const lastMatch = lastNonQuotedMatch(analysisWindow, narrationRe, qRanges);
           if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
             matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
             matchKind = 'narration';
-            matchIndex = lastMatch.index || 0;
+            matchIndex = (lastMatch.index || 0) + analysisOffset;
           }
         }
 
-        // 6) last-resort name
+        // 8) last-resort: last non-quoted occurrence of any known name
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           if (names.length) {
             const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'gi');
-            const lastMatch = lastNonQuotedMatch(combined, anyNameRe, quoteRanges);
+            const lastMatch = lastNonQuotedMatch(analysisWindow, anyNameRe, qRanges);
             if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
               matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
               matchKind = 'name';
-              matchIndex = lastMatch.index || 0;
+              matchIndex = (lastMatch.index || 0) + analysisOffset;
             }
           }
         }
 
-        // heuristic last-resort recent mention
-        if (!matchedName && settings.patterns && settings.patterns.length) {
-          const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-          let chosen = null; let chosenIdx = -1;
-          for (const nm of names) {
-            const low = nm.toLowerCase();
-            const idx = (combined || '').toLowerCase().lastIndexOf(low);
-            if (idx > chosenIdx) { chosen = nm; chosenIdx = idx; }
+        // Heuristic: if we found candidate, apply stricter acceptance rules
+        if (matchedName) {
+          const nowT = Date.now();
+          const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs) || DEFAULTS.repeatSuppressMs;
+
+          // skip if same or older occurrence already accepted
+          if (typeof matchIndex === 'number' && matchIndex <= (state.lastAcceptedIndex || -1)) {
+            if (settings.debug) console.debug('CS debug: heavy-scan skipping because matchIndex <= lastAcceptedIndex', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
+            matchedName = null;
           }
-          const RECENT_WINDOW = 700;
-          if (chosen && chosenIdx >= (combined.length - RECENT_WINDOW)) {
-            matchedName = chosen;
-            matchKind = 'heuristic';
-            matchIndex = chosenIdx;
-            perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
+
+          // skip if same name accepted recently
+          if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (nowT - (state.lastAcceptedTs || 0) < suppressMs)) {
+            if (settings.debug) console.debug('CS debug: heavy-scan suppressing repeat accepted match for same name', { matchedName });
+            matchedName = null;
+          }
+
+          // if different currentSpeaker exists, require strong kinds and occurrence after lastSpeakerIndex
+          if (matchedName && state.currentSpeaker && state.currentSpeaker.toLowerCase() !== matchedName.toLowerCase()) {
+            const strongKinds = new Set(['action','speaker','attribution','vocative','narration','pronoun-infer']);
+            if (!strongKinds.has(matchKind)) {
+              if (settings.debug) console.debug("CS debug: heavy-scan suppressed because different currentSpeaker present", { curSpeaker: state.currentSpeaker, matchedName, matchKind });
+              matchedName = null;
+            } else {
+              if (typeof matchIndex === 'number' && typeof state.lastSpeakerIndex === 'number' && matchIndex <= state.lastSpeakerIndex) {
+                if (settings.debug) console.debug("CS debug: heavy-scan suppressed strong kind due to stale matchIndex", { matchedName, matchIndex, lastSpeakerIndex: state.lastSpeakerIndex });
+                matchedName = null;
+              }
+            }
           }
         }
       } catch (e) {
         if (settings.debug) console.error("Heavy scan error:", e);
       }
 
-      // heavy-scan suppression checks
+      // Accept heavy-scan match if present
       if (matchedName) {
-        const now = Date.now();
-        const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs) || DEFAULTS.repeatSuppressMs;
-        if (typeof matchIndex === 'number' && matchIndex <= (state.lastAcceptedIndex || -1)) {
-          if (settings.debug) console.debug('CS debug: skipping matched occurrence because matchIndex <= lastAcceptedIndex', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
-          matchedName = null;
-        }
-        if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - (state.lastAcceptedTs || 0) < suppressMs)) {
-          if (settings.debug) console.debug('CS debug: suppressing repeat accepted match for same name (repeatSuppressMs)', { matchedName, sinceMs: now - (state.lastAcceptedTs || 0) });
-          matchedName = null;
-        }
-        if (matchedName && state.currentSpeaker && state.currentSpeaker.toLowerCase() !== matchedName.toLowerCase()) {
-          const strongKinds = new Set(['action','speaker','attribution','vocative','narration','pronoun-infer']);
-          if (!strongKinds.has(matchKind)) {
-            if (settings.debug) console.debug("CS debug: suppressed heavy-scan match because different currentSpeaker present", { curSpeaker: state.currentSpeaker, matchedName, matchKind });
-            matchedName = null;
-          } else {
-            if (typeof matchIndex === 'number' && typeof state.lastSpeakerIndex === 'number') {
-              if (matchIndex <= state.lastSpeakerIndex) {
-                if (settings.debug) console.debug("CS debug: suppressed strong heavy-scan match because matchIndex <= lastSpeakerIndex", { matchedName, matchIndex, lastSpeakerIndex: state.lastSpeakerIndex });
-                matchedName = null;
-              }
-            }
-          }
-        }
-      }
-
-      if (matchedName) {
-        const now2 = Date.now();
+        const now3 = Date.now();
         state.lastAcceptedName = matchedName;
         state.lastAcceptedIndex = (typeof matchIndex === 'number') ? matchIndex : (state.lastAcceptedIndex || -1);
-        state.lastAcceptedTs = now2;
+        state.lastAcceptedTs = now3;
         perMessageStates.set(bufKey, state);
 
         issueCostumeForName(matchedName, { matchKind, matchIndex, bufKey });
@@ -879,11 +893,14 @@ jQuery(async () => {
         } catch (e) { perMessageBuffers.set(bufKey, ''); }
       }
 
-      if (settings.debug) console.debug("CS debug: ", { bufKey, recent: combined.slice(-400), matchedName, matchKind, state: perMessageStates.get(bufKey) });
+      if (settings.debug) console.debug("CS debug stream snapshot", { bufKey, recent: combined.slice(-400), matchedName, matchKind, state: perMessageStates.get(bufKey) });
 
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
   };
 
+  // -------------------------
+  // EVENT HANDLERS
+  // -------------------------
   _genEndHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } scheduleResetIfIdle(); };
   _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
   _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; recentSpeakers.length = 0; };
@@ -905,7 +922,8 @@ jQuery(async () => {
     _clickInProgress.clear();
   }
 
-  try { unload(); } catch(e) {}
+  // hot-reload safe
+  try { unload(); } catch (e) {}
 
   try {
     eventSource.on(streamEventName, _streamHandler);
@@ -918,10 +936,26 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.4 — repeat-suppression + speaker-index guards) loaded.");
+  console.log("SillyTavern-CostumeSwitch (Tier-A intelligent attribution) loaded.");
 });
 
-// getSettingsObj - unchanged pattern
+// ---------- small helpers used above ----------
+function waitForSelector(selector, timeout = 3000, interval = 120) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const iv = setInterval(() => {
+      const el = document.querySelector(selector);
+      if (el) { clearInterval(iv); resolve(true); return; }
+      if (Date.now() - start > timeout) { clearInterval(iv); resolve(false); }
+    }, interval);
+  });
+}
+function flagsWithoutG(regex) {
+  if (!regex) return '';
+  return (regex.flags || '').replace(/g/g, '');
+}
+
+// ---------- settings storage helper ----------
 function getSettingsObj() {
   const ctx = typeof getContext === 'function' ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (ctx && ctx.extensionSettings) {
@@ -934,7 +968,7 @@ function getSettingsObj() {
   if (typeof extension_settings !== 'undefined') {
     extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
     for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][extensionName] = DEFAULTS[k];
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
     }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
