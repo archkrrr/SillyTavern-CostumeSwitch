@@ -1,233 +1,137 @@
-<!-- SillyTavern-CostumeSwitch - settings.html (updated, whole file) -->
-<div class="st-ext-card cs-ext-card" role="region" aria-label="Costume Switch settings">
-  <style>
-    /* Local styles to make the settings panel look tidy and more like built-in extensions.
-       These are intentionally scoped to avoid interfering with other extension UI. */
-    .cs-ext-card {
-      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06));
-      border: 1px solid rgba(255,255,255,0.03);
-      border-radius: 8px;
-      padding: 14px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.45) inset;
-      color: #e6eef6;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-      margin-bottom: 12px;
-    }
+<div class="settings-panel">
+  <h3 class="settings-title">Costume Switch Settings</h3>
 
-    .cs-title {
-      font-size: 1.15rem;
-      font-weight: 700;
-      margin: 0 0 10px 0;
-      color: #fff;
-      letter-spacing: 0.2px;
-    }
-
-    .cs-row {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      margin-bottom: 10px;
-      flex-wrap: wrap;
-    }
-
-    .cs-col {
-      flex: 1 1 240px;
-      min-width: 220px;
-    }
-
-    .cs-label {
-      display: block;
-      font-size: 0.86rem;
-      color: #bcd2ea;
-      margin-bottom: 6px;
-    }
-
-    textarea#cs-patterns {
-      width: 100%;
-      min-height: 96px;
-      resize: vertical;
-      padding: 8px;
-      border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.05);
-      background: rgba(0,0,0,0.25);
-      color: #eef6ff;
-      box-sizing: border-box;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
-      font-size: 0.95rem;
-    }
-
-    input[type="text"], input[type="number"] {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 8px 10px;
-      border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.05);
-      background: rgba(0,0,0,0.22);
-      color: #eef6ff;
-      font-size: 0.95rem;
-    }
-
-    .cs-inline {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .cs-controls {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-top: 8px;
-    }
-
-    .cs-button {
-      padding: 8px 12px;
-      border-radius: 6px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.06));
-      border: 1px solid rgba(255,255,255,0.06);
-      color: #eef6ff;
-      cursor: pointer;
-      font-weight: 600;
-      box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset;
-    }
-    .cs-button:active { transform: translateY(1px); }
-
-    .cs-small {
-      font-size: 0.85rem;
-      color: #c3d7f2;
-    }
-
-    .cs-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(140px, 1fr));
-      gap: 10px;
-      align-items: center;
-      width: 100%;
-    }
-
-    .cs-section-title {
-      margin: 12px 0 6px 0;
-      font-size: 0.95rem;
-      color: #dbefff;
-      font-weight: 700;
-    }
-
-    table.cs-map-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 8px;
-    }
-    table.cs-map-table th, table.cs-map-table td {
-      text-align: left;
-      padding: 6px 4px;
-      vertical-align: top;
-      color: #dfefff;
-      font-size: 0.92rem;
-    }
-    table.cs-map-table thead th {
-      font-size: 0.85rem;
-      color: #aecdff;
-      font-weight: 700;
-      padding-bottom: 6px;
-    }
-    .cs-map-input { width: 100%; padding: 6px; border-radius:6px; background: rgba(0,0,0,0.18); border:1px solid rgba(255,255,255,0.04); color:#eef6ff; }
-
-    #cs-status { color: #9fbbe8; font-size: 0.9rem; margin-left: 8px; }
-    #cs-error { color: #ff9b9b; font-size: 0.86rem; margin-top: 6px; display:none; }
-
-    /* responsive */
-    @media (max-width: 820px) {
-      .cs-grid { grid-template-columns: repeat(2, 1fr); }
-      .cs-row { gap: 8px; }
-    }
-  </style>
-
-  <div class="cs-title">Costume Switch</div>
-
-  <div class="cs-row">
-    <label class="cs-col cs-inline cs-small">
-      <input id="cs-enable" type="checkbox" style="margin-right:8px"> Enabled
-    </label>
-
-    <label class="cs-col cs-inline cs-small" style="max-width:220px;">
-      Debug:
-      <input id="cs-debug" type="checkbox" style="margin-left:8px">
-    </label>
+  <div class="setting-section">
+    <label for="cs-enable">Enable Costume Switch</label>
+    <input type="checkbox" id="cs-enable" name="cs-enable">
   </div>
 
-  <div class="cs-row">
-    <div class="cs-col" style="flex:2">
-      <label class="cs-label" for="cs-patterns">
-        Character name patterns (one per line — plain text or <code>/regex/flags</code>)
-      </label>
-      <textarea id="cs-patterns" placeholder="Shido&#10;Kotori&#10;Tohka"></textarea>
-      <div id="cs-error" role="alert" aria-live="polite"></div>
-    </div>
-
-    <div class="cs-col" style="flex:1;min-width:220px;">
-      <label class="cs-label" for="cs-default">Default Costume (folder or blank to fallback to current character)</label>
-      <input id="cs-default" type="text" placeholder="Shido/Shido (optional)">
-      <div style="height:8px"></div>
-      <label class="cs-label" for="cs-timeout">Reset timeout (ms)</label>
-      <input id="cs-timeout" type="number" value="3000" />
-    </div>
+  <div class="setting-section">
+    <label for="cs-patterns">Character Patterns</label>
+    <textarea id="cs-patterns" name="cs-patterns" rows="4" placeholder="Enter character names, one per line..."></textarea>
   </div>
 
-  <div class="cs-row">
-    <div class="cs-grid" style="flex:1">
-      <div>
-        <label class="cs-label">Global cooldown (ms)</label>
-        <input id="cs-global-cooldown" type="number" value="1200" />
-      </div>
-      <div>
-        <label class="cs-label">Per-trigger cooldown (ms)</label>
-        <input id="cs-per-cooldown" type="number" value="250" />
-      </div>
-      <div>
-        <label class="cs-label">Failed-trigger cooldown (ms)</label>
-        <input id="cs-failed-cooldown" type="number" value="10000" />
-      </div>
-
-      <div>
-        <label class="cs-label">Max buffer chars</label>
-        <input id="cs-max-buffer" type="number" value="2000" />
-      </div>
-      <div>
-        <label class="cs-label">Repeat suppress (ms)</label>
-        <input id="cs-repeat-suppress" type="number" value="800" />
-      </div>
-      <div style="display:flex;align-items:center;">
-        <label style="margin-right:8px" class="cs-small">Enable narration switching</label>
-        <input id="cs-narration" type="checkbox">
-      </div>
-    </div>
+  <div class="setting-section">
+    <label for="cs-default">Default Costume</label>
+    <input type="text" id="cs-default" name="cs-default" placeholder="Enter default costume...">
   </div>
 
-  <div class="cs-section-title">Mapping table (optional)</div>
-  <div class="cs-small" style="margin-bottom:8px">
-    Map a detected character name to a specific quick-reply / costume folder string.
-    Example: <code style="background:rgba(255,255,255,0.03);padding:2px 6px;border-radius:4px;">Shido</code> → <code style="background:rgba(255,255,255,0.03);padding:2px 6px;border-radius:4px;">Shido/BestOutfit</code>
+  <div class="setting-section">
+    <label for="cs-timeout">Costume Reset Timeout (ms)</label>
+    <input type="number" id="cs-timeout" name="cs-timeout" min="0" value="3000">
   </div>
 
-  <table class="cs-map-table" aria-describedby="map-desc">
-    <thead>
-      <tr>
-        <th style="width:38%">Character name</th>
-        <th style="width:55%">Costume folder / quick-reply</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody id="cs-mappings-tbody">
-      <!-- rows will be rendered by index.js (it expects this tbody) -->
-    </tbody>
-  </table>
-  <div style="margin-top:8px">
-    <button id="cs-mapping-add" class="cs-button">Add mapping</button>
+  <div class="setting-section">
+    <label for="cs-global-cooldown">Global Cooldown (ms)</label>
+    <input type="number" id="cs-global-cooldown" name="cs-global-cooldown" min="0" value="1200">
   </div>
 
-  <div class="cs-controls" style="margin-top:14px">
-    <button id="cs-save" class="cs-button">Save</button>
-    <button id="cs-reset" class="cs-button">Manual Reset</button>
-    <div id="cs-status">Ready</div>
+  <div class="setting-section">
+    <label for="cs-repeat-suppress">Repeat Suppression (ms)</label>
+    <input type="number" id="cs-repeat-suppress" name="cs-repeat-suppress" min="0" value="800">
   </div>
+
+  <div class="setting-section">
+    <label for="cs-mappings">Costume Mappings</label>
+    <table id="cs-mappings">
+      <thead>
+        <tr>
+          <th>Character Name</th>
+          <th>Costume Folder</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="cs-mappings-tbody">
+        <!-- Mappings will be dynamically inserted here -->
+      </tbody>
+    </table>
+    <button id="cs-mapping-add">Add Mapping</button>
+  </div>
+
+  <div class="setting-section">
+    <label for="cs-debug">Enable Debug Logging</label>
+    <input type="checkbox" id="cs-debug" name="cs-debug">
+  </div>
+
+  <div class="setting-section">
+    <button id="cs-save">Save Settings</button>
+  </div>
+
+  <div id="cs-status" class="status-message">Ready</div>
+  <div id="cs-error" class="error-message"></div>
 </div>
+
+<style>
+  .settings-panel {
+    background: #2f2f2f;
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    font-family: Arial, sans-serif;
+  }
+
+  .settings-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 15px;
+  }
+
+  .setting-section {
+    margin-bottom: 15px;
+  }
+
+  label {
+    font-size: 14px;
+    margin-bottom: 5px;
+    display: block;
+  }
+
+  input[type="text"],
+  input[type="number"],
+  textarea {
+    width: 100%;
+    padding: 8px;
+    background: #3a3a3a;
+    color: white;
+    border: 1px solid #555;
+    border-radius: 5px;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  button {
+    padding: 8px 16px;
+    background-color: #5a5a5a;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  button:hover {
+    background-color: #707070;
+  }
+
+  .status-message,
+  .error-message {
+    margin-top: 10px;
+    padding: 8px;
+    border-radius: 5px;
+  }
+
+  .status-message {
+    background-color: #4CAF50;
+  }
+
+  .error-message {
+    background-color: #F44336;
+  }
+
+  #cs-mappings-table th,
+  #cs-mappings-table td {
+    padding: 10px;
+    text-align: left;
+  }
+</style>
