@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (patched to trigger Quick Replies)
+// index.js - SillyTavern-CostumeSwitch (quick-reply mode, honorific-aware name matching)
 // Keep relative imports like the official examples
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -43,20 +43,27 @@ function getSettingsObj() {
 }
 
 // small utility to build a combined regex from pattern list
+// Changes here: match the listed name anywhere (no colon required), allow optional
+// honorific-like suffixes "-sama" and "-san" (case-insensitive).
+// For plain-text patterns we build capture groups like: (Name(?:-(?:sama|san))?)
+// We then wrap the union with (?:^|\W)(?:...)(?:\W|$) so we match names when surrounded
+// by non-word characters or boundaries (avoids partial matches inside letters).
 function buildNameRegex(patternList) {
   const escaped = patternList.map(p => {
-    // if the user provided something that looks like /.../ flags, try to honor it:
     const trimmed = (p || '').trim();
     if (!trimmed) return null;
+    // allow literal /.../flags entries to be used directly
     const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
     if (m) return `(${m[1]})`;
-    // else escape plain string
-    return `(${escapeRegex(trimmed)})`;
+    // for plain names, allow optional "-sama" or "-san" suffix
+    return `(${escapeRegex(trimmed)}(?:-(?:sama|san))?)`;
   }).filter(Boolean);
 
   if (escaped.length === 0) return null;
-  // match "Name:" with optional whitespace before colon; case-insensitive
-  return new RegExp(`\\b(?:${escaped.join('|')})\\s*:`, 'i');
+
+  // Wrap with non-word boundary anchors so names are found anywhere but not inside other words.
+  // The final regex looks like: (?:^|\W)(?:(Name(?:-sama)?)|(Name2(?:-san)?)))(?:\W|$)
+  return new RegExp(`(?:^|\\W)(?:${escaped.join('|')})(?:\\W|$)`, 'i');
 }
 
 // store runtime buffers per-message so we can check mid-stream
@@ -116,8 +123,6 @@ jQuery(async () => {
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
 
   // rebuild regex when user saves new patterns
-  // (we already bound Save button to update settings, here we listen to our store)
-  // If saveSettingsDebounced triggers some event for settings, we could listen. For simplicity, re-read when Save pressed:
   $("#cs-save").on("click", () => {
     nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   });
@@ -276,18 +281,16 @@ jQuery(async () => {
       const combined = prev + tokenText;
       perMessageBuffers.set(bufKey, combined);
 
-      // run regex search on the combined text for "Name:" pattern
+      // run regex search on the combined text for any listed name (now honorific-aware)
       if (!nameRegex) return;
       const m = combined.match(nameRegex);
       if (m) {
-        // extract the matched name (strip trailing colon/space)
-        // find first capture group that matched (m[1]..)
+        // extract the matched name (the first non-empty capture group)
         let matchedName = null;
         for (let i = 1; i < m.length; i++) {
-          if (m[i]) { matchedName = m[i].replace(/\s*:/, '').trim(); break; }
+          if (m[i]) { matchedName = m[i].replace(/\s*[:]/, '').trim(); break; }
         }
         if (matchedName) {
-          // issue costume immediately (no awaiting to avoid blocking stream processing)
           issueCostumeForName(matchedName);
           // reset idle timer
           scheduleResetIfIdle();
@@ -316,5 +319,5 @@ jQuery(async () => {
   });
 
   // done
-  console.log("SillyTavern-CostumeSwitch (quick-reply mode) loaded.");
+  console.log("SillyTavern-CostumeSwitch (quick-reply mode, honorific-aware) loaded.");
 });
