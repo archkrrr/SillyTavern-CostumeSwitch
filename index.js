@@ -18,7 +18,12 @@ const DEFAULTS = {
   perTriggerCooldownMs: 250,
   failedTriggerCooldownMs: 10000,
   maxBufferChars: 2000,
-  repeatSuppressMs: 800
+  repeatSuppressMs: 800,
+
+  // NEW warmup & suppression settings:
+  minCharsBeforeSwitch: 8,     // require at least N chars to be streamed before switching
+  minMsBeforeSwitch: 200,      // require at least N ms since generation start before switching
+  suppressIfInsideParens: true // if match is inside (), [], or {}, suppress it
 };
 
 function escapeRegex(s) {
@@ -275,6 +280,7 @@ jQuery(async () => {
   const ok = await waitForSelector("#cs-save", 3000, 100);
   if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
 
+  // Load existing & new settings into UI elements if present
   if (jQuery("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
   if (jQuery("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
   if (jQuery("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
@@ -286,6 +292,11 @@ jQuery(async () => {
   if ($("#cs-failed-cooldown").length) $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
   if ($("#cs-max-buffer").length) $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
   if ($("#cs-repeat-suppress").length) $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
+
+  // NEW UI elements (optional in settings.html)
+  if ($("#cs-min-chars").length) $("#cs-min-chars").val(settings.minCharsBeforeSwitch ?? DEFAULTS.minCharsBeforeSwitch);
+  if ($("#cs-min-ms").length) $("#cs-min-ms").val(settings.minMsBeforeSwitch ?? DEFAULTS.minMsBeforeSwitch);
+  if ($("#cs-suppress-paren").length) $("#cs-suppress-paren").prop("checked", !!settings.suppressIfInsideParens);
 
   $("#cs-status").text("Ready");
 
@@ -318,6 +329,13 @@ jQuery(async () => {
         settings.maxBufferChars = isFinite(mb) && mb > 0 ? mb : DEFAULTS.maxBufferChars;
         const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
         settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
+
+        // NEW settings
+        const minChars = parseInt($("#cs-min-chars").val() || DEFAULTS.minCharsBeforeSwitch, 10);
+        settings.minCharsBeforeSwitch = isFinite(minChars) && minChars >= 0 ? minChars : DEFAULTS.minCharsBeforeSwitch;
+        const minMs = parseInt($("#cs-min-ms").val() || DEFAULTS.minMsBeforeSwitch, 10);
+        settings.minMsBeforeSwitch = isFinite(minMs) && minMs >= 0 ? minMs : DEFAULTS.minMsBeforeSwitch;
+        settings.suppressIfInsideParens = !!$("#cs-suppress-paren").prop("checked");
 
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
         speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
@@ -476,11 +494,32 @@ jQuery(async () => {
 
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
+  // NEW helper to detect if an index is inside (), [], or {}
+  function isInsidePairedDelims(str, idx) {
+    if (!str || idx == null || idx < 0) return false;
+    const opens = ['(', '[', '{'];
+    const closes = [')', ']', '}'];
+    for (let i = 0; i < opens.length; i++) {
+        const openPos = str.lastIndexOf(opens[i], idx);
+        if (openPos === -1) continue;
+        const closePos = str.indexOf(closes[i], openPos);
+        if (closePos !== -1 && closePos > idx) return true;
+    }
+    return false;
+  }
+
   _genStartHandler = (messageId) => {
     const bufKey = messageId != null ? `m${messageId}` : 'live';
     if (settings.debug) console.debug(`CS debug: Generation started for ${bufKey}, resetting state.`);
     perMessageStates.delete(bufKey);
     perMessageBuffers.delete(bufKey);
+    // warmup fields
+    perMessageStates.set(bufKey, {
+        lastAcceptedName: null,
+        lastAcceptedTs: 0,
+        genStartTs: Date.now(),
+        tokenChars: 0
+    });
   };
   
   _streamHandler = (...args) => {
@@ -514,9 +553,16 @@ jQuery(async () => {
           perMessageStates.set(bufKey, {
               lastAcceptedName: null,
               lastAcceptedTs: 0,
+              genStartTs: Date.now(),
+              tokenChars: 0
           });
       }
       const state = perMessageStates.get(bufKey);
+
+      // accumulate token char count for warmup checks
+      state.tokenChars = (state.tokenChars || 0) + (tokenText ? tokenText.length : 0);
+      perMessageStates.set(bufKey, state);
+
       const quoteRanges = getQuoteRanges(combined);
 
       const bestMatch = findBestMatch(combined, {
@@ -532,6 +578,26 @@ jQuery(async () => {
           let { name: matchedName, matchKind } = bestMatch;
 
           const now = Date.now();
+
+          // Warmup suppression: require at least N chars and N ms since generation start
+          const minChars = Number(settings.minCharsBeforeSwitch ?? DEFAULTS.minCharsBeforeSwitch);
+          const minMs = Number(settings.minMsBeforeSwitch ?? DEFAULTS.minMsBeforeSwitch);
+          const sinceStart = now - (state.genStartTs || 0);
+          if ((state.genStartTs && sinceStart < minMs) || (state.tokenChars < minChars)) {
+              if (settings.debug) console.debug('CS debug: suppressing early switch (warmup not reached)', {
+                  matchedName, sinceStart, tokenChars: state.tokenChars, minMs, minChars
+              });
+              matchedName = null;
+          }
+
+          // Suppress if inside parentheses/brackets (likely internal thought)
+          if (matchedName && settings.suppressIfInsideParens) {
+              if (isInsidePairedDelims(combined, bestMatch.matchIndex)) {
+                  if (settings.debug) console.debug('CS debug: suppressing match inside parentheses/brackets', { matchedName, matchIndex: bestMatch.matchIndex });
+                  matchedName = null;
+              }
+          }
+
           const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
           if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < suppressMs)) {
               if (settings.debug) console.debug('CS debug: suppressing repeat accepted match for same name (flicker guard)', { matchedName });
