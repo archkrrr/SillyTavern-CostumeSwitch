@@ -1,75 +1,86 @@
-<details class="st-ext-card" open>
-  <summary>Costume Switch</summary>
-  <div class="st-ext-content">
-    <label>
-      <input id="cs-enable" type="checkbox" />
-      Enable real-time switching
-    </label>
+<!-- SillyTavern-CostumeSwitch settings.html -->
+<div class="ext-card">
+  <h3>Costume Switch</h3>
 
-    <div style="margin-top:8px;">
-      <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
-      <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>Default costume folder (optional):</label><br/>
-      <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
-      <small>Leave blank to use current character's own folder.</small>
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>Reset timeout (ms):</label>
-      <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>Cooldowns (ms)</label>
-      <div class="costume-switcher-settings inline-group" style="gap:8px;">
-        <div style="min-width:140px">
-          <label style="display:block; font-size:90%;">Global switch cooldown</label>
-          <input id="cs-global-cooldown" type="number" min="0" step="100" style="width:100%" />
-        </div>
-        <div style="min-width:140px">
-          <label style="display:block; font-size:90%;">Per-trigger cooldown</label>
-          <input id="cs-per-cooldown" type="number" min="0" step="50" style="width:100%" />
-        </div>
-        <div style="min-width:140px">
-          <label style="display:block; font-size:90%;">Failed-trigger cooldown</label>
-          <input id="cs-failed-cooldown" type="number" min="0" step="500" style="width:100%" />
-        </div>
-      </div>
-      <div style="font-size:90%; opacity:0.85; margin-top:4px;">
-        Tunable cooldowns to reduce thrashing or repeated failed attempts to trigger non-existent quick replies.
-      </div>
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>
-        <input id="cs-narration" type="checkbox" />
-        Enable loose narration fallback
-      </label>
-      <div style="font-size:90%; opacity:0.8; margin-top:4px;">
-        If enabled, the extension will try to auto-switch on loose name mentions <strong>outside</strong> quotes
-        (useful for narrative-style AI output). Disabled by default to avoid false switches.
-      </div>
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>
-        <input id="cs-debug" type="checkbox" />
-        Enable debug logging
-      </label>
-      <div style="font-size:90%; opacity:0.8; margin-top:4px;">
-        When enabled, the extension will print helpful debug lines to the browser console (buffers, matches).
-      </div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <button id="cs-reset">Manual Reset Costume</button>
-      <button id="cs-save" style="margin-left:8px;">Save</button>
-    </div>
-
-    <div id="cs-status" style="margin-top:8px; opacity:0.8;"></div>
-    <div class="costume-switcher-note">Tip: Save after editing patterns so regexes are rebuilt immediately.</div>
+  <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+    <label><input type="checkbox" id="cs-enable"> Enabled</label>
+    <label style="margin-left:8px">Debug: <input type="checkbox" id="cs-debug"></label>
   </div>
-</details>
+
+  <div style="margin-bottom:8px">
+    <label>Character name patterns (one per line — plain text or /regex/flags):</label>
+    <textarea id="cs-patterns" rows="4" style="width:100%;"></textarea>
+    <div id="cs-error" style="color:#a00;display:none;margin-top:4px"></div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="flex:1">
+      <label>Default Costume (folder or blank to fallback to current character):</label>
+      <input id="cs-default" style="width:100%" />
+    </div>
+    <div style="width:140px">
+      <label>Reset timeout (ms)</label>
+      <input id="cs-timeout" type="number" style="width:100%" />
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="width:170px">
+      <label>Global cooldown (ms)</label>
+      <input id="cs-global-cooldown" type="number" style="width:100%" />
+    </div>
+    <div style="width:170px">
+      <label>Per-trigger cooldown (ms)</label>
+      <input id="cs-per-cooldown" type="number" style="width:100%" />
+    </div>
+    <div style="width:170px">
+      <label>Failed-trigger cooldown (ms)</label>
+      <input id="cs-failed-cooldown" type="number" style="width:100%" />
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="width:170px">
+      <label>Max buffer chars</label>
+      <input id="cs-max-buffer" type="number" style="width:100%" />
+    </div>
+    <div style="width:170px">
+      <label>Repeat suppress (ms)</label>
+      <input id="cs-repeat-suppress" type="number" style="width:100%" />
+    </div>
+    <div style="flex:1;display:flex;align-items:center;">
+      <label style="margin-left:8px"><input id="cs-narration" type="checkbox"> Enable narration switching</label>
+    </div>
+  </div>
+
+  <hr />
+
+  <div>
+    <h4>Mapping table (optional)</h4>
+    <div style="font-size:90%;color:#666;margin-bottom:6px">
+      Map a detected character name to a specific quick-reply / costume folder string.
+      Example: <code>Shido</code> -> <code>Shido/BestOutfit</code>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr>
+          <th style="text-align:left">Character name</th>
+          <th style="text-align:left">Costume folder / quick-reply</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="cs-mappings-tbody"></tbody>
+    </table>
+
+    <div style="margin-top:6px">
+      <button id="cs-mapping-add">Add mapping</button>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+    <button id="cs-save">Save</button>
+    <button id="cs-reset">Manual Reset</button>
+    <div id="cs-status" style="margin-left:12px;color:#888"></div>
+  </div>
+</div>
