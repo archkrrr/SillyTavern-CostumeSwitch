@@ -74,17 +74,6 @@ Here are a few visual examples to help guide you through the configuration:
 
 *This is how you want to setup Quick Replies for it to work with the extension*
 
-#### Costume Switcher Settings
-
-![Costume Switcher Settings](path/to/your/image2.png)
-
-*Here, you can see how the Costume Switcher settings match the Quick Reply labels. The character names like `Char A`, `Char B`, etc., are mapped to specific costumes.*
-
-#### Example of a Mapping in Quick Replies
-
-![Quick Reply Mapping](path/to/your/image3.png)
-
-*This image shows how the character name is mapped to a quick reply. The Costume Switcher extension will use these mappings to switch costumes automatically when a character name is detected.*
 
 ## Support and Contributions
 
