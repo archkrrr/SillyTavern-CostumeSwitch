@@ -375,18 +375,27 @@ jQuery(async () => {
 
         if (buttonToClick) {
             if (settings.debug) {
-                 let matchType = (exactLabelMatch ? "exact label" : (exactTitleMatch ? "exact title" : "case-insensitive"));
-                 console.debug(`[CostumeSwitch] Clicking Quick Reply (${matchType}): "${label}"`);
+                let matchType = (exactLabelMatch ? "exact label" : (exactTitleMatch ? "exact title" : "case-insensitive"));
+                console.debug(`[CostumeSwitch] Clicking Quick Reply (${matchType}): "${label}"`);
             }
-            buttonToClick.click();
-            return true;
+            
+            // KEY CHANGE HERE: Defer the click to the next event loop cycle.
+            setTimeout(() => {
+                try {
+                    buttonToClick.click();
+                } catch (e) {
+                    console.error(`[CostumeSwitch] Error during deferred click for "${label}":`, e);
+                }
+            }, 0);
+            
+            return true; // Return true immediately since we've scheduled the click.
         }
         return false;
     } catch (err) {
         console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
         return false;
     }
-  }
+}
 
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
