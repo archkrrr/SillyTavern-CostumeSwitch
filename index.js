@@ -1,5 +1,5 @@
-// index.js - SillyTavern-CostumeSwitch (patched: stronger pronoun-resolution, index-aware,
-// longer sliding window, slightly shorter cooldowns, optional debug logging)
+// index.js - SillyTavern-CostumeSwitch (patched: limited-search window, reused regexes,
+// allow immediate different-name switches, index-aware explicit tracking, debug traces)
 
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -7,181 +7,125 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
-// default settings
 const DEFAULTS = {
     enabled: true,
     resetTimeoutMs: 3000,
-    patterns: ["Shido", "Kotori", "Tohka"], // add Tohka by default since you mentioned it
-    defaultCostume: "", // empty => use current character's own folder
-    narrationSwitch: false, // opt-in loose narration fallback (matches outside quotes only)
-    debug: false // set true to enable console logging for tuning
+    patterns: ["Shido", "Kotori", "Tohka"],
+    defaultCostume: "",
+    narrationSwitch: false,
+    debug: false
 };
 
-// safe regex escape
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// settings helper
 function getSettingsObj() {
     const ctx = getContext ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
     if (ctx && ctx.extensionSettings) {
         ctx.extensionSettings[extensionName] = ctx.extensionSettings[extensionName] || structuredClone(DEFAULTS);
-        for (const k of Object.keys(DEFAULTS)) {
-            if (!Object.hasOwn(ctx.extensionSettings[extensionName], k)) ctx.extensionSettings[extensionName][k] = DEFAULTS[k];
-        }
+        for (const k of Object.keys(DEFAULTS)) if (!Object.hasOwn(ctx.extensionSettings[extensionName], k)) ctx.extensionSettings[extensionName][k] = DEFAULTS[k];
         return { store: ctx.extensionSettings, save: ctx.saveSettingsDebounced || saveSettingsDebounced, ctx };
     }
     if (typeof extension_settings !== 'undefined') {
         extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
-        for (const k of Object.keys(DEFAULTS)) {
-            if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
-        }
+        for (const k of Object.keys(DEFAULTS)) if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
         return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
     }
     throw new Error("Can't find SillyTavern extension settings storage.");
 }
 
-// regex builders (unchanged behavior)
+// Build regex sources (same idea as before)
 function buildNameRegex(patternList) {
-    const escaped = patternList.map(p => {
-        const trimmed = (p || '').trim();
-        if (!trimmed) return null;
-        const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
-        if (m) return `(${m[1]})`;
-        return `(${escapeRegex(trimmed)}(?:-(?:sama|san))?)`;
-    }).filter(Boolean);
-    if (escaped.length === 0) return null;
+    const escaped = patternList.map(p => { const t=(p||'').trim(); if(!t) return null; const m=t.match(/^\/(.+)\/([gimsuy]*)$/); if(m) return `(${m[1]})`; return `(${escapeRegex(t)}(?:-(?:sama|san))?)`; }).filter(Boolean);
+    if (!escaped.length) return null;
     return new RegExp(`(?:^|\\n|[\\(\\[\\-—–])(?:${escaped.join('|')})(?:\\W|$)`, 'i');
 }
 function buildSpeakerRegex(patternList) {
-    const escaped = patternList.map(p => {
-        const trimmed = (p || '').trim();
-        if (!trimmed) return null;
-        const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
-        if (m) return `(${m[1]})`;
-        return `(${escapeRegex(trimmed)})`;
-    }).filter(Boolean);
-    if (escaped.length === 0) return null;
+    const escaped = patternList.map(p => { const t=(p||'').trim(); if(!t) return null; const m=t.match(/^\/(.+)\/([gimsuy]*)$/); if(m) return `(${m[1]})`; return `(${escapeRegex(t)})`; }).filter(Boolean);
+    if (!escaped.length) return null;
     return new RegExp(`(?:^|\\n)\\s*(${escaped.join('|')})\\s*:`, 'i');
 }
 function buildAttributionRegex(patternList) {
-    const escaped = patternList.map(p => {
-        const trimmed = (p || '').trim();
-        if (!trimmed) return null;
-        const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
-        if (m) return `(${m[1]})`;
-        return `(${escapeRegex(trimmed)})`;
-    }).filter(Boolean);
-    if (escaped.length === 0) return null;
-    const verbs = "(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked|insisted|murmured|observed)";
+    const escaped = patternList.map(p => { const t=(p||'').trim(); if(!t) return null; const m=t.match(/^\/(.+)\/([gimsuy]*)$/); if(m) return `(${m[1]})`; return `(${escapeRegex(t)})`; }).filter(Boolean);
+    if (!escaped.length) return null;
+    const verbs = "(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked|insisted|observed)";
     const patA = `["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\\s*,?\\s*(?:${escaped.join('|')})\\s+${verbs}`;
     const patB = `(?:^|\\n)\\s*(?:${escaped.join('|')})\\s+${verbs}\\s*[:,]?\\s*["\u201C\u201D]`;
     return new RegExp(`(?:${patA})|(?:${patB})`, 'i');
 }
 function buildActionRegex(patternList) {
-    const escaped = patternList.map(p => {
-        const trimmed = (p || '').trim();
-        if (!trimmed) return null;
-        const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
-        if (m) return `(${m[1]})`;
-        return `(${escapeRegex(trimmed)})`;
-    }).filter(Boolean);
-    if (escaped.length === 0) return null;
-    const actions = "(?:took|nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|reached|walked|turned|glanced|moved|stepped|entered|approached|adjusted|tilted)";
+    const escaped = patternList.map(p => { const t=(p||'').trim(); if(!t) return null; const m=t.match(/^\/(.+)\/([gimsuy]*)$/); if(m) return `(${m[1]})`; return `(${escapeRegex(t)})`; }).filter(Boolean);
+    if (!escaped.length) return null;
+    const actions = "(?:took|nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|reached|walked|turned|glanced|moved|stepped|appeared|adjusted|tilted)";
     return new RegExp(`(?:^|\\n)\\s*(?:${escaped.join('|')})\\b\\s+${actions}\\b`, 'i');
 }
 
-// quick check if position inside open quotes
 function isInsideQuotes(text, pos) {
     if (!text || pos <= 0) return false;
     const before = text.slice(0, pos);
-    const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
-    return (quoteCount % 2) === 1;
+    const qcount = (before.match(/["\u201C\u201D]/g) || []).length;
+    return (qcount % 2) === 1;
 }
 
 // runtime state
 const perMessageBuffers = new Map();
-// store last explicit as { name, idx } per buffer so we can ensure it occurs before pronoun matches
-const lastExplicitPerBuf = new Map();
-let lastIssuedCostume = null;
+const lastExplicitPerBuf = new Map(); // stores { name, idx } (absolute index in plain text)
+let lastIssuedCostume = null; // folder like "Tohka/Tohka"
+let lastIssuedName = null; // "Tohka"
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
 
-// throttling
-const lastTriggerTimes = new Map();
-const TRIGGER_COOLDOWN_MS = 200; // slightly faster re-trigger
-const GLOBAL_SWITCH_COOLDOWN_MS = 800; // shorter global cooldown so switches aren't too delayed
+// throttles
+let TRIGGER_COOLDOWN_MS = 200;
+let GLOBAL_SWITCH_COOLDOWN_MS = 400;
 
-// sliding buffer
-const BUFFER_KEEP = 1200; // keep more chars to preserve explicit mentions for pronoun resolution
+// tuning: how many chars to keep and how much to search each time
+const BUFFER_KEEP = 1200;   // keep tail of buffer for context
+const BUFFER_SEARCH = 1400; // only scan this many chars (tunable)
 
-// waitForSelector helper
-function waitForSelector(selector, timeout = 3000, interval = 120) {
-    return new Promise((resolve) => {
-        const start = Date.now();
-        const iv = setInterval(() => {
-            const el = document.querySelector(selector);
-            if (el) {
-                clearInterval(iv);
-                resolve(true);
-                return;
-            }
-            if (Date.now() - start > timeout) {
-                clearInterval(iv);
-                resolve(false);
-            }
-        }, interval);
-    });
-}
+// precompiled regex holders (we'll set them after building patterns)
+let nameRegex = null, speakerRegex = null, attributionRegex = null, actionRegex = null;
+// also reusable 'gi' versions for searching slices
+let nameRegexG = null, speakerRegexG = null, attributionRegexG = null, actionRegexG = null;
 
-// simple markdown/formatting strip
-function stripFormatting(s) {
-    if (!s) return s;
-    return s.replace(/[*_~`]+/g, '').replace(/\s+/g,' ').trim();
-}
+function stripFormatting(s) { if(!s) return s; return s.replace(/[*_~`]+/g,'').replace(/\s+/g,' ').trim(); }
 
-// find last explicit name before a given pos; returns {name, idx} or null
 function findLastExplicitBefore(text, pos, lookbackChars = 800) {
     const start = Math.max(0, pos - lookbackChars);
     const slice = text.slice(start, pos);
-    const tryRegexes = [speakerRegex, actionRegex, nameRegex].filter(Boolean);
+    const tryRegexes = [speakerRegexG, actionRegexG, nameRegexG].filter(Boolean);
     for (const r of tryRegexes) {
         try {
-            const re = new RegExp(r.source, 'gi');
+            r.lastIndex = 0;
             let m, last = null;
-            while ((m = re.exec(slice)) !== null) last = { match: m, index: m.index + start };
+            while ((m = r.exec(slice)) !== null) {
+                last = { match: m, index: start + m.index };
+            }
             if (last) {
                 for (let i = 1; i < last.match.length; i++) {
                     if (last.match[i]) return { name: String(last.match[i]).replace(/-(?:sama|san)$/i,'').trim(), idx: last.index };
                 }
             }
-        } catch (err) {
-            // ignore regex errors
-        }
+        } catch (e) { /* ignore */ }
     }
     return null;
 }
 
-// derived patterns: include characters found in context (first name + full name)
 function buildDerivedPatterns(settings, realCtx) {
     const base = (settings.patterns || DEFAULTS.patterns).map(s => (s||'').trim()).filter(Boolean);
     const extra = [];
     try {
-        if (realCtx && realCtx.characters) {
-            for (const id of Object.keys(realCtx.characters)) {
-                const ch = realCtx.characters[id];
-                if (!ch || !ch.name) continue;
-                const full = ch.name.trim();
-                const parts = full.split(/\s+/).filter(Boolean);
-                extra.push(full);
-                if (parts.length) extra.push(parts[0]);
-            }
+        if (realCtx && realCtx.characters) for (const id of Object.keys(realCtx.characters)) {
+            const ch = realCtx.characters[id];
+            if (!ch || !ch.name) continue;
+            const full = ch.name.trim();
+            const parts = full.split(/\s+/).filter(Boolean);
+            extra.push(full);
+            if (parts.length) extra.push(parts[0]);
         }
     } catch (e) {}
     return Array.from(new Set([...base, ...extra]));
 }
 
-
-// main
 jQuery(async () => {
     const { store, save, ctx } = getSettingsObj();
     const settings = store[extensionName];
@@ -192,6 +136,16 @@ jQuery(async () => {
     } catch (e) {
         console.warn("Failed to load settings.html:", e);
         $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
+    }
+
+    function waitForSelector(selector, timeout = 3000, interval = 120) {
+        return new Promise((resolve) => {
+            const start = Date.now();
+            const iv = setInterval(() => {
+                if (document.querySelector(selector)) { clearInterval(iv); resolve(true); return; }
+                if (Date.now() - start > timeout) { clearInterval(iv); resolve(false); }
+            }, interval);
+        });
     }
 
     const ok = await waitForSelector("#cs-save", 3000, 100);
@@ -214,18 +168,25 @@ jQuery(async () => {
     }
 
     const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
-    if (!realCtx) {
-        console.error("SillyTavern context not found. Extension won't run.");
-        return;
-    }
+    if (!realCtx) { console.error("SillyTavern context not found. Extension won't run."); return; }
     const { eventSource, event_types } = realCtx;
 
-    // initial derived patterns and regexes
-    let derivedPatterns = buildDerivedPatterns(settings, realCtx);
-    let nameRegex = buildNameRegex(derivedPatterns);
-    let speakerRegex = buildSpeakerRegex(derivedPatterns);
-    let attributionRegex = buildAttributionRegex(derivedPatterns);
-    let actionRegex = buildActionRegex(derivedPatterns);
+    // build initial patterns & compile gi regexes
+    function rebuildRegexes() {
+        const derived = buildDerivedPatterns(settings, realCtx);
+        nameRegex = buildNameRegex(derived);
+        speakerRegex = buildSpeakerRegex(derived);
+        attributionRegex = buildAttributionRegex(derived);
+        actionRegex = buildActionRegex(derived);
+
+        nameRegexG = nameRegex ? new RegExp(nameRegex.source, 'gi') : null;
+        speakerRegexG = speakerRegex ? new RegExp(speakerRegex.source, 'gi') : null;
+        attributionRegexG = attributionRegex ? new RegExp(attributionRegex.source, 'gi') : null;
+        actionRegexG = actionRegex ? new RegExp(actionRegex.source, 'gi') : null;
+
+        if (settings.debug) console.log("CostumeSwitch: rebuilt regexes:", { derived, nameRegex: !!nameRegex });
+    }
+    rebuildRegexes();
 
     function tryWireUI() {
         if ($("#cs-save").length) {
@@ -236,23 +197,14 @@ jQuery(async () => {
                 settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
                 if ($("#cs-narration").length) settings.narrationSwitch = !!$("#cs-narration").prop("checked");
                 if ($("#cs-debug").length) settings.debug = !!$("#cs-debug").prop("checked");
-
-                derivedPatterns = buildDerivedPatterns(settings, realCtx);
-                nameRegex = buildNameRegex(derivedPatterns);
-                speakerRegex = buildSpeakerRegex(derivedPatterns);
-                attributionRegex = buildAttributionRegex(derivedPatterns);
-                actionRegex = buildActionRegex(derivedPatterns);
-
+                rebuildRegexes();
                 persistSettings();
             });
         }
         if ($("#cs-reset").length) {
-            $("#cs-reset").off('click.cs').on("click.cs", async () => {
-                await manualReset();
-            });
+            $("#cs-reset").off('click.cs').on("click.cs", async () => { await manualReset(); });
         }
     }
-
     tryWireUI();
     setTimeout(tryWireUI, 500);
     setTimeout(tryWireUI, 1500);
@@ -265,9 +217,7 @@ jQuery(async () => {
                 if (labelEl && labelEl.innerText && labelEl.innerText.trim() === labelOrMsg) { btn.click(); return true; }
                 if (btn.title && btn.title === labelOrMsg) { btn.click(); return true; }
             }
-        } catch (err) {
-            console.warn("triggerQuickReply error:", err);
-        }
+        } catch (err) { console.warn("triggerQuickReply error:", err); }
         return false;
     }
 
@@ -282,7 +232,7 @@ jQuery(async () => {
             const name = costumeArg;
             candidates.push(name, `${name}/${name}`, `/costume ${name}`, `/costume ${name}/${name}`);
         }
-        for (const c of candidates) { if (triggerQuickReply(c)) return true; }
+        for (const c of candidates) if (triggerQuickReply(c)) return true;
         return false;
     }
 
@@ -292,64 +242,66 @@ jQuery(async () => {
             const ch = realCtx.characters?.[realCtx.characterId];
             if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
         }
-        if (!costumeArg) {
-            if ($("#cs-status").length) $("#cs-status").text("No default costume defined.");
-            return;
-        }
+        if (!costumeArg) { if ($("#cs-status").length) $("#cs-status").text("No default costume defined."); return; }
         const ok = triggerQuickReplyVariants(costumeArg);
-        if (ok) {
-            lastIssuedCostume = costumeArg;
-            if ($("#cs-status").length) $("#cs-status").text(`Reset -> ${costumeArg}`);
-            setTimeout(()=>$("#cs-status").text(""), 1500);
-        } else {
-            if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`);
-            setTimeout(()=>$("#cs-status").text(""), 1500);
-        }
+        if (ok) { lastIssuedCostume = costumeArg; lastIssuedName = costumeArg.split('/')[0]; if ($("#cs-status").length) $("#cs-status").text(`Reset -> ${costumeArg}`); setTimeout(()=>$("#cs-status").text(""),1500); }
+        else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); setTimeout(()=>$("#cs-status").text(""),1500); }
     }
 
     async function issueCostumeForName(name) {
         if (!name) return;
         const now = Date.now();
-        if (now - lastSwitchTimestamp < GLOBAL_SWITCH_COOLDOWN_MS) return;
+        // Extract last issued name
+        const lastName = lastIssuedName || (lastIssuedCostume ? String(lastIssuedCostume).split('/')[0] : null);
+
+        // If same name as last issued, respect global cooldown
+        if (lastName === name && (now - lastSwitchTimestamp) < GLOBAL_SWITCH_COOLDOWN_MS) {
+            if (settings.debug) console.log(`CostumeSwitch: skip ${name} due to global cooldown (same name).`);
+            return;
+        }
+        // per-name cooldown
         const argFolder = `${name}/${name}`;
         const last = lastTriggerTimes.get(argFolder) || 0;
-        if (now - last < TRIGGER_COOLDOWN_MS) return;
+        if (now - last < TRIGGER_COOLDOWN_MS) {
+            if (settings.debug) console.log(`CostumeSwitch: skip ${name} due to per-name cooldown.`);
+            return;
+        }
+
         const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
         if (ok) {
             lastTriggerTimes.set(argFolder, now);
             lastIssuedCostume = argFolder;
+            lastIssuedName = name;
             lastSwitchTimestamp = now;
             if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
-            if (settings.debug) console.log(`CostumeSwitch: issued ${argFolder}`);
+            if (settings.debug) console.log(`CostumeSwitch: switched -> ${argFolder}`);
         } else {
             if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
-            if (settings.debug) console.log(`CostumeSwitch: quick reply missing for ${name}`);
+            if (settings.debug) console.log(`CostumeSwitch: quick-reply not found for ${name}`);
         }
     }
 
     function scheduleResetIfIdle() {
         if (resetTimer) clearTimeout(resetTimer);
-        resetTimer = setTimeout(() => {
-            (async () => {
-                let costumeArg = settings.defaultCostume || "";
-                if (!costumeArg) {
-                    const ch = realCtx.characters?.[realCtx.characterId];
-                    if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
-                }
-                if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
-                    lastIssuedCostume = costumeArg;
-                    if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
-                    setTimeout(()=>$("#cs-status").text(""), 1200);
-                }
-            })();
+        resetTimer = setTimeout(async () => {
+            let costumeArg = settings.defaultCostume || "";
+            if (!costumeArg) {
+                const ch = realCtx.characters?.[realCtx.characterId];
+                if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
+            }
+            if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
+                lastIssuedCostume = costumeArg;
+                lastIssuedName = costumeArg.split('/')[0];
+                if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
+                setTimeout(()=>$("#cs-status").text(""), 1200);
+            }
         }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
     }
 
     const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-    // main streaming handler
     eventSource.on(streamEventName, (...args) => {
         try {
             if (!settings.enabled) return;
@@ -358,10 +310,8 @@ jQuery(async () => {
             let messageId = null;
             if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); }
             else if (typeof args[0] === 'string' && args.length === 1) tokenText = args[0];
-            else if (args[0] && typeof args[0] === 'object') {
-                tokenText = String(args[0].token ?? args[0].text ?? "");
-                messageId = args[0].messageId ?? args[1] ?? null;
-            } else tokenText = String(args.join(' ') || "");
+            else if (args[0] && typeof args[0] === 'object') { tokenText = String(args[0].token ?? args[0].text ?? ""); messageId = args[0].messageId ?? args[1] ?? null; }
+            else tokenText = String(args.join(' ') || "");
 
             if (!tokenText) return;
 
@@ -372,146 +322,99 @@ jQuery(async () => {
 
             const combinedPlain = stripFormatting(combined);
 
+            // define the slice we will search this token (limits CPU)
+            const searchFrom = Math.max(0, combinedPlain.length - BUFFER_SEARCH);
+            const searchSlice = combinedPlain.slice(searchFrom);
+
             let matchedName = null;
             let matchedIndex = null;
-            // helper to store explicit with index
-            function recordExplicitIfFound(name, idx) {
-                if (name && typeof idx === 'number') {
-                    lastExplicitPerBuf.set(bufKey, { name: String(name).replace(/-(?:sama|san)$/i,'').trim(), idx });
-                    if (settings.debug) console.log(`CostumeSwitch: recorded explicit ${name} @${idx} (buf=${bufKey})`);
-                } else if (name) {
-                    lastExplicitPerBuf.set(bufKey, { name: String(name).replace(/-(?:sama|san)$/i,'').trim(), idx: combinedPlain.length });
-                }
+            // helper to record explicit with absolute index
+            function recordExplicitIfFound(name, absIdx) {
+                if (!name || typeof absIdx !== 'number') return;
+                lastExplicitPerBuf.set(bufKey, { name: String(name).replace(/-(?:sama|san)$/i,'').trim(), idx: absIdx });
+                if (settings.debug) console.log(`CostumeSwitch: recorded explicit '${name}' @${absIdx} (buf=${bufKey})`);
             }
 
-            // --- Tiered logic ---
-
-            // 1) Speaker "Name:"
-            if (speakerRegex) {
+            // TIER 1: speakerRegexG (look for "Name:")
+            if (speakerRegexG) {
                 try {
-                    const re = new RegExp(speakerRegex.source, 'gi');
+                    speakerRegexG.lastIndex = 0;
                     let m, last = null;
-                    while ((m = re.exec(combinedPlain)) !== null) last = { match: m, index: m.index };
+                    while ((m = speakerRegexG.exec(searchSlice)) !== null) last = { m, idx: searchFrom + m.index };
                     if (last) {
-                        matchedName = last.match[1]?.trim();
-                        matchedIndex = last.index;
+                        matchedName = last.m[1]?.trim();
+                        matchedIndex = last.idx;
                         recordExplicitIfFound(matchedName, matchedIndex);
-                        if (settings.debug) console.log(`CostumeSwitch: speakerRegex matched ${matchedName} @${matchedIndex}`);
+                        if (settings.debug) console.log(`speaker match ${matchedName} @${matchedIndex}`);
                     }
                 } catch (e) {}
             }
 
-            // 2) Attribution (closing quote ... Name said  OR Name said, "...")
-            if (!matchedName && attributionRegex) {
+            // TIER 2: attributionRegexG
+            if (!matchedName && attributionRegexG) {
                 try {
-                    const re = new RegExp(attributionRegex.source, 'gi');
+                    attributionRegexG.lastIndex = 0;
                     let m, last = null;
-                    while ((m = re.exec(combinedPlain)) !== null) last = { match: m, index: m.index };
+                    while ((m = attributionRegexG.exec(searchSlice)) !== null) last = { m, idx: searchFrom + m.index };
                     if (last) {
-                        // pick first non-empty capture
-                        for (let i = 1; i < last.match.length; i++) {
-                            if (last.match[i]) {
-                                matchedName = last.match[i].trim();
-                                matchedIndex = last.index;
-                                break;
-                            }
-                        }
-
-                        // pronoun resolution if match is pronoun
+                        // find first non-empty capture
+                        for (let i=1;i<last.m.length;i++){ if (last.m[i]) { matchedName = last.m[i].trim(); matchedIndex = last.idx; break; } }
                         if (matchedName && /^(she|he|they|it)$/i.test(matchedName)) {
-                            // try more local explicit before this index
                             const resolved = findLastExplicitBefore(combinedPlain, matchedIndex, 800);
-                            if (resolved && resolved.idx < matchedIndex) {
-                                matchedName = resolved.name;
-                                matchedIndex = resolved.idx;
-                                if (settings.debug) console.log(`CostumeSwitch: resolved pronoun -> ${matchedName} via local search @${matchedIndex}`);
-                            } else {
-                                // fallback to lastExplicitPerBuf only if that explicit occurs BEFORE the attribution index
+                            if (resolved && resolved.idx < matchedIndex) { matchedName = resolved.name; matchedIndex = resolved.idx; if (settings.debug) console.log(`resolved pronoun -> ${matchedName} @${matchedIndex}`); }
+                            else {
                                 const le = lastExplicitPerBuf.get(bufKey);
-                                if (le && le.idx < matchedIndex) {
-                                    matchedName = le.name;
-                                    matchedIndex = le.idx;
-                                    if (settings.debug) console.log(`CostumeSwitch: resolved pronoun -> ${matchedName} via lastExplicitPerBuf @${matchedIndex}`);
-                                } else {
-                                    // give up on ambiguous pronoun
-                                    if (settings.debug) console.log(`CostumeSwitch: ambiguous pronoun at ${matchedIndex}, no earlier explicit found`);
-                                    matchedName = null;
-                                    matchedIndex = null;
-                                }
+                                if (le && le.idx < matchedIndex) { matchedName = le.name; matchedIndex = le.idx; if (settings.debug) console.log(`resolved pronoun via lastExp -> ${matchedName} @${matchedIndex}`); }
+                                else { if (settings.debug) console.log(`ambiguous pronoun at ${matchedIndex}`); matchedName = null; matchedIndex = null; }
                             }
-                        } else if (matchedName) {
-                            recordExplicitIfFound(matchedName, matchedIndex);
-                            if (settings.debug) console.log(`CostumeSwitch: attributionRegex matched ${matchedName} @${matchedIndex}`);
-                        }
+                        } else if (matchedName) { recordExplicitIfFound(matchedName, matchedIndex); if (settings.debug) console.log(`attribution matched ${matchedName} @${matchedIndex}`); }
                     }
                 } catch (e) {}
             }
 
-            // 3) Action/narration "Tohka took a step..."
-            if (!matchedName && actionRegex) {
+            // TIER 3: actionRegexG
+            if (!matchedName && actionRegexG) {
                 try {
-                    const re = new RegExp(actionRegex.source, 'gi');
+                    actionRegexG.lastIndex = 0;
                     let m, last = null;
-                    while ((m = re.exec(combinedPlain)) !== null) last = { match: m, index: m.index };
+                    while ((m = actionRegexG.exec(searchSlice)) !== null) last = { m, idx: searchFrom + m.index };
                     if (last) {
-                        for (let i = 1; i < last.match.length; i++) {
-                            if (last.match[i]) {
-                                matchedName = last.match[i].trim();
-                                matchedIndex = last.index;
-                                break;
-                            }
-                        }
-                        if (matchedName) {
-                            recordExplicitIfFound(matchedName, matchedIndex);
-                            if (settings.debug) console.log(`CostumeSwitch: actionRegex matched ${matchedName} @${matchedIndex}`);
-                        }
+                        for (let i=1;i<last.m.length;i++){ if (last.m[i]) { matchedName = last.m[i].trim(); matchedIndex = last.idx; break; } }
+                        if (matchedName) { recordExplicitIfFound(matchedName, matchedIndex); if (settings.debug) console.log(`action matched ${matchedName} @${matchedIndex}`); }
                     }
                 } catch (e) {}
             }
 
-            // 4) Narration fallback (optional)
-            if (!matchedName && nameRegex && settings.narrationSwitch) {
+            // TIER 4: narration fallback (if enabled)
+            if (!matchedName && nameRegexG && settings.narrationSwitch) {
                 try {
-                    const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|gestured|patted|pointed|winked|cried|shouted|called|whispered|muttered|murmured|exclaimed)";
-                    const re = new RegExp(`${nameRegex.source}\\b\\s+${actionsOrPossessive}\\b`, 'gi');
+                    const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|gestured)";
+                    const re = new RegExp(`${nameRegexG.source}\\b\\s+${actionsOrPossessive}\\b`,'gi');
                     let mm, last = null;
-                    while ((mm = re.exec(combinedPlain)) !== null) {
-                        if (isInsideQuotes(combinedPlain, mm.index)) continue;
-                        last = { match: mm, index: mm.index };
+                    while ((mm = re.exec(searchSlice)) !== null) {
+                        const absIdx = searchFrom + mm.index;
+                        if (isInsideQuotes(combinedPlain, absIdx)) continue;
+                        last = { mm, idx: absIdx };
                     }
                     if (last) {
-                        for (let i = 1; i < last.match.length; i++) {
-                            if (last.match[i]) {
-                                matchedName = String(last.match[i]).replace(/-(?:sama|san)$/i, '').trim();
-                                matchedIndex = last.index;
-                                break;
-                            }
-                        }
-                        if (matchedName) {
-                            recordExplicitIfFound(matchedName, matchedIndex);
-                            if (settings.debug) console.log(`CostumeSwitch: narration fallback matched ${matchedName} @${matchedIndex}`);
-                        }
+                        for (let i=1;i<last.mm.length;i++){ if (last.mm[i]) { matchedName = last.mm[i].trim(); matchedIndex = last.idx; break; } }
+                        if (matchedName) { recordExplicitIfFound(matchedName, matchedIndex); if (settings.debug) console.log(`narration fallback matched ${matchedName} @${matchedIndex}`); }
                     }
                 } catch (e) {}
             }
-
-            // --- end tiered logic ---
 
             if (matchedName) {
-                // Avoid switching if the detected name has no corresponding quick-reply but another quicker name exists:
-                // we still attempt issueCostumeForName which tries several variants.
+                // attempt switch - issueCostumeForName handles cooldowns
                 issueCostumeForName(matchedName);
                 scheduleResetIfIdle();
 
-                // keep a sliding tail of buffer so future pronoun resolutions still have context
+                // trim buffer to tail
                 const keep = combined.slice(-BUFFER_KEEP);
                 perMessageBuffers.set(bufKey, keep);
-                // also trim lastExplicit if it's outside our tail window (avoid stale indexes)
+
+                // drop older explicit if it's outside current tail
                 const le = lastExplicitPerBuf.get(bufKey);
-                if (le && le.idx < Math.max(0, combinedPlain.length - BUFFER_KEEP)) {
-                    // adjust idx relative to new tail by discarding it (we'll rebuild as new explicit mentions come in)
-                    lastExplicitPerBuf.delete(bufKey);
-                }
+                if (le && le.idx < Math.max(0, combinedPlain.length - BUFFER_KEEP)) lastExplicitPerBuf.delete(bufKey);
             }
 
         } catch (err) {
@@ -523,16 +426,8 @@ jQuery(async () => {
         if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
         scheduleResetIfIdle();
     });
+    eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
+    eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastExplicitPerBuf.clear(); lastIssuedCostume = null; lastIssuedName = null; });
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
-        if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
-    });
-
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        perMessageBuffers.clear();
-        lastExplicitPerBuf.clear();
-        lastIssuedCostume = null;
-    });
-
-    console.log("SillyTavern-CostumeSwitch (patched index-aware pronoun resolver) loaded.");
+    console.log("SillyTavern-CostumeSwitch (perf & switch-fix patch) loaded.");
 });
