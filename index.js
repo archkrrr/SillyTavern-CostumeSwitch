@@ -427,7 +427,7 @@ jQuery(async () => {
     const matchKind = opts.matchKind || null;
 
     // strong kinds that we allow to bypass global cooldown
-    const strongKinds = new Set(['speaker','action','attribution','vocative','narration','pronoun-infer']);
+    const strongKinds = new Set(['speaker','action','attribution','vocative','narration','pronoun-infer','narration-fallback']);
 
     // early: avoid redundant switches (log suppressed)
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
@@ -814,6 +814,47 @@ jQuery(async () => {
             }
           }
         }
+
+         // --- ENHANCED narration-fallback (insert here, after pronoun inference) ---
+if (!matchedName && settings.patterns && settings.patterns.length) {
+  try {
+    const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+    if (names.length) {
+      // Create a simple sentence splitter for the analysis window
+      const sentences = analysisWindow.split(/(?<=[.?!\n])\s+/);
+      // We'll scan sentences from the end (most recent first)
+      const verbHintRe = /\b(?:is|was|seems|appears|becomes|stood|sat|sits|stood|stood|walked|moved|turned|approached|leaned|nodded|smiled|laughed|watched|glanced|replied|said|asked|murmured|whispered|observed|offered|kept|gave|took)\b/i;
+      const gerundOrPastRe = /\b\w+(?:ed|ing)\b/; // generic verb-like token detector
+      const namesRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'i');
+
+      for (let si = sentences.length - 1; si >= 0; --si) {
+        const sent = sentences[si];
+        if (!sent || sent.length < 1) continue;
+        const sentStart = analysisWindow.lastIndexOf(sent);
+        const nm = namesRe.exec(sent);
+        if (!nm) continue;
+        const nameIdxInAnalysis = sentStart + nm.index;
+        const absoluteMatchIndex = nameIdxInAnalysis + analysisOffset;
+
+        // make sure candidate is not inside quotes
+        if (posIsInsideQuotes(nameIdxInAnalysis, analysisWindow, qRanges)) continue;
+
+        // require the sentence to show some verb-like signal nearby
+        if (verbHintRe.test(sent) || gerundOrPastRe.test(sent)) {
+          matchedName = nm[1].trim();
+          matchKind = 'narration-fallback';
+          matchIndex = absoluteMatchIndex;
+          if (settings.debug) console.debug("CS debug: narration-fallback matched", { matchedName, matchIndex, sentence: sent.slice(0,200) });
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    if (settings.debug) console.warn("CS debug: enhanced narration-fallback error", e);
+  }
+}
+// --- end enhanced narration-fallback ---
+
 
         // 7) narration fallback if enabled
         if (!matchedName && nameRegex && settings.narrationSwitch) {
