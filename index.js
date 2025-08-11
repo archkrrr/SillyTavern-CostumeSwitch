@@ -316,53 +316,52 @@ jQuery(async () => {
 
   function triggerQuickReply(labelOrMessage) {
     try {
-      const label = String(labelOrMessage || '').trim();
-      if (!label) return false;
+        const label = String(labelOrMessage || '').trim();
+        if (!label) return false;
 
-      const candidates = Array.from(document.querySelectorAll('.qr--button'));
+        const candidates = Array.from(document.querySelectorAll('.qr--button'));
+        let exactLabelMatch = null;
+        let exactTitleMatch = null;
+        let caseInsensitiveMatch = null;
 
-      for (const el of candidates) {
-        try {
-          const lbl = el.querySelector('.qr--button-label');
-          if (lbl && String(lbl.innerText || lbl.textContent || '').trim() === label) {
-            if (window.console && console.debug) console.debug(`[CostumeSwitch] Clicking Quick Reply (label): "${label}"`);
-            el.click();
+        for (const el of candidates) {
+            const lblElement = el.querySelector('.qr--button-label');
+            const labelText = (lblElement?.innerText || lblElement?.textContent || '').trim();
+            const titleText = (el.getAttribute('title') || '').trim();
+
+            // Prioritize exact label match
+            if (labelText === label) {
+                exactLabelMatch = el;
+                break; // Found the best possible match, no need to look further
+            }
+            // If no exact label match, look for an exact title match
+            if (!exactTitleMatch && titleText === label) {
+                exactTitleMatch = el;
+            }
+            // As a last resort, find a case-insensitive match
+            if (!caseInsensitiveMatch && (labelText.toLowerCase() === label.toLowerCase() || titleText.toLowerCase() === label.toLowerCase())) {
+                caseInsensitiveMatch = el;
+            }
+        }
+
+        const buttonToClick = exactLabelMatch || exactTitleMatch || caseInsensitiveMatch;
+
+        if (buttonToClick) {
+            if (window.console && console.debug) {
+                 let matchType = (exactLabelMatch ? "exact label" : (exactTitleMatch ? "exact title" : "case-insensitive"));
+                 console.debug(`[CostumeSwitch] Clicking Quick Reply (${matchType}): "${label}"`);
+            }
+            buttonToClick.click();
             return true;
-          }
-        } catch (e) { /* continue */ }
-      }
+        }
 
-      for (const el of candidates) {
-        try {
-          const title = (el.getAttribute && el.getAttribute('title')) || '';
-          if (String(title || '').trim() === label) {
-            if (window.console && console.debug) console.debug(`[CostumeSwitch] Clicking Quick Reply (title): "${label}"`);
-            el.click();
-            return true;
-          }
-        } catch (e) { /* continue */ }
-      }
-
-      for (const el of candidates) {
-        try {
-          const lbl = el.querySelector('.qr--button-label');
-          const content = String(lbl?.innerText || lbl?.textContent || el.getAttribute('title') || '').trim();
-          if (!content) continue;
-          if (content.toLowerCase() === label.toLowerCase()) {
-            el.click();
-            if (window.console && console.debug) console.debug(`[CostumeSwitch] Clicking Quick Reply (case-insensitive match): "${content}"`);
-            return true;
-          }
-        } catch (e) { /* continue */ }
-      }
-
-      console.warn(`[CostumeSwitch] Quick Reply not found: "${label}"`);
-      return false;
+        console.warn(`[CostumeSwitch] Quick Reply not found: "${label}"`);
+        return false;
     } catch (err) {
-      console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
-      return false;
+        console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
+        return false;
     }
-  }
+}
 
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
