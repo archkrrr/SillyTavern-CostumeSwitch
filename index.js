@@ -75,23 +75,19 @@ function ensureSettings() {
 }
 
 // Robust manual reset (very verbose for debugging)
-async function manualResetHandler(event) {
-  try {
-    if (event && event.preventDefault) event.preventDefault();
+function manualResetHandler() {
     console.log("CostumeSwitch: manualResetHandler invoked");
 
-    const realCtx = getRealContext();
-    if (!realCtx) {
-      console.error("CostumeSwitch: ST context NOT FOUND at manual reset time.");
-      $("#cs-status").text("Error: ST context not found (see console).");
-      return;
+    const costumeCmd = `/costume ${extension_settings[extensionName].defaultCostume || 'Date a Live'}`;
+
+    if (typeof window.processSlashCommand === 'function') {
+        window.processSlashCommand(costumeCmd, true);
+        console.log(`CostumeSwitch: Executed "${costumeCmd}" via internal command processor.`);
+    } else {
+        console.error("CostumeSwitch: processSlashCommand not found — API may have changed.");
     }
-    const { eventSource, event_types, characters, characterId } = realCtx;
-    if (!eventSource || !event_types) {
-      console.error("CostumeSwitch: eventSource or event_types missing:", eventSource, event_types);
-      $("#cs-status").text("Error: ST event API missing (see console).");
-      return;
-    }
+}
+
 
     // Read settings live
     const settings = (realCtx.extensionSettings && realCtx.extensionSettings[extensionName])
