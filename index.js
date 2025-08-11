@@ -203,25 +203,25 @@ jQuery(async () => {
   }
 
   // function to issue costume switch when a new character is detected
-  async function issueCostumeForName(name) {
-    if (!name) return;
-    // Format: try both "Name" and "Name/Name" variants
-    const argFolder = `${name}/${name}`;
-    // avoid spam if already set
-    if (argFolder === lastIssuedCostume || name === lastIssuedCostume) return;
+async function issueCostumeForName(name) {
+  if (!name) return;
+  // Format: try both "Name" and "Name/Name" variants
+  const argFolder = `${name}/${name}`;
 
-    // Try variants: folder form first, then bare name, then /costume forms
-    const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
-    if (ok) {
-      // set lastIssuedCostume to the folder variant (most specific), but accept name if needed
-      lastIssuedCostume = argFolder;
-      $("#cs-status").text(`Switched -> ${argFolder}`);
-      setTimeout(()=>$("#cs-status").text(""), 1000);
-    } else {
-      $("#cs-status").text(`Quick Reply not found for ${name}`);
-      setTimeout(()=>$("#cs-status").text(""), 1000);
-    }
+  // Always try to switch (allow repeated switches to the same costume)
+  const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
+
+  if (ok) {
+    // record last successful (for informational/status only)
+    lastIssuedCostume = argFolder;
+    $("#cs-status").text(`Switched -> ${argFolder}`);
+    setTimeout(()=>$("#cs-status").text(""), 1000);
+  } else {
+    $("#cs-status").text(`Quick Reply not found for ${name}`);
+    setTimeout(()=>$("#cs-status").text(""), 1000);
   }
+}
+
 
   // reset timer management (uses quick replies instead of eventSource.emit)
   function scheduleResetIfIdle() {
