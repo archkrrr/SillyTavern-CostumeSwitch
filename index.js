@@ -232,48 +232,69 @@ jQuery(async () => {
   }
   tryWireUI(); setTimeout(tryWireUI, 500); setTimeout(tryWireUI, 1500);
 
-  function normalizeCostumeName(n) { if (!n) return n; return String(n).replace(/[-_](?:sama|san)$/i, '').split(/\s+/)[0]; }
+  function normalizeCostumeName(n) {
+    if (!n) return "";
+    let s = String(n).trim();
+    // remove leading slash if present
+    if (s.startsWith("/")) s = s.slice(1).trim();
+    // if it's a folder-like "name/name" or "/name/name", use the first segment
+    // split on forward slash or whitespace and take first meaningful token
+    const first = s.split(/[\/\s]+/).filter(Boolean)[0] || s;
+    // strip common honorifics appended with - or _ (keep simpler)
+    return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
+  }
 
   /* Quick-reply trigger with debugging output */
-  function triggerQuickReply(labelOrMsg) {
-    try {
-      if (!labelOrMsg) return false;
-      const needle = String(labelOrMsg).trim().toLowerCase();
-      const qrButtons = document.querySelectorAll('.qr--button');
-      // debug: collect labels/titles
-      if (settings.debug) {
-        const list = [];
-        for (const btn of qrButtons) {
-          const lab = (btn.querySelector('.qr--button-label')?.innerText || btn.title || '').trim();
-          list.push(lab);
-        }
-        console.debug("CS debug: QR buttons available ->", list);
+  function triggerQuickReplyVariants(costumeArg) {
+    if (!costumeArg) return false;
+    // base name cleaned (Kotori)
+    const base = normalizeCostumeName(String(costumeArg));
+    if (!base) return false;
+
+    // candidate ordering: prefer the simplest forms first
+    const rawCandidates = [
+      // simplest : folder, single name, costume command variants
+      `${base}`,                   // "Kotori"
+      `${base}/${base}`,           // "Kotori/Kotori"
+      `/costume ${base}`,          // "/costume Kotori"
+      `/costume ${base}/${base}`,  // "/costume Kotori/Kotori"
+      `/${base}`,                  // "/Kotori"
+      String(costumeArg)           // fallback, original string user passed
+    ];
+
+    // dedupe + normalize candidates for the failedTriggerTimes key check
+    const now = Date.now();
+    const unique = [];
+    const seen = new Set();
+    for (const c of rawCandidates) {
+      if (!c) continue;
+      const norm = String(c).trim();
+      if (!norm) continue;
+      const low = norm.toLowerCase();
+      if (seen.has(low)) continue;
+      seen.add(low);
+      unique.push(norm);
+    }
+
+    // attempt candidates in order, but skip ones in failed-trigger cooldown.
+    for (const c of unique) {
+      const key = c.toLowerCase(); // normalized key for failedTriggerTimes
+      const lastFailed = failedTriggerTimes.get(key) || 0;
+      const cooldown = (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
+      if (now - lastFailed < cooldown) {
+        if (settings.debug) console.debug("CS debug: skipping candidate due to failed-cooldown", { candidate: c, lastFailed, cooldown });
+        continue;
       }
-      // First pass: exact title match
-      for (const btn of qrButtons) {
-        const title = (btn.title || '').trim();
-        if (title && title.toLowerCase() === needle) { btn.click(); if (settings.debug) console.debug("CS debug: clicked QR by title:", title); return true; }
+      if (settings.debug) console.debug("CS debug: trying candidate", c);
+      if (triggerQuickReply(c)) {
+        // success -> clear any previously cached failure for this normalized candidate
+        failedTriggerTimes.delete(key);
+        return true;
       }
-      // Second pass: exact label match
-      for (const btn of qrButtons) {
-        const labelEl = btn.querySelector('.qr--button-label');
-        let candidate = null;
-        if (labelEl && labelEl.innerText) candidate = labelEl.innerText.trim();
-        else if (btn.title) candidate = btn.title;
-        if (!candidate) continue;
-        if (candidate.trim().toLowerCase() === needle) { btn.click(); if (settings.debug) console.debug("CS debug: clicked QR by label:", candidate); return true; }
-      }
-      // Third pass: fuzzy include matching (fallback)
-      for (const btn of qrButtons) {
-        const labelEl = btn.querySelector('.qr--button-label');
-        let candidate = null;
-        if (labelEl && labelEl.innerText) candidate = labelEl.innerText.trim();
-        else if (btn.title) candidate = btn.title;
-        if (!candidate) continue;
-        const candLower = candidate.trim().toLowerCase();
-        if (candLower.includes(needle) || needle.includes(candLower)) { btn.click(); if (settings.debug) console.debug("CS debug: clicked QR by fuzzy:", candidate); return true; }
-      }
-    } catch (err) { console.warn("triggerQuickReply error:", err); }
+      // mark failure on normalized key (so we don't try this same text again too quickly)
+      failedTriggerTimes.set(key, Date.now());
+      if (settings.debug) console.debug("CS debug: candidate failed, cached failedTriggerTimes key", key);
+    }
     return false;
   }
 
