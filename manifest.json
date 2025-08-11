@@ -1,13 +1,11 @@
 {
-    "display_name": "Costume Switcher",
-    "loading_order": 1,
-    "requires": [],
-    "optional": [],
-    "dependencies": [],
-    "js": "index.js",
-    "css": "style.css",
-    "author": "Your name",
-    "version": "1.0.0",
-    "homePage": "https://github.com/archkrrr/SillyTavern-CostumeSwitch",
-    "auto_update": false
+  "display_name": "Costume Switch",
+  "loading_order": 10,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "You",
+  "version": "1.0.0",
+  "auto_update": false,
+  "homePage": "https://your-repo-or-local",
+  "i18n": {}
 }
