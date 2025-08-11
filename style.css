@@ -1,3 +1,4 @@
+/* Keep your existing layout rules */
 .costume-switcher-settings {
     display: flex;
     flex-direction: column;
@@ -16,4 +17,47 @@
     color: var(--text-color-secondary);
     margin-top: 10px;
     text-align: center;
+}
+
+/* NEW: Make inputs/textarea/select match dark theme */
+.costume-switcher-settings input[type="text"],
+.costume-switcher-settings input[type="number"],
+.costume-switcher-settings textarea,
+.costume-switcher-settings select {
+    background-color: var(--input-background);
+    color: var(--text-color);
+    border: 1px solid var(--input-border-color);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.9em;
+    box-shadow: none;
+    outline: none;
+}
+
+/* Remove browser autofill bright yellow/white */
+.costume-switcher-settings input:-webkit-autofill,
+.costume-switcher-settings textarea:-webkit-autofill {
+    background-color: var(--input-background) !important;
+    -webkit-box-shadow: 0 0 0px 1000px var(--input-background) inset !important;
+    -webkit-text-fill-color: var(--text-color) !important;
+}
+
+/* Match buttons to other extension panels */
+.costume-switcher-settings button {
+    background-color: var(--button-background);
+    color: var(--button-text-color);
+    border: 1px solid var(--button-border-color);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+.costume-switcher-settings button:hover {
+    background-color: var(--button-background-hover);
+}
+
+/* Make summary text crisp like other panels */
+details.st-ext-card > summary {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
