@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (quick-reply mode, honorific-aware name matching)
+// index.js - SillyTavern-CostumeSwitch (full patched)
 // Keep relative imports like the official examples
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -43,16 +43,13 @@ function getSettingsObj() {
 }
 
 // small utility to build a combined regex from pattern list
-// Changes here: match the listed name anywhere (no colon required), allow optional
-// honorific-like suffixes "-sama" and "-san" (case-insensitive).
+// Matches the listed name anywhere (no colon required), allows optional honorific "-sama" or "-san".
 // For plain-text patterns we build capture groups like: (Name(?:-(?:sama|san))?)
-// We then wrap the union with (?:^|\W)(?:...)(?:\W|$) so we match names when surrounded
-// by non-word characters or boundaries (avoids partial matches inside letters).
 function buildNameRegex(patternList) {
   const escaped = patternList.map(p => {
     const trimmed = (p || '').trim();
     if (!trimmed) return null;
-    // allow literal /.../flags entries to be used directly
+    // allow literal /.../flags entries to be used directly (we insert the body)
     const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
     if (m) return `(${m[1]})`;
     // for plain names, allow optional "-sama" or "-san" suffix
@@ -62,14 +59,18 @@ function buildNameRegex(patternList) {
   if (escaped.length === 0) return null;
 
   // Wrap with non-word boundary anchors so names are found anywhere but not inside other words.
-  // The final regex looks like: (?:^|\W)(?:(Name(?:-sama)?)|(Name2(?:-san)?)))(?:\W|$)
+  // Final regex example: (?:^|\W)(?:(Name(?:-sama)?)|(Name2(?:-san)?)))(?:\W|$)
   return new RegExp(`(?:^|\\W)(?:${escaped.join('|')})(?:\\W|$)`, 'i');
 }
 
-// store runtime buffers per-message so we can check mid-stream
+// runtime state
 const perMessageBuffers = new Map();
 let lastIssuedCostume = null;
 let resetTimer = null;
+
+// throttling map and cooldown
+const lastTriggerTimes = new Map();
+const TRIGGER_COOLDOWN_MS = 250; // ms between repeated triggers for same costume (tunable)
 
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
@@ -92,7 +93,7 @@ jQuery(async () => {
   $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
   $("#cs-status").text("Ready");
 
-  // a tiny helper to persist
+  // helper to persist
   function persistSettings() {
     if (save) save();
     $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
@@ -104,6 +105,8 @@ jQuery(async () => {
     settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     settings.defaultCostume = $("#cs-default").val().trim();
     settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
+    // rebuild regex after saving patterns
+    nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
     persistSettings();
   });
 
@@ -121,11 +124,6 @@ jQuery(async () => {
 
   // Build initial regex
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
-
-  // rebuild regex when user saves new patterns
-  $("#cs-save").on("click", () => {
-    nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
-  });
 
   // ===== Quick Reply trigger helpers (use DOM .qr--button / .qr--button-label) =====
   // Try to find a quick-reply button whose visible label or title equals labelOrMsg and click it.
@@ -177,7 +175,7 @@ jQuery(async () => {
     return false;
   }
 
-  // manual reset helper (now triggers quick reply instead of emitting /costume)
+  // manual reset helper (triggers quick reply)
   async function manualReset() {
     // choose default costume:
     let costumeArg = settings.defaultCostume || "";
@@ -202,26 +200,28 @@ jQuery(async () => {
     }
   }
 
-  // function to issue costume switch when a new character is detected
-async function issueCostumeForName(name) {
-  if (!name) return;
-  // Format: try both "Name" and "Name/Name" variants
-  const argFolder = `${name}/${name}`;
+  // issue costume switch (with small per-costume cooldown)
+  async function issueCostumeForName(name) {
+    if (!name) return;
+    const argFolder = `${name}/${name}`;
+    const now = Date.now();
+    const last = lastTriggerTimes.get(argFolder) || 0;
+    if (now - last < TRIGGER_COOLDOWN_MS) {
+      // too soon to re-trigger the same costume; skip
+      return;
+    }
 
-  // Always try to switch (allow repeated switches to the same costume)
-  const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
-
-  if (ok) {
-    // record last successful (for informational/status only)
-    lastIssuedCostume = argFolder;
-    $("#cs-status").text(`Switched -> ${argFolder}`);
-    setTimeout(()=>$("#cs-status").text(""), 1000);
-  } else {
-    $("#cs-status").text(`Quick Reply not found for ${name}`);
-    setTimeout(()=>$("#cs-status").text(""), 1000);
+    const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
+    if (ok) {
+      lastTriggerTimes.set(argFolder, now);
+      lastIssuedCostume = argFolder;
+      $("#cs-status").text(`Switched -> ${argFolder}`);
+      setTimeout(()=>$("#cs-status").text(""), 1000);
+    } else {
+      $("#cs-status").text(`Quick Reply not found for ${name}`);
+      setTimeout(()=>$("#cs-status").text(""), 1000);
+    }
   }
-}
-
 
   // reset timer management (uses quick replies instead of eventSource.emit)
   function scheduleResetIfIdle() {
@@ -240,7 +240,6 @@ async function issueCostumeForName(name) {
             $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
             setTimeout(()=>$("#cs-status").text(""), 1200);
           } else {
-            // optionally silence if not found
             console.debug("Auto-reset quick reply not found for", costumeArg);
           }
         }
@@ -257,7 +256,6 @@ async function issueCostumeForName(name) {
       if (!settings.enabled) return;
 
       // Determine token text and message id from args - shape can vary by ST version.
-      // Common shapes: (messageId, token) OR ({ token, messageId }) OR (tokenString)
       let tokenText = "";
       let messageId = null;
 
@@ -281,19 +279,37 @@ async function issueCostumeForName(name) {
       const combined = prev + tokenText;
       perMessageBuffers.set(bufKey, combined);
 
-      // run regex search on the combined text for any listed name (now honorific-aware)
       if (!nameRegex) return;
-      const m = combined.match(nameRegex);
-      if (m) {
-        // extract the matched name (the first non-empty capture group)
+
+      // find the LAST match in the combined text so we prefer more recent names
+      // Use a global, case-insensitive exec loop
+      const searchRe = new RegExp(nameRegex.source, 'gi');
+      let lastMatch = null;
+      let m;
+      while ((m = searchRe.exec(combined)) !== null) {
+        lastMatch = { m: m.slice(), index: m.index, len: m[0].length };
+        // continue to find the last occurrence
+      }
+
+      if (lastMatch) {
+        // extract the matched name from capture groups (strip optional honorific suffix)
         let matchedName = null;
-        for (let i = 1; i < m.length; i++) {
-          if (m[i]) { matchedName = m[i].replace(/\s*[:]/, '').trim(); break; }
+        for (let i = 1; i < lastMatch.m.length; i++) {
+          if (lastMatch.m[i]) {
+            matchedName = String(lastMatch.m[i]).replace(/-(?:sama|san)$/i, '').trim();
+            break;
+          }
         }
+
         if (matchedName) {
+          // trigger switch (honorific removed)
           issueCostumeForName(matchedName);
-          // reset idle timer
+          // schedule reset timer
           scheduleResetIfIdle();
+
+          // advance/truncate the buffer up to the end of the handled match so we don't re-handle it
+          const cutPos = lastMatch.index + lastMatch.len;
+          perMessageBuffers.set(bufKey, combined.slice(cutPos));
         }
       }
     } catch (err) {
@@ -308,7 +324,6 @@ async function issueCostumeForName(name) {
   });
 
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
-    // sometimes MESSAGE_RECEIVED means full message is present; clear older buffers
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
   });
 
@@ -318,6 +333,5 @@ async function issueCostumeForName(name) {
     lastIssuedCostume = null;
   });
 
-  // done
-  console.log("SillyTavern-CostumeSwitch (quick-reply mode, honorific-aware) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched, honorific-aware, last-match + cooldown) loaded.");
 });
