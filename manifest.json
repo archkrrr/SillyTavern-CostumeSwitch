@@ -8,10 +8,6 @@
   "js": "index.js",
   "css": "style.css",
   "html": [
-    {
-      "file": "ui.html",
-      "location": "extensions"
-    }
-  ],
-  "loading_order": 50
+    { "file": "html/settings.html", "location": "extensions" }
+  ]
 }
