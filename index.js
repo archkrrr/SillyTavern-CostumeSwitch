@@ -458,6 +458,14 @@ jQuery(async () => {
           const short = String(tokenText || '').trim();
           if (!short) return;
 
+          // QUICK heuristic: skip tokens that look like internal logs / UI text
+          // (these strings came from your logs; extend if you see other repeats)
+          const systemNoiseRe = /Event emitted:|Added\/edited expression override|Expression set|force redrawing character|Streaming in progress:|Timeout waiting for is_send_press|Invalid URI|Empty string passed to getElementById/i;
+          if (systemNoiseRe.test(short)) {
+            if (settings.debug) console.debug("CS debug: skipping system-noise token:", short.slice(0,120));
+            return;
+          }
+
           // Build a small "boundary window" which includes the tail of the previous buffer
           // so we can detect names/actions split across token boundaries.
           const boundarySize = Number(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize) || DEFAULTS.tokenBoundarySize;
@@ -465,13 +473,26 @@ jQuery(async () => {
           const prevTail = (prev || '').slice(prevTailStart);
           const window = prevTail + short;
           const windowOffset = prevTailStart; // index of window[0] inside combined
+          const prevLength = (prev || '').length;
+
+          // helper: accept match only if it overlaps into the new token (not fully inside prev)
+          function matchOverlapsNewToken(matchIndex, matchText) {
+            const startInCombined = windowOffset + matchIndex;
+            const endInCombined = startInCombined + (String(matchText || '').length);
+            // require that match end is greater than prevLength (i.e., some of it is in the new token)
+            return endInCombined > prevLength;
+          }
 
           // 1) speakerRegexNoG on window (helps capture "Kotori:" or "Kotori Yatogami:" when split)
           if (speakerRegexNoG) {
             const m = speakerRegexNoG.exec(window);
             if (m && m[1]) {
-              const posInCombined = windowOffset + (m.index || 0);
-              if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+              if (matchOverlapsNewToken(m.index || 0, m[0] || m[1])) {
+                const posInCombined = windowOffset + (m.index || 0);
+                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+              } else {
+                if (settings.debug) console.debug("CS debug: speakerRegex match ignored (entirely in prev buffer).");
+              }
             }
           }
 
@@ -479,8 +500,12 @@ jQuery(async () => {
           if (!matchedName && vocativeRegexNoG) {
             const m = vocativeRegexNoG.exec(window);
             if (m && m[1]) {
-              const posInCombined = windowOffset + (m.index || 0);
-              if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+              if (matchOverlapsNewToken(m.index || 0, m[0] || m[1])) {
+                const posInCombined = windowOffset + (m.index || 0);
+                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+              } else {
+                if (settings.debug) console.debug("CS debug: vocativeRegex match ignored (entirely in prev buffer).");
+              }
             }
           }
 
@@ -488,20 +513,28 @@ jQuery(async () => {
           if (!matchedName && actionRegexNoG) {
             const m = actionRegexNoG.exec(window);
             if (m && m[1]) {
-              const posInCombined = windowOffset + (m.index || 0);
-              if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+              if (matchOverlapsNewToken(m.index || 0, m[0] || m[1])) {
+                const posInCombined = windowOffset + (m.index || 0);
+                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+              } else {
+                if (settings.debug) console.debug("CS debug: actionRegex match ignored (entirely in prev buffer).");
+              }
             }
           }
 
-          // 4) simple name-in-token scan on window (case-insensitive)
+          // 4) simple name-in-token scan on window (case-insensitive) — accept only if overlap
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names.length) {
               const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'i');
               const mm = anyNameRe.exec(window);
               if (mm && mm[1]) {
-                const posInCombined = windowOffset + (mm.index || 0);
-                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) matchedName = mm[1].trim();
+                if (matchOverlapsNewToken(mm.index || 0, mm[0] || mm[1])) {
+                  const posInCombined = windowOffset + (mm.index || 0);
+                  if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) matchedName = mm[1].trim();
+                } else {
+                  if (settings.debug) console.debug("CS debug: name-in-window match ignored (entirely in prev buffer).");
+                }
               }
             }
           }
