@@ -106,30 +106,7 @@ function isIndexInsideQuotesRanges(ranges, idx) {
   return false;
 }
 
-// New helpers to detect "thinking" / reasoning blocks
-function isInsideThinkBlock(combined) {
-  if (!combined) return false;
-  const low = combined.toLowerCase();
-
-  // 1) explicit tags used by some formats
-  if (low.indexOf('<think') !== -1 && low.indexOf('</think>') === -1) return true;
-
-  // 2) the UI sometimes inserts "Thought for 12 seconds" or similar
-  // accept fuzzy matches (e.g., "Thought for 12 seconds", "Thought for 12s", "Thought for 12 sec")
-  if (/\bthought\s+for\s+\d+\s*(seconds|second|secs|sec|s)?\b/i.test(combined)) return true;
-
-  // 3) common reasoning formatting headers or descriptor strings
-  if (/reasoning formatting/i.test(combined)) return true;
-  if (/deepseek/i.test(combined)) return true;
-
-  // 4) header lines such as "Thought:" or "Thoughts:" near the buffer tail
-  // check last 300 chars for lines that start with Thought or Thinking
-  const tail = combined.slice(-400);
-  if (/^\s*thoughts?\s*[:\-—]/im.test(tail) || /^\s*thinking\s*[:\-—]/im.test(tail)) return true;
-
-  return false;
-}
-
+// New quote-aware helpers
 function posIsInsideQuotes(pos, combined, quoteRanges) {
   if (pos == null || !combined) return false;
   if (quoteRanges && quoteRanges.length) {
@@ -151,6 +128,7 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
     if (!posIsInsideQuotes(idx, combined, quoteRanges)) {
       results.push({ match: m[0], groups: m.slice(1), index: idx });
     }
+    // avoid infinite loop for zero-length matches
     if (re.lastIndex === m.index) re.lastIndex++;
   }
   return results;
@@ -161,6 +139,7 @@ function lastNonQuotedMatch(combined, regex, quoteRanges) {
 }
 
 function isInsideQuotes(text, pos) {
+  // keep fallback (counts double quotes) but prefer range-based checks in main code
   if (!text || pos <= 0) return false;
   const before = text.slice(0, pos);
   const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
@@ -215,21 +194,6 @@ let actionRegexNoG = null;
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
   const settings = store[extensionName];
-
-  // expose a lightweight debug dump helper to the console
-  window.CS_DUMP = function() {
-    try {
-      const all = {};
-      for (const [k, v] of perMessageBuffers.entries()) all[k] = String(v).slice(-1200);
-      return {
-        buffers: all,
-        lastIssuedCostume,
-        lastSwitchTimestamp,
-        failedTriggerTimes: Array.from(failedTriggerTimes.entries()).slice(0,50),
-        lastTriggerTimes: Array.from(lastTriggerTimes.entries()).slice(0,50)
-      };
-    } catch (e) { return { error: e && e.toString ? e.toString() : String(e) }; }
-  };
 
   try {
     const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
@@ -434,14 +398,6 @@ jQuery(async () => {
     else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); setTimeout(()=>$("#cs-status").text(""), 1500); }
   }
 
-  function isStreamingActive() {
-    // If any buffer exists and has content, we consider streaming active.
-    for (const v of perMessageBuffers.values()) {
-      if (v && String(v).length > 0) return true;
-    }
-    return false;
-  }
-
   function issueCostumeForName(name) {
     if (!name) return;
     name = normalizeCostumeName(name);
@@ -490,34 +446,18 @@ jQuery(async () => {
 
   function scheduleResetIfIdle() {
     if (resetTimer) clearTimeout(resetTimer);
-    const initialDelay = settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs;
-
-    // schedule check after initial delay; the check will postpone if streaming is still active
-    resetTimer = setTimeout(function checkAndMaybeReset() {
-      try {
-        if (isStreamingActive()) {
-          if (settings.debug) console.debug("CS debug: streaming active — postponing auto-reset.");
-          // try again shortly later (don't use the full resetTimeoutMs again to avoid long waits)
-          resetTimer = setTimeout(checkAndMaybeReset, 500);
-          return;
-        }
-        // perform reset now
-        (async () => {
-          let costumeArg = settings.defaultCostume || "";
-          if (!costumeArg) {
-            const ch = realCtx.characters?.[realCtx.characterId];
-            if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
-          }
-          if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
-            lastIssuedCostume = costumeArg;
-            if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
-            setTimeout(()=>$("#cs-status").text(""), 1200);
-          }
-        })();
-      } catch (e) {
-        if (settings.debug) console.error("CS debug: scheduleReset error:", e);
+    resetTimer = setTimeout(async () => {
+      let costumeArg = settings.defaultCostume || "";
+      if (!costumeArg) {
+        const ch = realCtx.characters?.[realCtx.characterId];
+        if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
       }
-    }, initialDelay);
+      if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
+        lastIssuedCostume = costumeArg;
+        if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
+        setTimeout(()=>$("#cs-status").text(""), 1200);
+      }
+    }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
   }
 
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
@@ -554,12 +494,6 @@ jQuery(async () => {
           const systemNoiseRe = /Event emitted:|Added\/edited expression override|Expression set|force redrawing character|Streaming in progress:|Timeout waiting for is_send_press|Invalid URI|Empty string passed to getElementById/i;
           if (systemNoiseRe.test(short)) {
             if (settings.debug) console.debug("CS debug: skipping system-noise token:", short.slice(0,120));
-            return;
-          }
-
-          // If we are inside a <think> ... </think> block (or similar reasoning header) skip scanning entirely.
-          if (isInsideThinkBlock(combined)) {
-            if (settings.debug) console.debug("CS debug: inside a reasoning/think block — skipping token scan.");
             return;
           }
 
@@ -662,12 +596,6 @@ jQuery(async () => {
           if (idx >= 0) perMessageBuffers.set(bufKey, (combined || '').slice(idx + matchedName.length));
           else perMessageBuffers.set(bufKey, '');
         } catch (e) { perMessageBuffers.set(bufKey, ''); }
-        return;
-      }
-
-      // If we're inside a reasoning/think block, skip heavy scanning too
-      if (isInsideThinkBlock(combined)) {
-        if (settings.debug) console.debug("CS debug: skipping heavy scan because inside reasoning/think block.");
         return;
       }
 
@@ -790,7 +718,7 @@ jQuery(async () => {
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
   eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.3 — streaming-aware reset & expanded think detection) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.1 — quick-window quote fix) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
