@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (MutationObserver + direct slash-command execution)
+// index.js - SillyTavern-CostumeSwitch (patched with aggressive manual-reset diagnostics)
 // Drop into: data/default-user/extensions/SillyTavern-CostumeSwitch/index.js
 
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
@@ -31,10 +31,8 @@ function safeError(...args) { try { console.error("[CostumeSwitch]", ...args); }
 function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 /**
- * Build a regex from patterns:
- * - Patterns may be plain strings (one per line) or full regex literals like /foo|bar/i
- * - Matches anywhere in the text, with optional colon/em-dash/dash after the name
- * - Case-insensitive
+ * Build a regex from patterns: plain strings or /regex/ literals.
+ * Matches anywhere; optional colon/dash after a name.
  */
 function buildRegexFromPatterns(patterns) {
   const arr = (patterns || []).map(p => (p||'').trim()).filter(Boolean);
@@ -43,7 +41,6 @@ function buildRegexFromPatterns(patterns) {
     const m = p.match(/^\/(.+)\/([gimsuy]*)$/);
     return m ? `(${m[1]})` : `(${escapeRegex(p)})`;
   });
-  // Match anywhere, optionally followed by colon/dash; keep groups so older code can inspect
   return new RegExp(`(?:${pieces.join('|')})(?:\\s*[:—-])?`, 'i');
 }
 
@@ -54,7 +51,6 @@ function getContextSafe() {
 }
 
 function ensureSettings() {
-  // prefer live context storage, fallback to extension_settings import
   ctx = getContextSafe();
   if (ctx && ctx.extensionSettings) {
     ctx.extensionSettings[EXT_NAME] = ctx.extensionSettings[EXT_NAME] || structuredClone(DEFAULTS);
@@ -77,28 +73,25 @@ function getSettings() {
 }
 
 // ---------- Command Execution ----------
-/**
- * Try to execute a slash command using the most-direct available API so it works mid-stream.
- * Returns true if executed or queued successfully, false otherwise.
- */
 async function executeSlashCommand(command) {
   try {
-    // 1) newer global helper (works in many ST builds)
+    // 1) newest global helper
     if (typeof window.sendMessage === 'function') {
       safeLog("executeSlashCommand -> using window.sendMessage:", command);
-      try { window.sendMessage(command); } catch(e) { safeWarn("sendMessage call threw", e); }
-      return true;
+      try { window.sendMessage(command); return true; } catch(e){ safeWarn("window.sendMessage threw", e); }
     }
 
-    // 2) ctx.slashCommands.execute (preferred where available)
+    // 2) ctx.slashCommands.execute
     if (ctx && ctx.slashCommands && typeof ctx.slashCommands.execute === 'function') {
       safeLog("executeSlashCommand -> using ctx.slashCommands.execute:", command);
-      const res = ctx.slashCommands.execute(command);
-      if (res && typeof res.then === 'function') await res;
-      return true;
+      try {
+        const res = ctx.slashCommands.execute(command);
+        if (res && typeof res.then === 'function') await res;
+        return true;
+      } catch(e){ safeWarn("ctx.slashCommands.execute threw", e); }
     }
 
-    // 3) common global fn names (legacy)
+    // 3) legacy global names
     const globalCandidates = [
       window.processSlashCommand,
       window.processCommand,
@@ -110,21 +103,21 @@ async function executeSlashCommand(command) {
     for (const fn of globalCandidates) {
       if (typeof fn === 'function') {
         safeLog("executeSlashCommand -> using global function:", fn.name || fn);
-        const r = fn(command);
-        if (r && typeof r.then === 'function') await r;
-        return true;
+        try {
+          const r = fn(command);
+          if (r && typeof r.then === 'function') await r;
+          return true;
+        } catch(e) { safeWarn("legacy global runner threw", e); }
       }
     }
 
-    // 4) best-effort: emit MESSAGE_SENT (some ST setups may process this)
+    // 4) event emit fallback
     if (ctx && ctx.eventSource && ctx.event_types && typeof ctx.eventSource.emit === 'function') {
       safeLog("executeSlashCommand -> emitting MESSAGE_SENT (fallback):", command);
       try {
         await ctx.eventSource.emit(ctx.event_types.MESSAGE_SENT || 'message_sent', { message: command, name: ctx.characters?.[ctx.characterId]?.name || '' });
         return true;
-      } catch(e) {
-        safeWarn("emit fallback failed", e);
-      }
+      } catch(e){ safeWarn("eventSource.emit fallback threw", e); }
     }
 
     safeWarn("executeSlashCommand: no command runner found to execute:", command);
@@ -135,10 +128,6 @@ async function executeSlashCommand(command) {
   }
 }
 
-/**
- * Fallback: try to type in the chat input and click send (only used if direct execution fails).
- * This is less reliable during streaming but is a useful fallback.
- */
 function inputSendFallback(command) {
   try {
     safeLog("inputSendFallback -> attempting to send via chat input:", command);
@@ -159,14 +148,12 @@ function inputSendFallback(command) {
       if (b) { sendBtn = b; break; }
     }
 
-    // fill input
     if (inputEl.tagName === 'TEXTAREA' || inputEl.tagName === 'INPUT') {
       inputEl.focus();
       inputEl.value = command;
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     } else if (inputEl.isContentEditable) {
       inputEl.focus();
-      // contentEditable should use innerText
       inputEl.innerText = command;
       inputEl.dispatchEvent(new InputEvent('input', { bubbles: true }));
     } else {
@@ -182,18 +169,9 @@ function inputSendFallback(command) {
       safeWarn("inputSendFallback: send button is disabled (likely streaming in progress)");
       return false;
     } else {
-      // try to submit enclosing form
       const form = inputEl.closest('form');
       if (form) {
-        try {
-          if (typeof form.requestSubmit === 'function') form.requestSubmit();
-          else form.submit();
-          safeLog("inputSendFallback: submitted enclosing form");
-          return true;
-        } catch(e) {
-          safeWarn("inputSendFallback form submit failed", e);
-          return false;
-        }
+        try { form.requestSubmit ? form.requestSubmit() : form.submit(); safeLog("inputSendFallback: submitted enclosing form"); return true; } catch(e){ safeWarn("inputSendFallback form submit failed", e); return false; }
       }
     }
     return false;
@@ -203,24 +181,17 @@ function inputSendFallback(command) {
   }
 }
 
-/**
- * Unified function to run a /costume command; tries direct execution first, falls back to input-send,
- * and if generation is in-progress will queue the command until generation end.
- */
 async function runCostumeCommand(rawArg) {
   if (!rawArg) return false;
   const command = `/costume ${rawArg}`;
   safeLog("runCostumeCommand -> attempting:", command);
 
-  // 1) try direct runner
   const didDirect = await executeSlashCommand(command);
   if (didDirect) { safeLog("runCostumeCommand -> executed via direct runner"); return true; }
 
-  // 2) fallback to input-send (may be blocked during streaming)
   const didInput = inputSendFallback(command);
   if (didInput) { safeLog("runCostumeCommand -> executed via input-send fallback"); return true; }
 
-  // 3) queue until generation ends (if ctx available) and try then
   if (ctx && ctx.eventSource && ctx.event_types) {
     safeLog("runCostumeCommand -> queuing command until generation ends:", command);
     pendingQueueCommand(command);
@@ -231,15 +202,11 @@ async function runCostumeCommand(rawArg) {
   return false;
 }
 
-/**
- * If direct methods are unavailable, queue a command and try when generation ends.
- */
 function pendingQueueCommand(command) {
   queuedCommand = command;
   try {
     const et = ctx.event_types || {};
     const evName = et.GENERATION_ENDED || 'GENERATION_ENDED';
-    // prefer once if supported
     if (typeof ctx.eventSource.once === 'function') {
       ctx.eventSource.once(evName, async () => {
         safeLog("pendingQueueCommand -> generation ended, trying queued command:", queuedCommand);
@@ -257,7 +224,6 @@ function pendingQueueCommand(command) {
           safeLog("pendingQueueCommand -> attempted queued command, success:", !!ok);
           queuedCommand = null;
         }
-        // remove listener after first run if possible
         try { ctx.eventSource.off && ctx.eventSource.off(evName, handler); } catch(e) {}
       };
       ctx.eventSource.on(evName, handler);
@@ -275,7 +241,6 @@ function handleMutations(mutationsList) {
     let newText = "";
     for (const mut of mutationsList) {
       if (mut.type === "characterData") {
-        // some MutationRecords have oldValue; guard
         const added = (mut.target && mut.target.textContent) || "";
         newText += added;
       } else if (mut.type === "childList") {
@@ -291,8 +256,6 @@ function handleMutations(mutationsList) {
     if (!nameRegex) return;
     const m = buffers.currentText.match(nameRegex);
     if (m) {
-      // The regex uses capturing groups; find the first non-empty capture if present,
-      // otherwise fallback to match[0].
       let matched = null;
       if (m.length > 1) {
         for (let i = 1; i < m.length; i++) {
@@ -304,13 +267,10 @@ function handleMutations(mutationsList) {
       if (matched && matched !== lastDetectedCharacter) {
         lastDetectedCharacter = matched;
         safeLog("handleMutations -> detected speaker:", matched);
-        // default behavior: try costume using name/name (you can change mapping later)
         const candidateArg = `${matched}/${matched}`;
         runCostumeCommand(candidateArg).then(() => {
-          // reset timer
           clearTimeout(resetTimer);
           resetTimer = setTimeout(() => {
-            // revert to default
             const s = getSettings();
             if (s && s.defaultCostume) {
               runCostumeCommand(s.defaultCostume);
@@ -328,10 +288,8 @@ function handleMutations(mutationsList) {
 function startObservingLastMessage() {
   try {
     if (!getSettings().enabled) { safeLog("startObservingLastMessage -> disabled by settings"); return; }
-    // Best selector for current ST layout: observe the mes_text inside the last .mes
     const lastMsg = document.querySelector('#chat .mes:last-child .mes_text') || document.querySelector('#chat .mes:last-child');
     if (!lastMsg) { safeWarn("startObservingLastMessage -> no last message node found"); return; }
-    // start with empty buffer so every streamed chunk is processed
     buffers.currentText = "";
     lastDetectedCharacter = null;
     if (!observer) {
@@ -339,7 +297,6 @@ function startObservingLastMessage() {
     } else {
       observer.disconnect();
     }
-    // Observe for characterData, childList and subtree changes
     observer.observe(lastMsg, { childList: true, subtree: true, characterData: true });
     safeLog("startObservingLastMessage -> observing node:", lastMsg);
   } catch (e) {
@@ -351,7 +308,6 @@ function stopObserving() {
   try {
     if (observer) observer.disconnect();
     if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
-    // final reset if desired
     const s = getSettings();
     if (s && s.defaultCostume && lastDetectedCharacter !== null) {
       runCostumeCommand(s.defaultCostume);
@@ -373,7 +329,6 @@ function buildSettingsUI() {
       return;
     }
 
-    // Avoid multiple inserts
     if (document.querySelector('.st-costume-switcher-card')) return;
 
     const wrapper = document.createElement('div');
@@ -399,6 +354,7 @@ function buildSettingsUI() {
       <div style="margin-top:10px;">
         <button id="cs-save">Save</button>
         <button id="cs-reset" style="margin-left:8px;">Manual Reset Costume</button>
+        <button id="cs-test-direct" style="margin-left:8px;">Test Direct Send</button>
         <span id="cs-status" style="margin-left:10px;color:#aaa"></span>
       </div>
     `;
@@ -428,9 +384,65 @@ function buildSettingsUI() {
         safeWarn("Manual reset: no default costume configured");
         return;
       }
-      // execute immediately via direct runner
+      // Provide immediate UI feedback
+      const statusEl = document.getElementById('cs-status');
+      if (statusEl) statusEl.textContent = "Sending...";
+      safeLog("Manual reset clicked - attempting runCostumeCommand for:", s.defaultCostume);
+
       const ok = await runCostumeCommand(s.defaultCostume);
-      safeLog("Manual reset attempted, ok:", ok);
+      safeLog("Manual reset result (runCostumeCommand):", ok);
+
+      if (ok) {
+        if (statusEl) statusEl.textContent = "Sent";
+        setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 1500);
+        return;
+      }
+
+      // If runCostumeCommand returned false, try raw window.sendMessage as last effort
+      let directOk = false;
+      try {
+        if (typeof window.sendMessage === 'function') {
+          window.sendMessage(`/costume ${s.defaultCostume}`);
+          directOk = true;
+          safeLog("Manual reset: window.sendMessage direct attempt done");
+        }
+      } catch(e) { safeWarn("Manual reset: window.sendMessage direct attempt threw", e); }
+
+      if (directOk) {
+        if (statusEl) statusEl.textContent = "Sent (direct)";
+        setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 1500);
+        return;
+      }
+
+      // If still not ok but ctx exists, queue the command
+      if (ctx && ctx.eventSource && ctx.event_types) {
+        pendingQueueCommand(`/costume ${s.defaultCostume}`);
+        if (statusEl) statusEl.textContent = "Queued until generation end";
+        setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 3000);
+        return;
+      }
+
+      if (statusEl) statusEl.textContent = "Failed";
+      setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 2000);
+    });
+
+    // Test direct send button: calls window.sendMessage directly (useful for debugging)
+    document.getElementById('cs-test-direct').addEventListener('click', () => {
+      const s = getSettings();
+      const statusEl = document.getElementById('cs-status');
+      try {
+        if (typeof window.sendMessage === 'function') {
+          window.sendMessage(`/costume ${s.defaultCostume}`);
+          safeLog("Test Direct Send: Called window.sendMessage");
+          if (statusEl) { statusEl.textContent = "Direct send called"; setTimeout(()=>statusEl.textContent="",1200); }
+        } else {
+          safeWarn("Test Direct Send: window.sendMessage not found");
+          if (statusEl) { statusEl.textContent = "window.sendMessage missing"; setTimeout(()=>statusEl.textContent="",1500); }
+        }
+      } catch(e) {
+        safeError("Test Direct Send threw:", e);
+        if (statusEl) { statusEl.textContent = "Direct send error"; setTimeout(()=>statusEl.textContent="",2000); }
+      }
     });
   } catch (e) {
     safeError("buildSettingsUI error:", e);
@@ -445,19 +457,15 @@ jQuery(async () => {
     const s = getSettings();
     nameRegex = buildRegexFromPatterns(s.patterns || DEFAULTS.patterns);
 
-    // Build settings UI when DOM ready
     try { buildSettingsUI(); } catch(e) { safeWarn("UI build failed:", e); }
 
-    // Acquire context (again) and hook generation events
     ctx = ctx || getContextSafe();
     if (!ctx) {
       safeWarn("SillyTavern context not found; extension will remain inactive until context available.");
-      // Try one more time later (after app_ready)
       document.addEventListener('DOMContentLoaded', () => { buildSettingsUI(); ctx = getContextSafe(); });
       return;
     }
 
-    // Listen to generation lifecycle events to start/stop observer
     const es = ctx.eventSource;
     const et = ctx.event_types || {};
     const genStart = et.GENERATION_STARTED || et.GENERATION_AFTER_COMMANDS || 'GENERATION_STARTED';
@@ -467,13 +475,11 @@ jQuery(async () => {
     try {
       es.on(genStart, () => {
         safeLog("Generation started - starting observer");
-        // small delay to let the DOM create the last message node
         setTimeout(startObservingLastMessage, 200);
       });
       es.on(genEnd, () => {
         safeLog("Generation ended - stopping observer");
         stopObserving();
-        // if a queued command exists, pendingQueueCommand will handle it when generation ends
       });
       es.on(genStop, () => {
         safeLog("Generation stopped - stopping observer");
@@ -483,7 +489,6 @@ jQuery(async () => {
       safeWarn("Failed to attach to eventSource generation events:", e);
     }
 
-    // Also watch for manual toggles to reload the regex
     if (ctx && ctx.eventSource && ctx.event_types) {
       try {
         ctx.eventSource.on(ctx.event_types.SETTINGS_UPDATED || 'settings_updated', () => {
