@@ -115,22 +115,30 @@ console.log('[CostumeSwitch] DEBUG: Checkpoint 1 - Script file has been loaded a
     }
 
     async function loadSettingsPanel() {
-        console.log('[CostumeSwitch] DEBUG: Checkpoint 5 - loadSettingsPanel() called.');
-        try {
-            const response = await fetch(`${extensionFolderPath}/settings.html`);
-            if (!response.ok) { throw new Error(`Failed to fetch settings.html. Status: ${response.status}`); }
-            const html = await response.text();
-            const container = document.getElementById('extensions_settings');
-            if (container) {
-                container.insertAdjacentHTML('beforeend', html);
-                setupUI();
-            } else {
-                console.error('[CostumeSwitch] CRITICAL: Could not find #extensions_settings container.');
-            }
-        } catch (error) {
-            console.error(`[CostumeSwitch] CRITICAL: Error loading UI: ${error}`);
-        }
+    const htmlPath = `/data/default-user/extensions/SillyTavern-CostumeSwitch/settings.html`;
+    const cssPath = `/data/default-user/extensions/SillyTavern-CostumeSwitch/style.css`;
+
+    try {
+        const htmlResp = await fetch(htmlPath);
+        if (!htmlResp.ok) throw new Error(`Failed to fetch settings.html. Status: ${htmlResp.status}`);
+        const html = await htmlResp.text();
+
+        const container = document.createElement('div');
+        container.innerHTML = html;
+        document.getElementById('extensions_settings').appendChild(container);
+
+        // Load the CSS
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = cssPath;
+        document.head.appendChild(link);
+
+        console.log('[CostumeSwitch] UI loaded successfully');
+    } catch (err) {
+        console.error('[CostumeSwitch] CRITICAL: Error loading UI:', err);
     }
+}
+
 
     function main() {
         console.log('[CostumeSwitch] DEBUG: Checkpoint 4 - main() function executed.');
