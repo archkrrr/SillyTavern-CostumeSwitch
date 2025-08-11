@@ -65,9 +65,11 @@ const perMessageBuffers = new Map();
 let lastIssuedCostume = null;
 let resetTimer = null;
 
-jQuery(async () => {
+// NEW: We wrap the entire logic in an initialization function.
+async function initializeExtension() {
   const { store, save, ctx } = getSettingsObj();
   const settings = store[extensionName];
+  const realCtx = ctx; // We know this is valid now.
 
   // load settings UI HTML
   try {
@@ -75,7 +77,6 @@ jQuery(async () => {
     $("#extensions_settings").append(settingsHtml);
   } catch (e) {
     console.warn("Failed to load settings.html:", e);
-    // If load fails, create a minimal UI container
     $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
   }
 
@@ -86,11 +87,10 @@ jQuery(async () => {
   $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
   $("#cs-status").text("Ready");
 
-  // a tiny helper to persist
   function persistSettings() {
     if (save) save();
     $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
-    setTimeout(()=>$("#cs-status").text(""), 1500);
+    setTimeout(()=>$("#cs-status").text("Ready"), 1500);
   }
 
   $("#cs-save").on("click", () => {
@@ -104,28 +104,17 @@ jQuery(async () => {
   $("#cs-reset").on("click", async () => {
     await manualReset();
   });
-
-  // get ST context (eventSource, event_types, characters, etc.)
-  const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
-  if (!realCtx || !realCtx.slashCommands) { // CHANGED: Added check for slashCommands
-    console.error("SillyTavern context or slashCommands not found. Extension won't run.");
-    $("#cs-status").text("Error: Context not found.");
-    return;
-  }
+  
   const { eventSource, event_types, characters } = realCtx;
 
-  // Build initial regex
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
 
-  // rebuild regex when user saves new patterns
   $("#cs-save").on("click", () => {
     nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   });
 
-  // manual reset helper
   async function manualReset() {
     let costumeArg = settings.defaultCostume || "";
-    // NOTE: If defaultCostume is blank, it resets to the character's base sprite folder.
     if (!costumeArg) {
       const ch = realCtx.characters?.[realCtx.characterId];
       if (ch && ch.name) costumeArg = ch.name;
@@ -135,29 +124,22 @@ jQuery(async () => {
       $("#cs-status").text("No default costume defined.");
       return;
     }
-
-    // CHANGED: Use the correct slash command execution method.
     realCtx.slashCommands.execute(`/costume ${costumeArg}`);
     lastIssuedCostume = costumeArg;
     $("#cs-status").text(`Reset -> ${costumeArg}`);
-    setTimeout(()=>$("#cs-status").text(""), 1500);
+    setTimeout(()=>$("#cs-status").text("Ready"), 1500);
   }
 
-  // function to issue costume switch when a new character is detected
   async function issueCostumeForName(name) {
     if (!name) return;
-    // NOTE: The argument is now just the name, which should match the costume folder name.
     const arg = name; 
     if (arg === lastIssuedCostume) return;
-    
-    // CHANGED: Use the correct slash command execution method.
     realCtx.slashCommands.execute(`/costume ${arg}`);
     lastIssuedCostume = arg;
     $("#cs-status").text(`Switched -> ${arg}`);
-    setTimeout(()=>$("#cs-status").text(""), 1000);
+    setTimeout(()=>$("#cs-status").text("Ready"), 1000);
   }
 
-  // reset timer management
   function scheduleResetIfIdle() {
     if (resetTimer) clearTimeout(resetTimer);
     resetTimer = setTimeout(() => {
@@ -168,11 +150,10 @@ jQuery(async () => {
           if (ch && ch.name) costumeArg = ch.name;
         }
         if (costumeArg) {
-          // CHANGED: Use the correct slash command execution method.
           realCtx.slashCommands.execute(`/costume ${costumeArg}`);
           lastIssuedCostume = costumeArg;
           $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
-          setTimeout(()=>$("#cs-status").text(""), 1200);
+          setTimeout(()=>$("#cs-status").text("Ready"), 1200);
         }
       })();
     }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
@@ -183,7 +164,6 @@ jQuery(async () => {
   eventSource.on(streamEventName, (...args) => {
     try {
       if (!settings.enabled) return;
-
       let tokenText = "";
       let messageId = null;
 
@@ -200,12 +180,10 @@ jQuery(async () => {
       }
 
       if (!tokenText) return;
-
       const bufKey = messageId != null ? `m${messageId}` : 'live';
       const prev = perMessageBuffers.get(bufKey) || "";
       const combined = prev + tokenText;
       perMessageBuffers.set(bufKey, combined);
-
       if (!nameRegex) return;
       const m = combined.match(nameRegex);
       if (m) {
@@ -237,5 +215,26 @@ jQuery(async () => {
     lastIssuedCostume = null;
   });
 
-  console.log("SillyTavern-CostumeSwitch loaded.");
+  console.log("SillyTavern-CostumeSwitch initialized successfully.");
+}
+
+// NEW: This is the new entry point. It waits for the context to be ready.
+jQuery(() => {
+    let attempts = 0;
+    const maxAttempts = 50; // Wait for a maximum of ~12.5 seconds
+    const interval = 250; // Check every 250ms
+
+    const waiter = setInterval(() => {
+        const { ctx } = getSettingsObj();
+        if (ctx && ctx.slashCommands) {
+            clearInterval(waiter);
+            initializeExtension();
+        } else {
+            attempts++;
+            if (attempts > maxAttempts) {
+                clearInterval(waiter);
+                console.error("CostumeSwitch: Timed out waiting for SillyTavern context to become available.");
+            }
+        }
+    }, interval);
 });
