@@ -14,7 +14,11 @@ const DEFAULTS = {
   globalCooldownMs: 1200,
   perTriggerCooldownMs: 250,
   failedTriggerCooldownMs: 10000,
-  maxBufferChars: 2000
+  maxBufferChars: 2000,
+
+  // NEW tunables (safe defaults)
+  tokenBoundarySize: 80,        // chars of prev buffer to include when quick-scanning tokens
+  pronounLookbackChars: 1400   // how far back to search for names when resolving pronouns
 };
 
 function escapeRegex(s) {
@@ -180,6 +184,10 @@ jQuery(async () => {
   if ($("#cs-per-cooldown").length) $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
   if ($("#cs-failed-cooldown").length) $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
   if ($("#cs-max-buffer").length) $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
+  // new inputs (if you added them to settings.html) should be wired similarly:
+  if ($("#cs-token-boundary").length) $("#cs-token-boundary").val(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize);
+  if ($("#cs-pronoun-lookback").length) $("#cs-pronoun-lookback").val(settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars);
+
   $("#cs-status").text("Ready");
 
   function persistSettings() { if (save) save(); if (jQuery("#cs-status").length) $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`); setTimeout(()=>jQuery("#cs-status").text(""), 1500); }
@@ -217,6 +225,12 @@ jQuery(async () => {
         settings.failedTriggerCooldownMs = parseInt($("#cs-failed-cooldown").val() || DEFAULTS.failedTriggerCooldownMs, 10);
         const mb = parseInt($("#cs-max-buffer").val() || DEFAULTS.maxBufferChars, 10);
         settings.maxBufferChars = isFinite(mb) && mb > 0 ? mb : DEFAULTS.maxBufferChars;
+
+        // wire new tunables if present in UI
+        const tbs = parseInt($("#cs-token-boundary").val() || DEFAULTS.tokenBoundarySize, 10);
+        settings.tokenBoundarySize = isFinite(tbs) && tbs > 0 ? tbs : DEFAULTS.tokenBoundarySize;
+        const pl = parseInt($("#cs-pronoun-lookback").val() || DEFAULTS.pronounLookbackChars, 10);
+        settings.pronounLookbackChars = isFinite(pl) && pl > 0 ? pl : DEFAULTS.pronounLookbackChars;
 
         // rebuild regexes & noG variants
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
@@ -409,40 +423,52 @@ jQuery(async () => {
       // QUICK token-level scan (low-latency) using precomputed noG regexes
       (function quickTokenScan() {
         try {
-          const short = String(tokenText || '').trim(); if (!short) return;
-          // 1) speakerRegexNoG on short -> need to map index into combined
+          const short = String(tokenText || '').trim();
+          if (!short) return;
+
+          // Build a small "boundary window" which includes the tail of the previous buffer
+          // so we can detect names/actions split across token boundaries.
+          const boundarySize = Number(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize) || DEFAULTS.tokenBoundarySize;
+          const prevTailStart = Math.max(0, (prev || '').length - boundarySize);
+          const prevTail = (prev || '').slice(prevTailStart);
+          const window = prevTail + short;
+          const windowOffset = prevTailStart; // index of window[0] inside combined
+
+          // 1) speakerRegexNoG on window (helps capture "Kotori:" or "Kotori Yatogami:" when split)
           if (speakerRegexNoG) {
-            const m = speakerRegexNoG.exec(short);
+            const m = speakerRegexNoG.exec(window);
             if (m && m[1]) {
-              // compute index in combined (prev length + m.index)
-              const posInCombined = (prev || '').length + (m.index || 0);
+              const posInCombined = windowOffset + (m.index || 0);
               if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
             }
           }
-          // 2) vocativeRegexNoG
+
+          // 2) vocativeRegexNoG on window
           if (!matchedName && vocativeRegexNoG) {
-            const m = vocativeRegexNoG.exec(short);
+            const m = vocativeRegexNoG.exec(window);
             if (m && m[1]) {
-              const posInCombined = (prev || '').length + (m.index || 0);
+              const posInCombined = windowOffset + (m.index || 0);
               if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
             }
           }
-          // 3) actionRegexNoG
+
+          // 3) actionRegexNoG on window (catches "Kotori Itsuka leaned..." where "Kotori" might have been token-boundary-split)
           if (!matchedName && actionRegexNoG) {
-            const m = actionRegexNoG.exec(short);
+            const m = actionRegexNoG.exec(window);
             if (m && m[1]) {
-              const posInCombined = (prev || '').length + (m.index || 0);
+              const posInCombined = windowOffset + (m.index || 0);
               if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
             }
           }
-          // 4) simple name-in-token scan (avoid matches inside quotes)
+
+          // 4) simple name-in-token scan on window (case-insensitive)
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names.length) {
               const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'i');
-              const mm = anyNameRe.exec(short);
+              const mm = anyNameRe.exec(window);
               if (mm && mm[1]) {
-                const posInCombined = (prev || '').length + (mm.index || 0);
+                const posInCombined = windowOffset + (mm.index || 0);
                 if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) matchedName = mm[1].trim();
               }
             }
@@ -527,7 +553,7 @@ jQuery(async () => {
           const pM = pronARe.exec(combined);
           if (pM) {
             const cutIndex = pM.index || 0;
-            const lookback = Math.max(0, cutIndex - 900);
+            const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
             const sub = (combined || '').slice(lookback, cutIndex);
             const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names_pron.length) {
@@ -610,7 +636,7 @@ jQuery(async () => {
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
   eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
 
-  console.log("SillyTavern-CostumeSwitch (patched v3.1) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v3.2) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
