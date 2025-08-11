@@ -401,13 +401,18 @@ jQuery(async () => {
                 }
             }
 
-            // Priority 4: Optional fallback - match names outside quotes if likely subject of sentence
+            // Priority 4: Optional fallback - detect narration subjects outside quotes
 if (!matchedName && nameRegex && settings.narrationSwitch) {
-    const sentenceStartRe = new RegExp(`(?:^|[.!?]\\s+|\\*\\*[^*]+\\*\\*\\s*)${nameRegex.source}`, 'gi');
+    // Match name either near sentence start OR followed by possessive/action
+    const narrationRe = new RegExp(
+        `(?:^|[.!?]\\s+|\\*\\*[^*]+\\*\\*\\s*)(?:.{0,12})?${nameRegex.source}(?=\\b(?:'s|\\s+(?:is|was|stood|sat|nodded|smiled|leaned|stepped|walked|turned|looked|moved|approached)\\b))`,
+        'gi'
+    );
+
     let lastMatch = null;
     let mm;
-    while ((mm = sentenceStartRe.exec(combined)) !== null) {
-        if (isInsideQuotes(combined, mm.index)) continue; // skip if inside dialogue
+    while ((mm = narrationRe.exec(combined)) !== null) {
+        if (isInsideQuotes(combined, mm.index)) continue; // skip inside dialogue
         for (let i = 1; i < mm.length; i++) {
             if (mm[i]) {
                 lastMatch = { name: mm[i], idx: mm.index };
@@ -419,6 +424,7 @@ if (!matchedName && nameRegex && settings.narrationSwitch) {
         matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
     }
 }
+
 
 
             // --- End of Tiered Logic ---
