@@ -64,6 +64,7 @@ Here are a few visual examples to help guide you through the configuration:
 
 ---
 <img width="674" height="106" alt="image" src="https://github.com/user-attachments/assets/ab177c47-ff04-40b2-af22-c3a51dcd4822" />
+*I have all my costume folders inside my main character card, so that's why I put Dan Da Dan/Char A*
 
 ---
 <img width="2278" height="1221" alt="image" src="https://github.com/user-attachments/assets/e4886d5e-c653-4d4f-8d4a-8b3bffdcbbad" />
