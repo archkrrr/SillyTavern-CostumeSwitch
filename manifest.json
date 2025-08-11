@@ -1,9 +1,9 @@
 {
-  "display_name": "Auto Costume Switcher",
-  "id": "SillyTavern-CostumeSwitch",
-  "version": "0.0.1",
+  "name": "Auto Costume Switcher",
+  "version": "0.0.2",
   "author": "Archkr",
-  "loading_order": 50,
-  "js": "index.js",
-  "description": "Switch character costumes mid-stream based on character name mentions."
+  "description": "Automatically changes character costumes based on name detection in dialogue.",
+  "entrypoint": "index.js",
+  "ui": "ui.html",
+  "tags": ["costume", "sprite", "automation"]
 }
