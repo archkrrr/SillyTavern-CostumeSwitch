@@ -577,7 +577,7 @@ jQuery(async () => {
   try { unload(); } catch(e) {}
 
   try {
-    eventSource.on(streamEventname, _streamHandler);
+    eventSource.on(streamEventName, _streamHandler);
     eventSource.on(event_types.GENERATION_STARTED, _genStartHandler);
     eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
     eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
