@@ -4,26 +4,29 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
-/* Defaults */
 const DEFAULTS = {
   enabled: true,
   resetTimeoutMs: 3000,
   patterns: ["Char A", "Char B", "Char C", "Char D"],
   defaultCostume: "",
-  narrationSwitch: false,
   debug: false,
   globalCooldownMs: 1200,
   perTriggerCooldownMs: 250,
   failedTriggerCooldownMs: 10000,
   maxBufferChars: 2000,
   repeatSuppressMs: 800,
-  mappings: []
+  mappings: [],
+  detectAttribution: true,
+  detectAction: true,
+  detectVocative: true,
+  detectPossessive: true,
+  detectGeneral: true,
 };
 
-/* --- helpers for pattern parsing --- */
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
 function parsePatternEntry(raw) {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return null;
@@ -31,6 +34,7 @@ function parsePatternEntry(raw) {
   if (m) return { body: m[1], flags: (m[2] || '') };
   return { body: escapeRegex(trimmed), flags: '' };
 }
+
 function computeFlagsFromEntries(entries, requireI = true) {
   let flagsSet = new Set();
   for (const e of entries) {
@@ -41,15 +45,16 @@ function computeFlagsFromEntries(entries, requireI = true) {
   const allowed = 'gimsuy';
   return Array.from(flagsSet).filter(c => allowed.includes(c)).join('');
 }
+
 function buildNameRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
-  // capturing group to reliably extract detected name
   const body = `(?:^|\\n|[\\(\\[\\-—–])(?:(${parts.join('|')}))(?:\\W|$)`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildNameRegex compile failed:", e); return null; }
 }
+
 function buildSpeakerRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -58,6 +63,7 @@ function buildSpeakerRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildSpeakerRegex compile failed:", e); return null; }
 }
+
 function buildVocativeRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -66,6 +72,7 @@ function buildVocativeRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildVocativeRegex compile failed:", e); return null; }
 }
+
 function buildAttributionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -77,6 +84,7 @@ function buildAttributionRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildAttributionRegex compile failed:", e); return null; }
 }
+
 function buildActionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -87,9 +95,8 @@ function buildActionRegex(patternList) {
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
 }
 
-/* Quote helpers */
 function getQuoteRanges(s) {
-  const q = /["\\u201C\\u201D]/g;
+  const q = /["\u201C\u201D]/g;
   const pos = [];
   let m;
   while ((m = q.exec(s)) !== null) pos.push(m.index);
@@ -97,19 +104,22 @@ function getQuoteRanges(s) {
   for (let i = 0; i + 1 < pos.length; i += 2) ranges.push([pos[i], pos[i + 1]]);
   return ranges;
 }
+
 function isIndexInsideQuotesRanges(ranges, idx) {
   for (const [a, b] of ranges) if (idx > a && idx < b) return true;
   return false;
 }
+
 function posIsInsideQuotes(pos, combined, quoteRanges) {
   if (pos == null || !combined) return false;
   if (quoteRanges && quoteRanges.length) {
     if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
   }
   const before = combined.slice(0, pos);
-  const quoteCount = (before.match(/["\\u201C\\u201D]/g) || []).length;
+  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
   return (quoteCount % 2) === 1;
 }
+
 function findNonQuotedMatches(combined, regex, quoteRanges) {
   if (!combined || !regex) return [];
   const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
@@ -126,82 +136,81 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
   return results;
 }
 
-/* findBestMatch */
 function findBestMatch(combined, regexes, settings, quoteRanges) {
-    if (!combined) return null;
+  if (!combined) return null;
 
-    const allMatches = [];
-    const { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex } = regexes;
+  const allMatches = [];
+  const { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex } = regexes;
 
-    const priorities = {
-        speaker: 5,
-        attribution: 4,
-        action: 3,
-        vocative: 3,
-        possessive: 2,
-        name: 1,
-    };
+  const priorities = {
+    speaker: 5,
+    attribution: 4,
+    action: 3,
+    vocative: 3,
+    possessive: 2,
+    name: 1,
+  };
 
-    if (speakerRegex) {
-        findNonQuotedMatches(combined, speakerRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.[0]?.trim();
-            if (name) allMatches.push({ name, matchKind: 'speaker', matchIndex: m.index, priority: priorities.speaker });
-        });
-    }
-    
-    if (attributionRegex) {
-        findNonQuotedMatches(combined, attributionRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.find(g => g)?.trim();
-            if (name) allMatches.push({ name, matchKind: 'attribution', matchIndex: m.index, priority: priorities.attribution });
-        });
-    }
-
-    if (actionRegex) {
-        findNonQuotedMatches(combined, actionRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.[0]?.trim();
-            if (name) allMatches.push({ name, matchKind: 'action', matchIndex: m.index, priority: priorities.action });
-        });
-    }
-
-    if (vocativeRegex) {
-        findNonQuotedMatches(combined, vocativeRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.[0]?.trim();
-            if (name) allMatches.push({ name, matchKind: 'vocative', matchIndex: m.index, priority: priorities.vocative });
-        });
-    }
-
-    if (settings.patterns && settings.patterns.length) {
-        const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-        if (names_poss.length) {
-            const possRe = new RegExp('\\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
-            findNonQuotedMatches(combined, possRe, quoteRanges).forEach(m => {
-                const name = m.groups?.[0]?.trim();
-                if (name) allMatches.push({ name, matchKind: 'possessive', matchIndex: m.index, priority: priorities.possessive });
-            });
-        }
-    }
-
-    if (nameRegex && settings.narrationSwitch) {
-         findNonQuotedMatches(combined, nameRegex, quoteRanges).forEach(m => {
-            const name = String(m.groups?.[0] || m.match).replace(/-(?:sama|san)$/i, '').trim();
-            if (name) allMatches.push({ name, matchKind: 'name', matchIndex: m.index, priority: priorities.name });
-        });
-    }
-
-    if (allMatches.length === 0) return null;
-
-    allMatches.sort((a, b) => {
-        if (b.priority !== a.priority) {
-            return b.priority - a.priority;
-        }
-        // prefer *later* match when same priority
-        return b.matchIndex - a.matchIndex;
+  // Speaker detection is always on as the baseline
+  if (speakerRegex) {
+    findNonQuotedMatches(combined, speakerRegex, quoteRanges).forEach(m => {
+      const name = m.groups?.[0]?.trim();
+      if (name) allMatches.push({ name, matchKind: 'speaker', matchIndex: m.index, priority: priorities.speaker });
     });
+  }
+  
+  // Toggleable detections
+  if (settings.detectAttribution && attributionRegex) {
+    findNonQuotedMatches(combined, attributionRegex, quoteRanges).forEach(m => {
+      const name = m.groups?.find(g => g)?.trim();
+      if (name) allMatches.push({ name, matchKind: 'attribution', matchIndex: m.index, priority: priorities.attribution });
+    });
+  }
 
-    return allMatches[0];
+  if (settings.detectAction && actionRegex) {
+    findNonQuotedMatches(combined, actionRegex, quoteRanges).forEach(m => {
+      const name = m.groups?.[0]?.trim();
+      if (name) allMatches.push({ name, matchKind: 'action', matchIndex: m.index, priority: priorities.action });
+    });
+  }
+
+  if (settings.detectVocative && vocativeRegex) {
+    findNonQuotedMatches(combined, vocativeRegex, quoteRanges).forEach(m => {
+      const name = m.groups?.[0]?.trim();
+      if (name) allMatches.push({ name, matchKind: 'vocative', matchIndex: m.index, priority: priorities.vocative });
+    });
+  }
+
+  if (settings.detectPossessive && settings.patterns && settings.patterns.length) {
+    const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+    if (names_poss.length) {
+      const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
+      findNonQuotedMatches(combined, possRe, quoteRanges).forEach(m => {
+        const name = m.groups?.[0]?.trim();
+        if (name) allMatches.push({ name, matchKind: 'possessive', matchIndex: m.index, priority: priorities.possessive });
+      });
+    }
+  }
+
+  if (settings.detectGeneral && nameRegex) {
+    findNonQuotedMatches(combined, nameRegex, quoteRanges).forEach(m => {
+      const name = String(m.groups?.[0] || m.match).replace(/-(?:sama|san)$/i, '').trim();
+      if (name) allMatches.push({ name, matchKind: 'name', matchIndex: m.index, priority: priorities.name });
+    });
+  }
+
+  if (allMatches.length === 0) return null;
+
+  allMatches.sort((a, b) => {
+    if (b.priority !== a.priority) {
+      return b.priority - a.priority;
+    }
+    return b.matchIndex - a.matchIndex;
+  });
+
+  return allMatches[0];
 }
 
-/* Normalizers */
 function normalizeStreamText(s) {
   if (!s) return '';
   s = String(s);
@@ -211,6 +220,7 @@ function normalizeStreamText(s) {
   s = s.replace(/\u00A0/g, ' ');
   return s;
 }
+
 function normalizeCostumeName(n) {
   if (!n) return "";
   let s = String(n).trim();
@@ -219,7 +229,6 @@ function normalizeCostumeName(n) {
   return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
 }
 
-/* Storage for buffers and state */
 const perMessageBuffers = new Map();
 const perMessageStates = new Map();
 let lastIssuedCostume = null;
@@ -255,19 +264,16 @@ function waitForSelector(selector, timeout = 3000, interval = 120) {
   });
 }
 
-/* Debug helper */
 function debugLog(settings, ...args) {
   try {
     if (settings && settings.debug) console.debug.apply(console, ["[CostumeSwitch]"].concat(args));
   } catch (e) { /* ignore */ }
 }
 
-/* index bootstrap */
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
   const settings = store[extensionName];
 
-  // load settings UI
   try {
     const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
     $("#extensions_settings").append(settingsHtml);
@@ -279,20 +285,24 @@ jQuery(async () => {
   const ok = await waitForSelector("#cs-save", 3000, 100);
   if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
 
-  /* populate UI fields */
-  if (jQuery("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
-  if (jQuery("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
-  if (jQuery("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
-  if (jQuery("#cs-timeout").length) $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-  if (jQuery("#cs-narration").length) $("#cs-narration").prop("checked", !!settings.narrationSwitch);
-  if (jQuery("#cs-debug").length) $("#cs-debug").prop("checked", !!settings.debug);
-  if ($("#cs-global-cooldown").length) $("#cs-global-cooldown").val(settings.globalCooldownMs || DEFAULTS.globalCooldownMs);
-  if ($("#cs-per-cooldown").length) $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
-  if ($("#cs-failed-cooldown").length) $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
-  if ($("#cs-max-buffer").length) $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
-  if ($("#cs-repeat-suppress").length) $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
+  $("#cs-enable").prop("checked", !!settings.enabled);
+  $("#cs-patterns").val((settings.patterns || []).join("\n"));
+  $("#cs-default").val(settings.defaultCostume || "");
+  $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
+  $("#cs-debug").prop("checked", !!settings.debug);
+  $("#cs-global-cooldown").val(settings.globalCooldownMs || DEFAULTS.globalCooldownMs);
+  $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
+  $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
+  $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
+  $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
+  
+  // Load new detection toggles
+  $("#cs-detect-attribution").prop("checked", !!settings.detectAttribution);
+  $("#cs-detect-action").prop("checked", !!settings.detectAction);
+  $("#cs-detect-vocative").prop("checked", !!settings.detectVocative);
+  $("#cs-detect-possessive").prop("checked", !!settings.detectPossessive);
+  $("#cs-detect-general").prop("checked", !!settings.detectGeneral);
 
-  // populate mapping table
   function renderMappings() {
     const tbody = $("#cs-mappings-tbody");
     if (!tbody.length) return;
@@ -312,7 +322,6 @@ jQuery(async () => {
 
   $("#cs-status").text("Ready");
 
-  /* persist settings helper */
   function persistSettings() {
     if (save) save();
     if (jQuery("#cs-status").length) $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
@@ -324,23 +333,19 @@ jQuery(async () => {
 
   const { eventSource, event_types } = realCtx;
 
-  /* initial regex build from stored settings */
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
   let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
   let actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
   let vocativeRegex = buildVocativeRegex(settings.patterns || DEFAULTS.patterns);
 
-  /* UI wiring */
   function tryWireUI() {
     if ($("#cs-save").length) {
       $("#cs-save").off('click.cs').on("click.cs", () => {
-        // basic validation + save
         settings.enabled = !!$("#cs-enable").prop("checked");
         settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
         settings.defaultCostume = $("#cs-default").val().trim();
         settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
-        settings.narrationSwitch = !!$("#cs-narration").prop("checked");
         settings.debug = !!$("#cs-debug").prop("checked");
         settings.globalCooldownMs = parseInt($("#cs-global-cooldown").val() || DEFAULTS.globalCooldownMs, 10);
         settings.perTriggerCooldownMs = parseInt($("#cs-per-cooldown").val() || DEFAULTS.perTriggerCooldownMs, 10);
@@ -350,7 +355,13 @@ jQuery(async () => {
         const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
         settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
 
-        // mappings
+        // Save new detection toggles
+        settings.detectAttribution = !!$("#cs-detect-attribution").prop("checked");
+        settings.detectAction = !!$("#cs-detect-action").prop("checked");
+        settings.detectVocative = !!$("#cs-detect-vocative").prop("checked");
+        settings.detectPossessive = !!$("#cs-detect-possessive").prop("checked");
+        settings.detectGeneral = !!$("#cs-detect-general").prop("checked");
+
         const newMaps = [];
         $("#cs-mappings-tbody tr").each(function() {
           const name = $(this).find(".map-name").val().trim();
@@ -359,7 +370,6 @@ jQuery(async () => {
         });
         settings.mappings = newMaps;
 
-        // Attempt to recompile regexes; show compile errors in UI if any
         let compileError = null;
         try {
           nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
@@ -382,12 +392,10 @@ jQuery(async () => {
       });
     }
 
-    // Reset button (manual)
     if ($("#cs-reset").length) {
       $("#cs-reset").off('click.cs').on("click.cs", async () => { await manualReset(); });
     }
 
-    // mapping add row
     if ($("#cs-mapping-add").length) {
       $("#cs-mapping-add").off('click.cs').on("click.cs", () => {
         settings.mappings = settings.mappings || [];
@@ -396,7 +404,6 @@ jQuery(async () => {
       });
     }
 
-    // mapping remove handler (delegated)
     $("#cs-mappings-tbody").off('click.cs', '.map-remove').on('click.cs', '.map-remove', function() {
       const tr = $(this).closest('tr');
       const idx = parseInt(tr.attr('data-idx'), 10);
@@ -406,7 +413,6 @@ jQuery(async () => {
       }
     });
 
-    // LIVE recompile on pattern input changes so adding a name like "Reine" takes effect immediately
     $(document).off('input.cs_patterns', '#cs-patterns').on('input.cs_patterns', '#cs-patterns', function() {
       const val = $(this).val();
       const arr = String(val || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -427,7 +433,6 @@ jQuery(async () => {
   }
   tryWireUI(); setTimeout(tryWireUI, 500);
 
-  /* Quick-Reply clicking helpers */
   function triggerQuickReply(labelOrMessage) {
     try {
         const label = String(labelOrMessage || '').trim();
@@ -504,7 +509,6 @@ jQuery(async () => {
     return false;
   }
 
-  /* Manual reset function (exposed to UI) */
   async function manualReset() {
     let costumeArg = settings.defaultCostume || "";
     if (!costumeArg) {
@@ -517,7 +521,6 @@ jQuery(async () => {
     setTimeout(()=>$("#cs-status").text(""), 1500);
   }
 
-  /* mapping lookup helper */
   function getMappedCostume(name) {
     if (!name) return null;
     const arr = settings.mappings || [];
@@ -530,7 +533,6 @@ jQuery(async () => {
     return null;
   }
 
-  /* issue costume based on detected name */
   function issueCostumeForName(name, opts = {}) {
     if (!name) return;
     const now = Date.now();
@@ -548,7 +550,6 @@ jQuery(async () => {
       return;
     }
 
-    // resolve mapping if present
     let argFolder = getMappedCostume(name);
     if (!argFolder) argFolder = `${name}/${name}`;
 
@@ -580,7 +581,6 @@ jQuery(async () => {
     }
   }
 
-  /* Event handlers wiring */
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
   _genStartHandler = (messageId) => {
@@ -594,7 +594,6 @@ jQuery(async () => {
     try {
       if (!settings.enabled) return;
       
-      // extract token and messageId gracefully
       let tokenText = ""; let messageId = null;
       if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); }
       else if (typeof args[0] === 'string' && args.length === 1) tokenText = args[0];
@@ -699,10 +698,9 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched, live patterns) loaded.");
+  console.log("SillyTavern-CostumeSwitch (with toggles) loaded.");
 });
 
-/* Settings storage helper */
 function getSettingsObj() {
   const ctx = typeof getContext === 'function' ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (ctx && ctx.extensionSettings) {
