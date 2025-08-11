@@ -60,8 +60,8 @@ Here are a few visual examples to help guide you through the configuration:
 
 #### Quick Replies Setup in SillyTavern
 
-![Quick Replies Setup](<img width="689" height="481" alt="image" src="https://github.com/user-attachments/assets/3ea504f1-9c18-4195-b022-ab395207c9df" />
-)
+<img width="689" height="481" alt="image" src="https://github.com/user-attachments/assets/a5f9ab40-af5b-4ea1-aa0b-1bdf085eb943" />
+
 
 
 *In this screenshot, we are defining the Quick Reply labels that will trigger the costume changes. Each character name should have a corresponding quick reply label.*
