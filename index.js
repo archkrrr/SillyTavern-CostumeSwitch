@@ -135,9 +135,12 @@ jQuery(async () => {
       $("#cs-status").text("No default costume defined.");
       return;
     }
-    // *** FIX: Use SEND_MESSAGE to execute the command ***
-    await eventSource.emit(event_types.SEND_MESSAGE, `/costume ${costumeArg}`);
-
+    // emit a MESSAGE_SENT event with the slash command
+    await eventSource.emit(event_types.MESSAGE_SENT, {
+      message: `/costume ${costumeArg}`,
+      // name field may be optional; supply current character name if available
+      name: realCtx.characters?.[realCtx.characterId]?.name || ''
+    });
     lastIssuedCostume = costumeArg;
     $("#cs-status").text(`Reset -> ${costumeArg}`);
     setTimeout(()=>$("#cs-status").text(""), 1500);
@@ -147,13 +150,14 @@ jQuery(async () => {
   async function issueCostumeForName(name) {
     if (!name) return;
     // Format: /costume character_name/folder_name
+    // Use the simple convention <name>/<name>. You can enhance with mappings later.
     const arg = `${name}/${name}`;
     // avoid spam if already set
     if (arg === lastIssuedCostume) return;
-    
-    // *** FIX: Use SEND_MESSAGE to execute the command ***
-    await eventSource.emit(event_types.SEND_MESSAGE, `/costume ${arg}`);
-
+    await eventSource.emit(event_types.MESSAGE_SENT, {
+      message: `/costume ${arg}`,
+      name: realCtx.characters?.[realCtx.characterId]?.name || ''
+    });
     lastIssuedCostume = arg;
     $("#cs-status").text(`Switched -> ${arg}`);
     setTimeout(()=>$("#cs-status").text(""), 1000);
@@ -163,6 +167,7 @@ jQuery(async () => {
   function scheduleResetIfIdle() {
     if (resetTimer) clearTimeout(resetTimer);
     resetTimer = setTimeout(() => {
+      // if defaultCostume configured, use it; else use character folder
       (async () => {
         let costumeArg = settings.defaultCostume || "";
         if (!costumeArg) {
@@ -170,9 +175,7 @@ jQuery(async () => {
           if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
         }
         if (costumeArg) {
-          // *** FIX: Use SEND_MESSAGE to execute the command ***
-          await eventSource.emit(event_types.SEND_MESSAGE, `/costume ${costumeArg}`);
-          
+          await eventSource.emit(event_types.MESSAGE_SENT, { message: `/costume ${costumeArg}`, name: realCtx.characters?.[realCtx.characterId]?.name || '' });
           lastIssuedCostume = costumeArg;
           $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
           setTimeout(()=>$("#cs-status").text(""), 1200);
