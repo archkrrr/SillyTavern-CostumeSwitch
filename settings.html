@@ -1,22 +1,30 @@
-<!-- You might want to add additional HTML elements to ST. 
-    It's good practice to separate it out from your code -->
-<div class="example-extension-settings">
-    <div class="inline-drawer">
-        <div class="inline-drawer-toggle inline-drawer-header">
-            <b>Extension Example</b>
-            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-        </div>
-        <div class="inline-drawer-content">
-            <div class="example-extension_block flex-container">
-                <input id="my_button" class="menu_button" type="submit" value="Example Button" />
-            </div>
+<div class="st-ext-card" style="padding:8px;">
+  <h3>Costume Switch</h3>
 
-            <div class="example-extension_block flex-container">
-                <input id="example_setting" type="checkbox" />
-                <label for="example_setting">This is an example</label>
-            </div>
+  <label>
+    <input id="cs-enable" type="checkbox" />
+    Enable real-time switching
+  </label>
+  <div style="margin-top:8px;">
+    <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
+    <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
+  </div>
 
-            <hr class="sysHR" />
-        </div>
-    </div>
+  <div style="margin-top:8px;">
+    <label>Default costume folder (optional):</label><br/>
+    <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
+    <small>Leave blank to use current character's own folder.</small>
+  </div>
+
+  <div style="margin-top:8px;">
+    <label>Reset timeout (ms):</label>
+    <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
+  </div>
+
+  <div style="margin-top:12px;">
+    <button id="cs-reset">Manual Reset Costume</button>
+    <button id="cs-save" style="margin-left:8px;">Save</button>
+  </div>
+
+  <div id="cs-status" style="margin-top:8px;color:#777;"></div>
 </div>
