@@ -161,6 +161,19 @@ function normalizeStreamText(s) {
   return s;
 }
 
+// --- MOVE normalizeCostumeName to top-level so all helpers can use it ---
+function normalizeCostumeName(n) {
+  if (!n) return "";
+  let s = String(n).trim();
+  // remove leading slash if present
+  if (s.startsWith("/")) s = s.slice(1).trim();
+  // if it's a folder-like "name/name" or "/name/name", use the first segment
+  // split on forward slash or whitespace and take first meaningful token
+  const first = s.split(/[\/\s]+/).filter(Boolean)[0] || s;
+  // strip common honorifics appended with - or _ (keep simpler)
+  return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
+}
+
 // runtime state
 const perMessageBuffers = new Map();
 let lastIssuedCostume = null;
@@ -317,18 +330,6 @@ jQuery(async () => {
     if ($("#cs-reset").length) { $("#cs-reset").off('click.cs').on("click.cs", async () => { await manualReset(); }); }
   }
   tryWireUI(); setTimeout(tryWireUI, 500); setTimeout(tryWireUI, 1500);
-
-  function normalizeCostumeName(n) {
-    if (!n) return "";
-    let s = String(n).trim();
-    // remove leading slash if present
-    if (s.startsWith("/")) s = s.slice(1).trim();
-    // if it's a folder-like "name/name" or "/name/name", use the first segment
-    // split on forward slash or whitespace and take first meaningful token
-    const first = s.split(/[\/\s]+/).filter(Boolean)[0] || s;
-    // strip common honorifics appended with - or _ (keep simpler)
-    return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
-  }
 
   /* Simulate a real quick-reply click on SillyTavern's QR buttons.
      Uses .qr--button (visible button) and falls back to title (message). */
@@ -830,7 +831,7 @@ function getSettingsObj() {
   if (typeof extension_settings !== 'undefined') {
     extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
     for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extension_settings[extensionName]] = DEFAULTS[k];
     }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
