@@ -244,59 +244,83 @@ jQuery(async () => {
     return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
   }
 
-  /* Quick-reply trigger with debugging output */
-  function triggerQuickReplyVariants(costumeArg) {
-    if (!costumeArg) return false;
-    // base name cleaned (Kotori)
-    const base = normalizeCostumeName(String(costumeArg));
-    if (!base) return false;
+  /* Local quick-reply click simulator */
+function triggerQuickReply(label) {
+  try {
+    // Grab all quick reply buttons (visible in DOM)
+    const btns = [...document.querySelectorAll('.quick-reply-button')];
+    const btn = btns.find(el => el.textContent.trim() === label);
 
-    // candidate ordering: prefer the simplest forms first
-    const rawCandidates = [
-      // simplest : folder, single name, costume command variants
-      `${base}`,                   // "Kotori"
-      `${base}/${base}`,           // "Kotori/Kotori"
-      `/costume ${base}`,          // "/costume Kotori"
-      `/costume ${base}/${base}`,  // "/costume Kotori/Kotori"
-      `/${base}`,                  // "/Kotori"
-      String(costumeArg)           // fallback, original string user passed
-    ];
-
-    // dedupe + normalize candidates for the failedTriggerTimes key check
-    const now = Date.now();
-    const unique = [];
-    const seen = new Set();
-    for (const c of rawCandidates) {
-      if (!c) continue;
-      const norm = String(c).trim();
-      if (!norm) continue;
-      const low = norm.toLowerCase();
-      if (seen.has(low)) continue;
-      seen.add(low);
-      unique.push(norm);
+    if (btn) {
+      console.log(`[CostumeSwitch] Clicking Quick Reply: "${label}"`);
+      btn.click();
+      return true;
+    } else {
+      console.warn(`[CostumeSwitch] Quick Reply not found: "${label}"`);
+      return false;
     }
-
-    // attempt candidates in order, but skip ones in failed-trigger cooldown.
-    for (const c of unique) {
-      const key = c.toLowerCase(); // normalized key for failedTriggerTimes
-      const lastFailed = failedTriggerTimes.get(key) || 0;
-      const cooldown = (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
-      if (now - lastFailed < cooldown) {
-        if (settings.debug) console.debug("CS debug: skipping candidate due to failed-cooldown", { candidate: c, lastFailed, cooldown });
-        continue;
-      }
-      if (settings.debug) console.debug("CS debug: trying candidate", c);
-      if (triggerQuickReply(c)) {
-        // success -> clear any previously cached failure for this normalized candidate
-        failedTriggerTimes.delete(key);
-        return true;
-      }
-      // mark failure on normalized key (so we don't try this same text again too quickly)
-      failedTriggerTimes.set(key, Date.now());
-      if (settings.debug) console.debug("CS debug: candidate failed, cached failedTriggerTimes key", key);
-    }
+  } catch (err) {
+    console.error(`[CostumeSwitch] Error triggering Quick Reply "${label}":`, err);
     return false;
   }
+}
+
+/* Quick-reply trigger with debugging output */
+function triggerQuickReplyVariants(costumeArg) {
+  if (!costumeArg) return false;
+
+  // base name cleaned (Kotori)
+  const base = normalizeCostumeName(String(costumeArg));
+  if (!base) return false;
+
+  // candidate ordering: prefer the simplest forms first
+  const rawCandidates = [
+    `${base}`,                   // "Kotori"
+    `${base}/${base}`,           // "Kotori/Kotori"
+    `/costume ${base}`,          // "/costume Kotori"
+    `/costume ${base}/${base}`,  // "/costume Kotori/Kotori"
+    `/${base}`,                  // "/Kotori"
+    String(costumeArg)           // fallback
+  ];
+
+  // dedupe + normalize candidates for the failedTriggerTimes key check
+  const now = Date.now();
+  const unique = [];
+  const seen = new Set();
+  for (const c of rawCandidates) {
+    if (!c) continue;
+    const norm = String(c).trim();
+    if (!norm) continue;
+    const low = norm.toLowerCase();
+    if (seen.has(low)) continue;
+    seen.add(low);
+    unique.push(norm);
+  }
+
+  // attempt candidates in order, but skip ones in failed-trigger cooldown
+  for (const c of unique) {
+    const key = c.toLowerCase();
+    const lastFailed = failedTriggerTimes.get(key) || 0;
+    const cooldown = (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
+
+    if (now - lastFailed < cooldown) {
+      if (settings.debug) console.debug("CS debug: skipping candidate due to failed-cooldown", { candidate: c, lastFailed, cooldown });
+      continue;
+    }
+
+    if (settings.debug) console.debug("CS debug: trying candidate", c);
+    if (triggerQuickReply(c)) {
+      failedTriggerTimes.delete(key); // success
+      return true;
+    }
+
+    failedTriggerTimes.set(key, Date.now()); // failure
+    if (settings.debug) console.debug("CS debug: candidate failed, cached failedTriggerTimes key", key);
+  }
+
+  return false;
+}
+
 
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
