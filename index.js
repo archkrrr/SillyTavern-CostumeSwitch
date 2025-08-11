@@ -138,8 +138,8 @@ function findBestMatch(buffer, regexes, settings, quoteRanges) {
     const priorities = {
         speaker: 5,
         attribution: 4,
-        action: 3,
-        vocative: 2, // Lowered priority
+        action: 4, // Increased priority to match attribution
+        vocative: 2,
         name: 1,
     };
 
