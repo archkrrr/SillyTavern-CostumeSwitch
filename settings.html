@@ -1,43 +1,141 @@
-<div class="st-ext-card" style="padding:8px;">
-  <h3>Costume Switch</h3>
+<!-- settings.html - Costume Switch (patched: dropdown + dark inputs + narration toggle) -->
+<style>
+/* wrapper */
+.cs-details { margin-bottom: 8px; border-radius: 6px; overflow: visible; }
 
-  <label>
-    <input id="cs-enable" type="checkbox" />
-    Enable real-time switching
-  </label>
+/* summary (header) */
+.cs-details > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #e6eef3;
+  background: linear-gradient(180deg, rgba(255,255,255,0.012), rgba(0,0,0,0.02));
+  user-select: none;
 
-  <div style="margin-top:8px;">
-    <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
-    <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
-  </div>
+  /* try to get crisper text rendering */
+  -webkit-font-smoothing: subpixel-antialiased;
+  font-smooth: never;
+  text-rendering: optimizeLegibility;
 
-  <div style="margin-top:8px;">
-    <label>Default costume folder (optional):</label><br/>
-    <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
-    <small>Leave blank to use current character's own folder.</small>
-  </div>
+  /* avoid heavy compositing that can blur text */
+  backface-visibility: hidden;
+  will-change: auto;
+  transform: none;
+}
 
-  <div style="margin-top:8px;">
-    <label>Reset timeout (ms):</label>
-    <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
-  </div>
+/* chevron */
+.cs-details > summary::marker { content: none; }
+.cs-details > summary::after {
+  content: "▸";
+  margin-left: auto;
+  transition: transform .12s ease;
+  opacity: .95;
+  transform-origin: center;
+}
+.cs-details[open] > summary::after { transform: rotate(90deg); }
 
-  <!-- NEW: Narration fallback toggle -->
-  <div style="margin-top:8px;">
+/* content card */
+.cs-content { padding: 8px; background: transparent; color: #dfe8ee; }
+
+/* Inputs, textareas, selects and number fields - dark, subtle background */
+.cs-content input[type="text"],
+.cs-content input[type="number"],
+.cs-content textarea,
+.cs-content select {
+  background-color: rgba(255,255,255,0.03) !important;
+  color: #e8eef2 !important;
+  border: 1px solid rgba(255,255,255,0.06) !important;
+  box-shadow: none !important;
+  outline: none !important;
+  border-radius: 4px;
+  padding: 6px 8px;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  font-size: 13px;
+  -webkit-font-smoothing: subpixel-antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* textarea sizing */
+.cs-content textarea { min-height: 110px; resize: vertical; }
+
+/* buttons - subtle dark style that matches other ST buttons */
+.cs-content button {
+  background: rgba(255,255,255,0.035);
+  color: #eaeef0;
+  border: 1px solid rgba(255,255,255,0.06);
+  padding: 6px 10px;
+  border-radius: 6px;
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 13px;
+}
+.cs-content button:active { transform: translateY(1px); }
+
+/* ensure small helper text looks correct */
+.cs-content small, .cs-content .help { color: #95a0a6; }
+
+/* remove unexpected white flashes from autofill or native focus */
+input:-webkit-autofill,
+textarea:-webkit-autofill {
+  background-color: rgba(255,255,255,0.03) !important;
+  -webkit-box-shadow: 0 0 0px 1000px rgba(255,255,255,0.03) inset !important;
+  -webkit-text-fill-color: #e8eef2 !important;
+}
+
+/* optional: make the whole card a little denser on small screens */
+@media (max-width: 640px) {
+  .cs-content { padding: 6px; }
+  .cs-details > summary { padding: 8px; }
+}
+</style>
+
+<details class="cs-details st-ext-card" open>
+  <summary>Costume Switch</summary>
+
+  <div class="cs-content">
     <label>
-      <input id="cs-narration" type="checkbox" />
-      Enable loose narration fallback
+      <input id="cs-enable" type="checkbox" />
+      Enable real-time switching
     </label>
-    <div style="font-size:90%; color:#666; margin-top:4px;">
-      If enabled, the extension will try to auto-switch on loose name mentions **outside** quotes
-      (useful for narrative-style AI output). Disabled by default to avoid false switches.
+
+    <div style="margin-top:8px;">
+      <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
+      <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
     </div>
-  </div>
 
-  <div style="margin-top:12px;">
-    <button id="cs-reset">Manual Reset Costume</button>
-    <button id="cs-save" style="margin-left:8px;">Save</button>
-  </div>
+    <div style="margin-top:8px;">
+      <label>Default costume folder (optional):</label><br/>
+      <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
+      <small>Leave blank to use current character's own folder.</small>
+    </div>
 
-  <div id="cs-status" style="margin-top:8px;color:#777;"></div>
-</div>
+    <div style="margin-top:8px;">
+      <label>Reset timeout (ms):</label>
+      <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
+    </div>
+
+    <div style="margin-top:8px;">
+      <label>
+        <input id="cs-narration" type="checkbox" />
+        Enable loose narration fallback
+      </label>
+      <div style="font-size:90%; color:#666; margin-top:4px;">
+        If enabled, the extension will try to auto-switch on loose name mentions <strong>outside</strong> quotes
+        (useful for narrative-style AI output). Disabled by default to avoid false switches.
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button id="cs-reset">Manual Reset Costume</button>
+      <button id="cs-save" style="margin-left:8px;">Save</button>
+    </div>
+
+    <div id="cs-status" style="margin-top:8px;color:#777;"></div>
+  </div>
+</details>
