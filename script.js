@@ -116,23 +116,30 @@ console.log('[CostumeSwitch] DEBUG: Checkpoint 1 - Script file has been loaded a
 
     async function loadSettingsPanel() {
     try {
-        // Load HTML from extension folder
-        const html = await window.loadExtensionFile('SillyTavern-CostumeSwitch', 'settings.html');
+        // Load settings.html from backend API
+        const htmlResp = await fetch(`/api/extensionFile/SillyTavern-CostumeSwitch/settings.html`);
+        if (!htmlResp.ok) throw new Error(`Failed to load settings.html. Status: ${htmlResp.status}`);
+        const html = await htmlResp.text();
+
         const container = document.createElement('div');
         container.innerHTML = html;
         document.getElementById('extensions_settings').appendChild(container);
 
-        // Load CSS from extension folder
-        const css = await window.loadExtensionFile('SillyTavern-CostumeSwitch', 'style.css');
-        const styleTag = document.createElement('style');
-        styleTag.textContent = css;
-        document.head.appendChild(styleTag);
+        // Load style.css
+        const cssResp = await fetch(`/api/extensionFile/SillyTavern-CostumeSwitch/style.css`);
+        if (cssResp.ok) {
+            const css = await cssResp.text();
+            const styleTag = document.createElement('style');
+            styleTag.textContent = css;
+            document.head.appendChild(styleTag);
+        }
 
         console.log('[CostumeSwitch] UI loaded successfully');
     } catch (err) {
         console.error('[CostumeSwitch] CRITICAL: Error loading UI:', err);
     }
 }
+
 
 
 
