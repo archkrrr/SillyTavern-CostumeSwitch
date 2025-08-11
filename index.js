@@ -1,5 +1,5 @@
-// index.js - SillyTavern-CostumeSwitch (patched: robust UI init / waits for settings DOM,
-// plus sliding window, pronoun resolution, markdown-strip, derived character aliases)
+// index.js - SillyTavern-CostumeSwitch (patched: stronger pronoun-resolution, index-aware,
+// longer sliding window, slightly shorter cooldowns, optional debug logging)
 
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -11,15 +11,16 @@ const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const DEFAULTS = {
     enabled: true,
     resetTimeoutMs: 3000,
-    patterns: ["Shido", "Kotori"], // default simple names (one per line in UI)
+    patterns: ["Shido", "Kotori", "Tohka"], // add Tohka by default since you mentioned it
     defaultCostume: "", // empty => use current character's own folder
-    narrationSwitch: false // opt-in loose narration fallback (matches outside quotes only)
+    narrationSwitch: false, // opt-in loose narration fallback (matches outside quotes only)
+    debug: false // set true to enable console logging for tuning
 };
 
-// simple safe regex-building util (escape plain text)
+// safe regex escape
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// helper - read or init settings
+// settings helper
 function getSettingsObj() {
     const ctx = getContext ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
     if (ctx && ctx.extensionSettings) {
@@ -32,7 +33,6 @@ function getSettingsObj() {
     if (typeof extension_settings !== 'undefined') {
         extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
         for (const k of Object.keys(DEFAULTS)) {
-            if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][extensionName] = DEFAULTS[k];
             if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
         }
         return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
@@ -40,7 +40,7 @@ function getSettingsObj() {
     throw new Error("Can't find SillyTavern extension settings storage.");
 }
 
-// small utility to build a combined regex from pattern list for narration (stricter)
+// regex builders (unchanged behavior)
 function buildNameRegex(patternList) {
     const escaped = patternList.map(p => {
         const trimmed = (p || '').trim();
@@ -49,13 +49,9 @@ function buildNameRegex(patternList) {
         if (m) return `(${m[1]})`;
         return `(${escapeRegex(trimmed)}(?:-(?:sama|san))?)`;
     }).filter(Boolean);
-
     if (escaped.length === 0) return null;
-    // require start-of-line OR newline OR opening bracket/dash before the name (less permissive)
     return new RegExp(`(?:^|\\n|[\\(\\[\\-—–])(?:${escaped.join('|')})(?:\\W|$)`, 'i');
 }
-
-// Helper - build the stricter speaker regex (e.g., "Name:")
 function buildSpeakerRegex(patternList) {
     const escaped = patternList.map(p => {
         const trimmed = (p || '').trim();
@@ -64,12 +60,9 @@ function buildSpeakerRegex(patternList) {
         if (m) return `(${m[1]})`;
         return `(${escapeRegex(trimmed)})`;
     }).filter(Boolean);
-
     if (escaped.length === 0) return null;
     return new RegExp(`(?:^|\\n)\\s*(${escaped.join('|')})\\s*:`, 'i');
 }
-
-// build regex that finds dialogue attribution patterns:
 function buildAttributionRegex(patternList) {
     const escaped = patternList.map(p => {
         const trimmed = (p || '').trim();
@@ -79,18 +72,11 @@ function buildAttributionRegex(patternList) {
         return `(${escapeRegex(trimmed)})`;
     }).filter(Boolean);
     if (escaped.length === 0) return null;
-
-    // verbs that typically mark speech attribution
-    const verbs = "(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)";
-
-    // Pattern A: closing quote then optional comma then Name + verb
+    const verbs = "(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked|insisted|murmured|observed)";
     const patA = `["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\\s*,?\\s*(?:${escaped.join('|')})\\s+${verbs}`;
-    // Pattern B: start-of-line Name + verb + optional colon/comma + opening quote
     const patB = `(?:^|\\n)\\s*(?:${escaped.join('|')})\\s+${verbs}\\s*[:,]?\\s*["\u201C\u201D]`;
     return new RegExp(`(?:${patA})|(?:${patB})`, 'i');
 }
-
-// build an action/narration regex to catch lines like "Kotori nodded sharply."
 function buildActionRegex(patternList) {
     const escaped = patternList.map(p => {
         const trimmed = (p || '').trim();
@@ -100,12 +86,11 @@ function buildActionRegex(patternList) {
         return `(${escapeRegex(trimmed)})`;
     }).filter(Boolean);
     if (escaped.length === 0) return null;
-
-    const actions = "(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|reached|walked|turned|glanced|popped|moved|stepped|entered|approached)";
+    const actions = "(?:took|nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|reached|walked|turned|glanced|moved|stepped|entered|approached|adjusted|tilted)";
     return new RegExp(`(?:^|\\n)\\s*(?:${escaped.join('|')})\\b\\s+${actions}\\b`, 'i');
 }
 
-// quick helper: detect whether a position in the text is inside an open quote region
+// quick check if position inside open quotes
 function isInsideQuotes(text, pos) {
     if (!text || pos <= 0) return false;
     const before = text.slice(0, pos);
@@ -115,21 +100,21 @@ function isInsideQuotes(text, pos) {
 
 // runtime state
 const perMessageBuffers = new Map();
+// store last explicit as { name, idx } per buffer so we can ensure it occurs before pronoun matches
 const lastExplicitPerBuf = new Map();
 let lastIssuedCostume = null;
 let resetTimer = null;
-let lastSwitchTimestamp = 0; // global cooldown
+let lastSwitchTimestamp = 0;
 
-// throttling map and cooldown
+// throttling
 const lastTriggerTimes = new Map();
-const TRIGGER_COOLDOWN_MS = 250;
-const GLOBAL_SWITCH_COOLDOWN_MS = 1200; // ms between ANY switch (tunable)
+const TRIGGER_COOLDOWN_MS = 200; // slightly faster re-trigger
+const GLOBAL_SWITCH_COOLDOWN_MS = 800; // shorter global cooldown so switches aren't too delayed
 
-// sliding buffer keep
-const BUFFER_KEEP = 800; // chars to keep after a match (tuneable)
+// sliding buffer
+const BUFFER_KEEP = 1200; // keep more chars to preserve explicit mentions for pronoun resolution
 
-
-// small helper to wait for a DOM selector to appear (polling)
+// waitForSelector helper
 function waitForSelector(selector, timeout = 3000, interval = 120) {
     return new Promise((resolve) => {
         const start = Date.now();
@@ -148,17 +133,14 @@ function waitForSelector(selector, timeout = 3000, interval = 120) {
     });
 }
 
-
-// --- New helpers for pronoun resolution + formatting strip ---
-
+// simple markdown/formatting strip
 function stripFormatting(s) {
     if (!s) return s;
-    // remove simple markdown bold/italic/code markers and excessive whitespace
     return s.replace(/[*_~`]+/g, '').replace(/\s+/g,' ').trim();
 }
 
-// find last explicit name using our strict speaker/action/name regexes, searching backward up to lookbackChars
-function findLastExplicitBefore(text, pos, lookbackChars = 600) {
+// find last explicit name before a given pos; returns {name, idx} or null
+function findLastExplicitBefore(text, pos, lookbackChars = 800) {
     const start = Math.max(0, pos - lookbackChars);
     const slice = text.slice(start, pos);
     const tryRegexes = [speakerRegex, actionRegex, nameRegex].filter(Boolean);
@@ -166,17 +148,36 @@ function findLastExplicitBefore(text, pos, lookbackChars = 600) {
         try {
             const re = new RegExp(r.source, 'gi');
             let m, last = null;
-            while ((m = re.exec(slice)) !== null) last = m;
+            while ((m = re.exec(slice)) !== null) last = { match: m, index: m.index + start };
             if (last) {
-                for (let i = 1; i < last.length; i++) {
-                    if (last[i]) return String(last[i]).replace(/-(?:sama|san)$/i,'').trim();
+                for (let i = 1; i < last.match.length; i++) {
+                    if (last.match[i]) return { name: String(last.match[i]).replace(/-(?:sama|san)$/i,'').trim(), idx: last.index };
                 }
             }
         } catch (err) {
-            // ignore ill-formed regex attempts
+            // ignore regex errors
         }
     }
     return null;
+}
+
+// derived patterns: include characters found in context (first name + full name)
+function buildDerivedPatterns(settings, realCtx) {
+    const base = (settings.patterns || DEFAULTS.patterns).map(s => (s||'').trim()).filter(Boolean);
+    const extra = [];
+    try {
+        if (realCtx && realCtx.characters) {
+            for (const id of Object.keys(realCtx.characters)) {
+                const ch = realCtx.characters[id];
+                if (!ch || !ch.name) continue;
+                const full = ch.name.trim();
+                const parts = full.split(/\s+/).filter(Boolean);
+                extra.push(full);
+                if (parts.length) extra.push(parts[0]);
+            }
+        }
+    } catch (e) {}
+    return Array.from(new Set([...base, ...extra]));
 }
 
 
@@ -193,19 +194,16 @@ jQuery(async () => {
         $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
     }
 
-    // Wait for the settings elements to actually exist in the DOM (the settings.html script may clone/move nodes asynchronously).
     const ok = await waitForSelector("#cs-save", 3000, 100);
-    if (!ok) {
-        console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
-    }
+    if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Continuing...");
 
-    // Now safe to query and wire UI — jQuery calls on missing elements will be no-ops, so protect by checking presence
     if ($("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
     if ($("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
     if ($("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
     if ($("#cs-timeout").length) $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
     if ($("#cs-narration").length) $("#cs-narration").prop("checked", !!settings.narrationSwitch);
-    $("#cs-status").text("Ready");
+    if ($("#cs-debug").length) $("#cs-debug").prop("checked", !!settings.debug);
+    if ($("#cs-status").length) $("#cs-status").text("Ready");
 
     function persistSettings() {
         if (save) save();
@@ -220,42 +218,15 @@ jQuery(async () => {
         console.error("SillyTavern context not found. Extension won't run.");
         return;
     }
-    const { eventSource, event_types, characters } = realCtx;
+    const { eventSource, event_types } = realCtx;
 
-    // Derived patterns: start with user settings.patterns but add aliases from characters (first name, full name)
-    function buildDerivedPatterns() {
-        const base = (settings.patterns || DEFAULTS.patterns).map(s => (s||'').trim()).filter(Boolean);
-        const extra = [];
-        try {
-            if (realCtx && realCtx.characters) {
-                for (const id of Object.keys(realCtx.characters)) {
-                    const ch = realCtx.characters[id];
-                    if (!ch || !ch.name) continue;
-                    const full = ch.name.trim();
-                    // if full is "Tohka Yatogami", add "Tohka" and "Tohka Yatogami"
-                    const parts = full.split(/\s+/).filter(Boolean);
-                    if (parts.length > 1) {
-                        extra.push(full);
-                        extra.push(parts[0]);
-                    } else {
-                        extra.push(full);
-                    }
-                }
-            }
-        } catch (e) {
-            // ignore
-        }
-        return Array.from(new Set([...base, ...extra]));
-    }
-
-    // Build initial regexes (use derived patterns)
-    let derivedPatterns = buildDerivedPatterns();
+    // initial derived patterns and regexes
+    let derivedPatterns = buildDerivedPatterns(settings, realCtx);
     let nameRegex = buildNameRegex(derivedPatterns);
     let speakerRegex = buildSpeakerRegex(derivedPatterns);
     let attributionRegex = buildAttributionRegex(derivedPatterns);
     let actionRegex = buildActionRegex(derivedPatterns);
 
-    // Wiring: only attach handlers if the elements exist — if they later appear, we re-run binding once
     function tryWireUI() {
         if ($("#cs-save").length) {
             $("#cs-save").off('click.cs').on("click.cs", () => {
@@ -264,9 +235,9 @@ jQuery(async () => {
                 settings.defaultCostume = $("#cs-default").val().trim();
                 settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
                 if ($("#cs-narration").length) settings.narrationSwitch = !!$("#cs-narration").prop("checked");
+                if ($("#cs-debug").length) settings.debug = !!$("#cs-debug").prop("checked");
 
-                // rebuild derived patterns & regexes after saving patterns
-                derivedPatterns = buildDerivedPatterns();
+                derivedPatterns = buildDerivedPatterns(settings, realCtx);
                 nameRegex = buildNameRegex(derivedPatterns);
                 speakerRegex = buildSpeakerRegex(derivedPatterns);
                 attributionRegex = buildAttributionRegex(derivedPatterns);
@@ -275,7 +246,6 @@ jQuery(async () => {
                 persistSettings();
             });
         }
-
         if ($("#cs-reset").length) {
             $("#cs-reset").off('click.cs').on("click.cs", async () => {
                 await manualReset();
@@ -283,26 +253,17 @@ jQuery(async () => {
         }
     }
 
-    // initial wire attempt (may be no-op if elements aren't present)
     tryWireUI();
-    // if the elements were missing, attempt again after a short delay (in case settings.html's cloning script is still running)
     setTimeout(tryWireUI, 500);
     setTimeout(tryWireUI, 1500);
-
 
     function triggerQuickReply(labelOrMsg) {
         try {
             const qrButtons = document.querySelectorAll('.qr--button');
             for (const btn of qrButtons) {
                 const labelEl = btn.querySelector('.qr--button-label');
-                if (labelEl && labelEl.innerText && labelEl.innerText.trim() === labelOrMsg) {
-                    btn.click();
-                    return true;
-                }
-                if (btn.title && btn.title === labelOrMsg) {
-                    btn.click();
-                    return true;
-                }
+                if (labelEl && labelEl.innerText && labelEl.innerText.trim() === labelOrMsg) { btn.click(); return true; }
+                if (btn.title && btn.title === labelOrMsg) { btn.click(); return true; }
             }
         } catch (err) {
             console.warn("triggerQuickReply error:", err);
@@ -321,9 +282,7 @@ jQuery(async () => {
             const name = costumeArg;
             candidates.push(name, `${name}/${name}`, `/costume ${name}`, `/costume ${name}/${name}`);
         }
-        for (const c of candidates) {
-            if (triggerQuickReply(c)) return true;
-        }
+        for (const c of candidates) { if (triggerQuickReply(c)) return true; }
         return false;
     }
 
@@ -351,28 +310,22 @@ jQuery(async () => {
     async function issueCostumeForName(name) {
         if (!name) return;
         const now = Date.now();
-
-        // Check the GLOBAL cooldown first
-        if (now - lastSwitchTimestamp < GLOBAL_SWITCH_COOLDOWN_MS) {
-            return; // Too soon since the last switch, exit.
-        }
-        
+        if (now - lastSwitchTimestamp < GLOBAL_SWITCH_COOLDOWN_MS) return;
         const argFolder = `${name}/${name}`;
         const last = lastTriggerTimes.get(argFolder) || 0;
-        if (now - last < TRIGGER_COOLDOWN_MS) {
-            return; // too soon to re-trigger the same costume; skip
-        }
-
+        if (now - last < TRIGGER_COOLDOWN_MS) return;
         const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
         if (ok) {
             lastTriggerTimes.set(argFolder, now);
             lastIssuedCostume = argFolder;
-            lastSwitchTimestamp = now; // update the global timestamp on success
+            lastSwitchTimestamp = now;
             if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
+            if (settings.debug) console.log(`CostumeSwitch: issued ${argFolder}`);
         } else {
             if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
+            if (settings.debug) console.log(`CostumeSwitch: quick reply missing for ${name}`);
         }
     }
 
@@ -396,150 +349,169 @@ jQuery(async () => {
 
     const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-    // Main stream handler with context-aware matching
+    // main streaming handler
     eventSource.on(streamEventName, (...args) => {
         try {
             if (!settings.enabled) return;
 
             let tokenText = "";
             let messageId = null;
-            if (typeof args[0] === 'number') {
-                messageId = args[0];
-                tokenText = String(args[1] ?? "");
-            } else if (typeof args[0] === 'string' && args.length === 1) {
-                tokenText = args[0];
-            } else if (args[0] && typeof args[0] === 'object') {
+            if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); }
+            else if (typeof args[0] === 'string' && args.length === 1) tokenText = args[0];
+            else if (args[0] && typeof args[0] === 'object') {
                 tokenText = String(args[0].token ?? args[0].text ?? "");
                 messageId = args[0].messageId ?? args[1] ?? null;
-            } else {
-                tokenText = String(args.join(' ') || "");
-            }
+            } else tokenText = String(args.join(' ') || "");
 
             if (!tokenText) return;
 
             const bufKey = messageId != null ? `m${messageId}` : 'live';
             const prev = perMessageBuffers.get(bufKey) || "";
             const combined = prev + tokenText;
-            // store raw combined but use stripped variant for regex tests (to avoid markdown interfering)
             perMessageBuffers.set(bufKey, combined);
 
-            // helper to record explicit matches
-            function recordExplicitIfFound(name) {
-                if (name) {
-                    lastExplicitPerBuf.set(bufKey, String(name).replace(/-(?:sama|san)$/i,'').trim());
-                }
-            }
-
-            let matchedName = null;
-
-            // Try regex matching on stripped text where helpful
             const combinedPlain = stripFormatting(combined);
 
-            // --- Start of Tiered Logic ---
+            let matchedName = null;
+            let matchedIndex = null;
+            // helper to store explicit with index
+            function recordExplicitIfFound(name, idx) {
+                if (name && typeof idx === 'number') {
+                    lastExplicitPerBuf.set(bufKey, { name: String(name).replace(/-(?:sama|san)$/i,'').trim(), idx });
+                    if (settings.debug) console.log(`CostumeSwitch: recorded explicit ${name} @${idx} (buf=${bufKey})`);
+                } else if (name) {
+                    lastExplicitPerBuf.set(bufKey, { name: String(name).replace(/-(?:sama|san)$/i,'').trim(), idx: combinedPlain.length });
+                }
+            }
 
-            // Priority 1: Check for a "Speaker:" match first (explicit). Use stripped text to be robust.
+            // --- Tiered logic ---
+
+            // 1) Speaker "Name:"
             if (speakerRegex) {
                 try {
-                    const speakerSearchRe = new RegExp(speakerRegex.source, 'gi');
-                    let lastSpeakerMatch = null, m;
-                    while ((m = speakerSearchRe.exec(combinedPlain)) !== null) lastSpeakerMatch = m;
-                    if (lastSpeakerMatch) {
-                        matchedName = lastSpeakerMatch[1]?.trim();
-                        recordExplicitIfFound(matchedName);
+                    const re = new RegExp(speakerRegex.source, 'gi');
+                    let m, last = null;
+                    while ((m = re.exec(combinedPlain)) !== null) last = { match: m, index: m.index };
+                    if (last) {
+                        matchedName = last.match[1]?.trim();
+                        matchedIndex = last.index;
+                        recordExplicitIfFound(matchedName, matchedIndex);
+                        if (settings.debug) console.log(`CostumeSwitch: speakerRegex matched ${matchedName} @${matchedIndex}`);
                     }
-                } catch (e) {
-                    // ignore
-                }
+                } catch (e) {}
             }
 
-            // Priority 2: Dialogue attribution (e.g., "..." , Name said  OR  Name said, "...")
+            // 2) Attribution (closing quote ... Name said  OR Name said, "...")
             if (!matchedName && attributionRegex) {
                 try {
-                    const aRe = new RegExp(attributionRegex.source, 'gi');
-                    let lastA = null; let am;
-                    while ((am = aRe.exec(combinedPlain)) !== null) lastA = am;
-                    if (lastA) {
-                        // extract a name capture
-                        for (let i = 1; i < lastA.length; i++) {
-                            if (lastA[i]) {
-                                matchedName = lastA[i].trim();
+                    const re = new RegExp(attributionRegex.source, 'gi');
+                    let m, last = null;
+                    while ((m = re.exec(combinedPlain)) !== null) last = { match: m, index: m.index };
+                    if (last) {
+                        // pick first non-empty capture
+                        for (let i = 1; i < last.match.length; i++) {
+                            if (last.match[i]) {
+                                matchedName = last.match[i].trim();
+                                matchedIndex = last.index;
                                 break;
                             }
                         }
 
-                        // Pronoun resolution: if the attribution gave a pronoun like "she"/"he"/"they", try to resolve
+                        // pronoun resolution if match is pronoun
                         if (matchedName && /^(she|he|they|it)$/i.test(matchedName)) {
-                            const resolved = findLastExplicitBefore(combinedPlain, lastA.index);
-                            if (resolved) {
-                                matchedName = resolved;
+                            // try more local explicit before this index
+                            const resolved = findLastExplicitBefore(combinedPlain, matchedIndex, 800);
+                            if (resolved && resolved.idx < matchedIndex) {
+                                matchedName = resolved.name;
+                                matchedIndex = resolved.idx;
+                                if (settings.debug) console.log(`CostumeSwitch: resolved pronoun -> ${matchedName} via local search @${matchedIndex}`);
                             } else {
-                                const lastExp = lastExplicitPerBuf.get(bufKey);
-                                if (lastExp) matchedName = lastExp;
-                                else matchedName = null; // ambiguous pronoun, give up
+                                // fallback to lastExplicitPerBuf only if that explicit occurs BEFORE the attribution index
+                                const le = lastExplicitPerBuf.get(bufKey);
+                                if (le && le.idx < matchedIndex) {
+                                    matchedName = le.name;
+                                    matchedIndex = le.idx;
+                                    if (settings.debug) console.log(`CostumeSwitch: resolved pronoun -> ${matchedName} via lastExplicitPerBuf @${matchedIndex}`);
+                                } else {
+                                    // give up on ambiguous pronoun
+                                    if (settings.debug) console.log(`CostumeSwitch: ambiguous pronoun at ${matchedIndex}, no earlier explicit found`);
+                                    matchedName = null;
+                                    matchedIndex = null;
+                                }
                             }
+                        } else if (matchedName) {
+                            recordExplicitIfFound(matchedName, matchedIndex);
+                            if (settings.debug) console.log(`CostumeSwitch: attributionRegex matched ${matchedName} @${matchedIndex}`);
                         }
-
-                        if (matchedName) recordExplicitIfFound(matchedName);
                     }
-                } catch (e) {
-                    // ignore regex problems
-                }
+                } catch (e) {}
             }
 
-            // Priority 3: Action/narration lines that start with the name (Kotori nodded...)
+            // 3) Action/narration "Tohka took a step..."
             if (!matchedName && actionRegex) {
                 try {
-                    const acRe = new RegExp(actionRegex.source, 'gi');
-                    let lastAct = null, am2;
-                    while ((am2 = acRe.exec(combinedPlain)) !== null) lastAct = am2;
-                    if (lastAct) {
-                        for (let i = 1; i < lastAct.length; i++) {
-                            if (lastAct[i]) {
-                                matchedName = lastAct[i].trim();
+                    const re = new RegExp(actionRegex.source, 'gi');
+                    let m, last = null;
+                    while ((m = re.exec(combinedPlain)) !== null) last = { match: m, index: m.index };
+                    if (last) {
+                        for (let i = 1; i < last.match.length; i++) {
+                            if (last.match[i]) {
+                                matchedName = last.match[i].trim();
+                                matchedIndex = last.index;
                                 break;
                             }
                         }
-                        if (matchedName) recordExplicitIfFound(matchedName);
+                        if (matchedName) {
+                            recordExplicitIfFound(matchedName, matchedIndex);
+                            if (settings.debug) console.log(`CostumeSwitch: actionRegex matched ${matchedName} @${matchedIndex}`);
+                        }
                     }
-                } catch (e) {
-                    // ignore
-                }
+                } catch (e) {}
             }
 
-            // Priority 4: Optional fallback - match Name + verb/possessive anywhere in narration (skip quoted regions)
+            // 4) Narration fallback (optional)
             if (!matchedName && nameRegex && settings.narrationSwitch) {
                 try {
-                    const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|grimaced|sighed|grinned|shrugged|gestured|patted|pointed|winked|cried|shouted|called|whispered|muttered|murmured|exclaimed|yelled|tilted|lowered|raised|offered|placed|rested|crossed|uncrossed|adjusted|brushed|tapped|drummed|pulled|pushed|hugged|embraced|kissed|blushed|flinched|winced|smirked|glared|narrowed|widened|opened|closed|folded|unfolded|readjusted|touched|stroked|caressed|examined|inspected|studied|surveyed|scanned|noted|remarked|added|continued|explained|clarified|responded|countered|retorted|offered)";
-                    const narrationRe = new RegExp(`${nameRegex.source}\\b\\s+${actionsOrPossessive}\\b`, 'gi');
-
-                    let lastMatch = null, mm;
-                    while ((mm = narrationRe.exec(combinedPlain)) !== null) {
-                        if (isInsideQuotes(combinedPlain, mm.index)) continue; // skip if inside dialogue
-                        for (let i = 1; i < mm.length; i++) {
-                            if (mm[i]) {
-                                lastMatch = { name: mm[i], idx: mm.index };
+                    const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|gestured|patted|pointed|winked|cried|shouted|called|whispered|muttered|murmured|exclaimed)";
+                    const re = new RegExp(`${nameRegex.source}\\b\\s+${actionsOrPossessive}\\b`, 'gi');
+                    let mm, last = null;
+                    while ((mm = re.exec(combinedPlain)) !== null) {
+                        if (isInsideQuotes(combinedPlain, mm.index)) continue;
+                        last = { match: mm, index: mm.index };
+                    }
+                    if (last) {
+                        for (let i = 1; i < last.match.length; i++) {
+                            if (last.match[i]) {
+                                matchedName = String(last.match[i]).replace(/-(?:sama|san)$/i, '').trim();
+                                matchedIndex = last.index;
                                 break;
                             }
                         }
+                        if (matchedName) {
+                            recordExplicitIfFound(matchedName, matchedIndex);
+                            if (settings.debug) console.log(`CostumeSwitch: narration fallback matched ${matchedName} @${matchedIndex}`);
+                        }
                     }
-                    if (lastMatch) {
-                        matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
-                        recordExplicitIfFound(matchedName);
-                    }
-                } catch (e) {
-                    // ignore
-                }
+                } catch (e) {}
             }
 
-            // --- End of Tiered Logic ---
+            // --- end tiered logic ---
 
             if (matchedName) {
+                // Avoid switching if the detected name has no corresponding quick-reply but another quicker name exists:
+                // we still attempt issueCostumeForName which tries several variants.
                 issueCostumeForName(matchedName);
                 scheduleResetIfIdle();
 
-                // keep a sliding tail of buffer (so later pronoun attributions can still resolve)
+                // keep a sliding tail of buffer so future pronoun resolutions still have context
                 const keep = combined.slice(-BUFFER_KEEP);
                 perMessageBuffers.set(bufKey, keep);
+                // also trim lastExplicit if it's outside our tail window (avoid stale indexes)
+                const le = lastExplicitPerBuf.get(bufKey);
+                if (le && le.idx < Math.max(0, combinedPlain.length - BUFFER_KEEP)) {
+                    // adjust idx relative to new tail by discarding it (we'll rebuild as new explicit mentions come in)
+                    lastExplicitPerBuf.delete(bufKey);
+                }
             }
 
         } catch (err) {
@@ -562,5 +534,5 @@ jQuery(async () => {
         lastIssuedCostume = null;
     });
 
-    console.log("SillyTavern-CostumeSwitch (context-aware, patched) loaded.");
+    console.log("SillyTavern-CostumeSwitch (patched index-aware pronoun resolver) loaded.");
 });
