@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (full patched)
+// index.js - SillyTavern-CostumeSwitch (patched: context-aware attribution + narration opt-in)
 // Keep relative imports like the official examples
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -11,7 +11,8 @@ const DEFAULTS = {
     enabled: true,
     resetTimeoutMs: 3000,
     patterns: ["Shido", "Kotori"], // default simple names (one per line in UI)
-    defaultCostume: "" // empty => use current character's own folder
+    defaultCostume: "", // empty => use current character's own folder
+    narrationSwitch: false // opt-in loose narration fallback (matches outside quotes only)
 };
 
 // simple safe regex-building util (escape plain text)
@@ -37,7 +38,7 @@ function getSettingsObj() {
     throw new Error("Can't find SillyTavern extension settings storage.");
 }
 
-// small utility to build a combined regex from pattern list for narration
+// small utility to build a combined regex from pattern list for narration (stricter)
 function buildNameRegex(patternList) {
     const escaped = patternList.map(p => {
         const trimmed = (p || '').trim();
@@ -48,10 +49,11 @@ function buildNameRegex(patternList) {
     }).filter(Boolean);
 
     if (escaped.length === 0) return null;
-    return new RegExp(`(?:^|\\W)(?:${escaped.join('|')})(?:\\W|$)`, 'i');
+    // require start-of-line OR newline OR opening bracket/dash before the name (less permissive)
+    return new RegExp(`(?:^|\\n|[\\(\\[\\-—–])(?:${escaped.join('|')})(?:\\W|$)`, 'i');
 }
 
-// NEW: Helper function to build the stricter speaker regex (e.g., "Name:")
+// Helper - build the stricter speaker regex (e.g., "Name:")
 function buildSpeakerRegex(patternList) {
     const escaped = patternList.map(p => {
         const trimmed = (p || '').trim();
@@ -65,16 +67,63 @@ function buildSpeakerRegex(patternList) {
     return new RegExp(`(?:^|\\n)\\s*(${escaped.join('|')})\\s*:`, 'i');
 }
 
+// build regex that finds dialogue attribution patterns:
+// e.g. "....", Tohka said   OR   Tohka said, "..."
+function buildAttributionRegex(patternList) {
+    const escaped = patternList.map(p => {
+        const trimmed = (p || '').trim();
+        if (!trimmed) return null;
+        const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
+        if (m) return `(${m[1]})`;
+        return `(${escapeRegex(trimmed)})`;
+    }).filter(Boolean);
+    if (escaped.length === 0) return null;
+
+    // verbs that typically mark speech attribution
+    const verbs = "(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)";
+    // Pattern A: closing quote then optional comma then Name + verb, e.g. "..." , Name said
+    const patA = `["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\\s*,?\\s*(?:${escaped.join('|')})\\s+${verbs}`;
+    // Pattern B: start-of-line Name + verb + optional colon/comma + opening quote, e.g. Name said, "..."
+    const patB = `(?:^|\\n)\\s*(?:${escaped.join('|')})\\s+${verbs}\\s*[:,]?\\s*["\u201C\u201D]`;
+    return new RegExp(`(?:${patA})|(?:${patB})`, 'i');
+}
+
+// build an action/narration regex to catch lines like "Kotori nodded sharply."
+function buildActionRegex(patternList) {
+    const escaped = patternList.map(p => {
+        const trimmed = (p || '').trim();
+        if (!trimmed) return null;
+        const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
+        if (m) return `(${m[1]})`;
+        return `(${escapeRegex(trimmed)})`;
+    }).filter(Boolean);
+    if (escaped.length === 0) return null;
+
+    // conservative set of action verbs (non-exhaustive)
+    const actions = "(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|reached|walked|turned|glanced|popped|moved|stepped|entered|approached)";
+    return new RegExp(`(?:^|\\n)\\s*(?:${escaped.join('|')})\\b\\s+${actions}\\b`, 'i');
+}
+
+// quick helper: detect whether a position in the text is inside an open quote region
+function isInsideQuotes(text, pos) {
+    if (!text || pos <= 0) return false;
+    // count occurrences of quote characters before pos
+    const before = text.slice(0, pos);
+    const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
+    // odd => inside a quoted region (approximate but effective)
+    return (quoteCount % 2) === 1;
+}
+
 // runtime state
 const perMessageBuffers = new Map();
 let lastIssuedCostume = null;
 let resetTimer = null;
-let lastSwitchTimestamp = 0; // PATCH: For global cooldown
+let lastSwitchTimestamp = 0; // global cooldown
 
 // throttling map and cooldown
 const lastTriggerTimes = new Map();
 const TRIGGER_COOLDOWN_MS = 250;
-const GLOBAL_SWITCH_COOLDOWN_MS = 1200; // PATCH: ms between ANY switch (tunable)
+const GLOBAL_SWITCH_COOLDOWN_MS = 1200; // ms between ANY switch (tunable)
 
 jQuery(async () => {
     const { store, save, ctx } = getSettingsObj();
@@ -85,13 +134,19 @@ jQuery(async () => {
         $("#extensions_settings").append(settingsHtml);
     } catch (e) {
         console.warn("Failed to load settings.html:", e);
+        // keep going; we will try to read/write the settings elements if they exist
         $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
     }
 
+    // set UI inputs if present
     $("#cs-enable").prop("checked", !!settings.enabled);
     $("#cs-patterns").val((settings.patterns || []).join("\n"));
     $("#cs-default").val(settings.defaultCostume || "");
     $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
+    // optional narration checkbox (may not exist in your settings.html) - handled gracefully
+    if ($("#cs-narration").length) {
+        $("#cs-narration").prop("checked", !!settings.narrationSwitch);
+    }
     $("#cs-status").text("Ready");
 
     function persistSettings() {
@@ -109,16 +164,24 @@ jQuery(async () => {
 
     // Build initial regexes
     let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
-    let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns); // PATCH: Build speaker regex
+    let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
+    let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
+    let actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
 
     $("#cs-save").on("click", () => {
         settings.enabled = !!$("#cs-enable").prop("checked");
         settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
         settings.defaultCostume = $("#cs-default").val().trim();
         settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
-        // PATCH: rebuild both regexes after saving patterns
+        // narrationSwitch UI may or may not be present; if not present keep current value
+        if ($("#cs-narration").length) settings.narrationSwitch = !!$("#cs-narration").prop("checked");
+
+        // rebuild all regexes after saving patterns
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
         speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
+        attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
+        actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
+
         persistSettings();
     });
 
@@ -184,7 +247,7 @@ jQuery(async () => {
         }
     }
 
-    // PATCH: issueCostumeForName function updated with global cooldown
+    // issueCostumeForName with global cooldown
     async function issueCostumeForName(name) {
         if (!name) return;
         const now = Date.now();
@@ -204,7 +267,7 @@ jQuery(async () => {
         if (ok) {
             lastTriggerTimes.set(argFolder, now);
             lastIssuedCostume = argFolder;
-            lastSwitchTimestamp = now; // UPDATE the global timestamp on success
+            lastSwitchTimestamp = now; // update the global timestamp on success
             $("#cs-status").text(`Switched -> ${argFolder}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
         } else {
@@ -233,7 +296,7 @@ jQuery(async () => {
 
     const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-    // PATCH: The main stream handler with the new two-tiered logic
+    // Main stream handler with context-aware matching
     eventSource.on(streamEventName, (...args) => {
         try {
             if (!settings.enabled) return;
@@ -261,9 +324,9 @@ jQuery(async () => {
 
             let matchedName = null;
 
-            // --- Start of New Tiered Logic ---
+            // --- Start of Tiered Logic ---
 
-            // Priority 1: Check for a "Speaker:" match first
+            // Priority 1: Check for a "Speaker:" match first (explicit)
             if (speakerRegex) {
                 const speakerSearchRe = new RegExp(speakerRegex.source, 'gi');
                 let lastSpeakerMatch = null;
@@ -273,32 +336,64 @@ jQuery(async () => {
                 }
 
                 if (lastSpeakerMatch) {
-                    // A speaker was found (e.g., "Kotori:"). The first capture group is the name.
                     matchedName = lastSpeakerMatch[1]?.trim();
                 }
             }
 
-            // Priority 2: If no speaker was found, fall back to finding the last mentioned name (narration)
-            if (!matchedName && nameRegex) {
-                const searchRe = new RegExp(nameRegex.source, 'gi');
-                let lastMatch = null;
-                let m;
-                while ((m = searchRe.exec(combined)) !== null) {
-                    // Find the actual capture group that matched, skipping the full match (m[0])
-                    for (let i = 1; i < m.length; i++) {
-                        if (m[i]) {
-                            lastMatch = { name: m[i] };
+            // Priority 2: Dialogue attribution (e.g., "..." , Name said  OR  Name said, "...")
+            if (!matchedName && attributionRegex) {
+                const aRe = new RegExp(attributionRegex.source, 'gi');
+                let lastA = null;
+                let am;
+                while ((am = aRe.exec(combined)) !== null) lastA = am;
+                if (lastA) {
+                    for (let i = 1; i < lastA.length; i++) {
+                        if (lastA[i]) {
+                            matchedName = lastA[i].trim();
                             break;
                         }
                     }
                 }
-                
+            }
+
+            // Priority 3: Action/narration lines that start with the name (Kotori nodded...)
+            if (!matchedName && actionRegex) {
+                const acRe = new RegExp(actionRegex.source, 'gi');
+                let lastAct = null;
+                let am;
+                while ((am = acRe.exec(combined)) !== null) lastAct = am;
+                if (lastAct) {
+                    for (let i = 1; i < lastAct.length; i++) {
+                        if (lastAct[i]) {
+                            matchedName = lastAct[i].trim();
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Priority 4: Optional fallback - find last-mentioned name outside quotes (narration)
+            if (!matchedName && nameRegex && settings.narrationSwitch) {
+                const searchRe = new RegExp(nameRegex.source, 'gi');
+                let lastMatch = null;
+                let mm;
+                while ((mm = searchRe.exec(combined)) !== null) {
+                    // mm.index is the start position; skip it if inside quotes
+                    if (isInsideQuotes(combined, mm.index)) continue;
+                    // find the actual capture group that matched
+                    for (let i = 1; i < mm.length; i++) {
+                        if (mm[i]) {
+                            lastMatch = { name: mm[i], idx: mm.index };
+                            break;
+                        }
+                    }
+                }
                 if (lastMatch) {
                     matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
                 }
             }
 
-            // --- End of New Tiered Logic ---
+            // --- End of Tiered Logic ---
 
             if (matchedName) {
                 issueCostumeForName(matchedName);
@@ -323,5 +418,5 @@ jQuery(async () => {
         lastIssuedCostume = null;
     });
 
-    console.log("SillyTavern-CostumeSwitch (fully patched) loaded.");
+    console.log("SillyTavern-CostumeSwitch (context-aware) loaded.");
 });
