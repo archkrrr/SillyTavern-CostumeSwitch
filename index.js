@@ -1,9 +1,7 @@
-/* Full patched index.js
-   Changes:
-   - perMessageStates to remember currentSpeaker + lastSpeakerIndex per buffer
-   - matchKind tagging for each detected match
-   - allow-switch guard that blocks bare name/possessive matches when a different currentSpeaker exists
-   - preserves previous patches (cleanup, caps, click guard, recent speaker stack)
+/* Full patched index.js — v4.3
+   Change: issueCostumeForName now accepts opts {matchKind, matchIndex, bufKey}
+   and strong match kinds bypass the global cooldown.
+   Keep previous fixes (cleanup, caps, click guard, recent speaker stack, speaker-aware guards).
 */
 
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
@@ -184,23 +182,23 @@ function normalizeCostumeName(n) {
 
 // runtime state
 const perMessageBuffers = new Map();
-const perMessageStates = new Map(); // NEW: map bufKey -> { currentSpeaker, lastSpeakerIndex }
+const perMessageStates = new Map(); // map bufKey -> { currentSpeaker, lastSpeakerIndex }
 let lastIssuedCostume = null;
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
 const failedTriggerTimes = new Map();
 
-// NEW: stable handler refs for cleanup
+// stable handler refs for cleanup
 let _streamHandler = null;
 let _genEndHandler = null;
 let _msgRecvHandler = null;
 let _chatChangedHandler = null;
 
-// NEW: click guard set
+// click guard set
 let _clickInProgress = new Set();
 
-// NEW: buffer cap helpers
+// buffer cap helpers
 const MAX_MESSAGE_BUFFERS = 60; // tuneable
 function ensureBufferLimit() {
   if (perMessageBuffers.size <= MAX_MESSAGE_BUFFERS) return;
@@ -211,7 +209,7 @@ function ensureBufferLimit() {
   }
 }
 
-// NEW: recent speaker stack for pronoun resolution
+// recent speaker stack for pronoun resolution
 const recentSpeakers = []; // {name, ts}
 const RECENT_SPEAKER_MAX = 8;
 function pushRecentSpeaker(name) {
@@ -458,10 +456,15 @@ jQuery(async () => {
     else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); setTimeout(()=>$("#cs-status").text(""), 1500); }
   }
 
-  function issueCostumeForName(name) {
+  /* UPDATED: now accepts opts = { matchKind, matchIndex, bufKey } */
+  function issueCostumeForName(name, opts = {}) {
     if (!name) return;
     name = normalizeCostumeName(name);
     const now = Date.now();
+    const matchKind = opts.matchKind || null;
+
+    // strong kinds that should bypass global cooldown
+    const strongKinds = new Set(['speaker','action','attribution','vocative','narration','pronoun-infer']);
 
     // --- EARLY: check if we're already using this costume (avoid needless re-switching) ---
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
@@ -473,11 +476,15 @@ jQuery(async () => {
     }
 
     // --- global cooldown (only after confirming name differs from current) ---
-    if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
-      if (settings.debug) console.debug("CS debug: global cooldown active, skipping switch to", name, {
-        lastSwitchTimestamp, cooldownMs: settings.globalCooldownMs || DEFAULTS.globalCooldownMs
-      });
-      return;
+    if (!strongKinds.has(matchKind)) {
+      if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
+        if (settings.debug) console.debug("CS debug: global cooldown active, skipping switch to", name, {
+          lastSwitchTimestamp, cooldownMs: settings.globalCooldownMs || DEFAULTS.globalCooldownMs
+        });
+        return;
+      }
+    } else {
+      if (settings.debug) console.debug("CS debug: bypassing global cooldown for strong match kind", matchKind, "->", name);
     }
 
     const argFolder = `${name}/${name}`;
@@ -487,12 +494,12 @@ jQuery(async () => {
       return;
     }
 
-    if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder);
+    if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder, "kind:", matchKind);
     const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
     if (ok) {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
-      lastSwitchTimestamp = now;
+      lastSwitchTimestamp = now; // update last switch time even if we bypassed
       pushRecentSpeaker(name); // record successful switch as a confident speaker detection
       if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
@@ -693,7 +700,8 @@ jQuery(async () => {
       }
 
       if (matchedName) {
-        issueCostumeForName(matchedName);
+        // PASS match context to issueCostumeForName
+        issueCostumeForName(matchedName, { matchKind, matchIndex, bufKey });
         scheduleResetIfIdle();
         try {
           const idx = (combined || '').toLowerCase().lastIndexOf(matchedName.toLowerCase());
@@ -860,8 +868,8 @@ jQuery(async () => {
       }
 
       if (matchedName) {
-        if (settings.debug) console.debug("CS debug: heavy scan matchedName =", matchedName, "kind=", matchKind, "bufKey:", bufKey);
-        issueCostumeForName(matchedName);
+        // PASS match context to issueCostumeForName
+        issueCostumeForName(matchedName, { matchKind, matchIndex, bufKey });
         scheduleResetIfIdle();
         try {
           const idx = (combined || '').toLowerCase().lastIndexOf(matchedName.toLowerCase());
@@ -919,7 +927,7 @@ jQuery(async () => {
     window[globalKey] = unload;
   } catch (e) { /* ignore */ }
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.2 — speaker-aware guards) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.3 — cooldown-bypass for strong signals) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
@@ -935,7 +943,7 @@ function getSettingsObj() {
   if (typeof extension_settings !== 'undefined') {
     extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
     for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extension_settings[extensionName]] = DEFAULTS[k];
     }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
