@@ -458,22 +458,6 @@ jQuery(async () => {
     }
   }
 
-  function scheduleResetIfIdle() {
-    if (resetTimer) clearTimeout(resetTimer);
-    resetTimer = setTimeout(async () => {
-      let costumeArg = settings.defaultCostume || "";
-      if (!costumeArg) {
-        const ch = realCtx.characters?.[realCtx.characterId];
-        if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
-      }
-      if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
-        lastIssuedCostume = costumeArg;
-        if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
-        setTimeout(()=>$("#cs-status").text(""), 1200);
-      }
-    }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-  }
-
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
   _genStartHandler = (messageId) => {
