@@ -1,3 +1,11 @@
+/* Full patched index.js
+   Changes:
+   - perMessageStates to remember currentSpeaker + lastSpeakerIndex per buffer
+   - matchKind tagging for each detected match
+   - allow-switch guard that blocks bare name/possessive matches when a different currentSpeaker exists
+   - preserves previous patches (cleanup, caps, click guard, recent speaker stack)
+*/
+
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
@@ -85,7 +93,7 @@ function buildActionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
-  const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached)';
+  const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved)';
   const body = `(?:^|\\n)\\s*(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
@@ -161,7 +169,7 @@ function normalizeStreamText(s) {
   return s;
 }
 
-// --- MOVE normalizeCostumeName to top-level so all helpers can use it ---
+// normalizeCostumeName (top-level)
 function normalizeCostumeName(n) {
   if (!n) return "";
   let s = String(n).trim();
@@ -176,6 +184,7 @@ function normalizeCostumeName(n) {
 
 // runtime state
 const perMessageBuffers = new Map();
+const perMessageStates = new Map(); // NEW: map bufKey -> { currentSpeaker, lastSpeakerIndex }
 let lastIssuedCostume = null;
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
@@ -198,6 +207,7 @@ function ensureBufferLimit() {
   while (perMessageBuffers.size > MAX_MESSAGE_BUFFERS) {
     const firstKey = perMessageBuffers.keys().next().value;
     perMessageBuffers.delete(firstKey);
+    perMessageStates.delete(firstKey);
   }
 }
 
@@ -533,7 +543,14 @@ jQuery(async () => {
       const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars)); // cap buffer
       perMessageBuffers.set(bufKey, combined);
       ensureBufferLimit();
+
+      // ensure a state object
+      if (!perMessageStates.has(bufKey)) perMessageStates.set(bufKey, { currentSpeaker: null, lastSpeakerIndex: -1 });
+
+      const state = perMessageStates.get(bufKey);
       let matchedName = null;
+      let matchKind = null;
+      let matchIndex = -1;
 
       // build quote ranges once for this buffer
       const quoteRanges = getQuoteRanges(combined);
@@ -561,8 +578,8 @@ jQuery(async () => {
           const prevLength = (prev || '').length;
 
           // helper: accept match only if it overlaps into the new token (not fully inside prev)
-          function matchOverlapsNewToken(matchIndex, matchTextLen) {
-            const startInCombined = windowOffset + matchIndex;
+          function matchOverlapsNewToken(matchIndexLocal, matchTextLen) {
+            const startInCombined = windowOffset + matchIndexLocal;
             const endInCombined = startInCombined + (matchTextLen || 0);
             // require that match end is greater than prevLength (i.e., some of it is in the new token)
             return endInCombined > prevLength;
@@ -578,7 +595,15 @@ jQuery(async () => {
               const m = matches[0]; // short window should have earliest match
               if (matchOverlapsNewToken(m.index, m.match.length)) {
                 const posInCombined = windowOffset + m.index;
-                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) { matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null; return; }
+                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
+                  matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null;
+                  matchKind = 'speaker';
+                  matchIndex = posInCombined;
+                  // update per-message speaker state immediately
+                  state.currentSpeaker = matchedName;
+                  state.lastSpeakerIndex = matchIndex;
+                  return;
+                }
               } else {
                 if (settings.debug) console.debug("CS debug: speakerRegex window match ignored (entirely in prev buffer).");
               }
@@ -592,7 +617,12 @@ jQuery(async () => {
               const m = matches[0];
               if (matchOverlapsNewToken(m.index, m.match.length)) {
                 const posInCombined = windowOffset + m.index;
-                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) { matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null; return; }
+                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
+                  matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null;
+                  matchKind = 'vocative';
+                  matchIndex = posInCombined;
+                  return;
+                }
               } else {
                 if (settings.debug) console.debug("CS debug: vocativeRegex window match ignored (entirely in prev buffer).");
               }
@@ -606,7 +636,12 @@ jQuery(async () => {
               const m = matches[0];
               if (matchOverlapsNewToken(m.index, m.match.length)) {
                 const posInCombined = windowOffset + m.index;
-                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) { matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null; return; }
+                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
+                  matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null;
+                  matchKind = 'action';
+                  matchIndex = posInCombined;
+                  return;
+                }
               } else {
                 if (settings.debug) console.debug("CS debug: actionRegex window match ignored (entirely in prev buffer).");
               }
@@ -628,6 +663,8 @@ jQuery(async () => {
                   const posInCombined = windowOffset + mm.index;
                   if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
                     matchedName = (mm.groups && mm.groups[0]) ? mm.groups[0].trim() : mm.match;
+                    matchKind = 'name';
+                    matchIndex = posInCombined;
                     break;
                   } else {
                     if (settings.debug) console.debug("CS debug: name-in-window match skipped due to quotes", mm);
@@ -639,8 +676,23 @@ jQuery(async () => {
         } catch (e) { if (settings.debug) console.warn("quickTokenScan error", e); }
       })();
 
+      // Decide whether to accept quick-scan match
       if (matchedName) {
-        if (settings.debug) console.debug("CS debug: quickTokenScan matchedName =", matchedName, "bufKey:", bufKey);
+        if (settings.debug) console.debug("CS debug: quickTokenScan matchedName =", matchedName, "kind=", matchKind, "bufKey:", bufKey);
+        // Guard: if the buffer currently has a different currentSpeaker, then only accept strong kinds
+        const stateNow = perMessageStates.get(bufKey) || { currentSpeaker: null };
+        const curSpeaker = stateNow.currentSpeaker;
+        const nameLower = (matchedName || '').toLowerCase();
+        if (curSpeaker && curSpeaker.toLowerCase() !== nameLower) {
+          // allow only these kinds when a different speaker is active
+          if (!(matchKind === 'action' || matchKind === 'speaker' || matchKind === 'attribution' || matchKind === 'vocative')) {
+            if (settings.debug) console.debug("CS debug: suppressed quick-scan match because different currentSpeaker present", { curSpeaker, matchedName, matchKind });
+            matchedName = null;
+          }
+        }
+      }
+
+      if (matchedName) {
         issueCostumeForName(matchedName);
         scheduleResetIfIdle();
         try {
@@ -654,9 +706,20 @@ jQuery(async () => {
       // HEAVY scanning on the whole combined buffer (quote-aware)
       try {
         // 1) speakerRegex last non-quoted occurrence
-        if (!matchedName && speakerRegex) {
+        if (speakerRegex) {
           const lastSpeaker = lastNonQuotedMatch(combined, speakerRegex, quoteRanges);
-          if (lastSpeaker) matchedName = lastSpeaker.groups && lastSpeaker.groups[0] ? lastSpeaker.groups[0].trim() : null;
+          if (lastSpeaker) {
+            matchedName = lastSpeaker.groups && lastSpeaker.groups[0] ? lastSpeaker.groups[0].trim() : null;
+            matchKind = 'speaker';
+            matchIndex = lastSpeaker.index || 0;
+            // update per-message speaker state
+            if (matchedName) {
+              const st = perMessageStates.get(bufKey) || { currentSpeaker: null, lastSpeakerIndex: -1 };
+              st.currentSpeaker = matchedName;
+              st.lastSpeakerIndex = matchIndex;
+              perMessageStates.set(bufKey, st);
+            }
+          }
         }
 
         // 2) attribution (last non-quoted)
@@ -665,7 +728,7 @@ jQuery(async () => {
           if (lastA) {
             if (lastA.groups && lastA.groups.length) {
               for (const g of lastA.groups) {
-                if (g) { matchedName = g.trim(); break; }
+                if (g) { matchedName = g.trim(); matchKind = 'attribution'; matchIndex = lastA.index || 0; break; }
               }
             }
           }
@@ -674,13 +737,21 @@ jQuery(async () => {
         // 3) action regex last non-quoted occurrence
         if (!matchedName && actionRegex) {
           const lastAct = lastNonQuotedMatch(combined, actionRegex, quoteRanges);
-          if (lastAct && lastAct.groups && lastAct.groups.length) matchedName = lastAct.groups[0].trim();
+          if (lastAct && lastAct.groups && lastAct.groups.length) {
+            matchedName = lastAct.groups[0].trim();
+            matchKind = 'action';
+            matchIndex = lastAct.index || 0;
+          }
         }
 
         // 4) vocative last non-quoted occurrence
         if (!matchedName && vocativeRegex) {
           const lastV = lastNonQuotedMatch(combined, vocativeRegex, quoteRanges);
-          if (lastV && lastV.groups && lastV.groups.length) matchedName = lastV.groups[0].trim();
+          if (lastV && lastV.groups && lastV.groups.length) {
+            matchedName = lastV.groups[0].trim();
+            matchKind = 'vocative';
+            matchIndex = lastV.index || 0;
+          }
         }
 
         // 5a) possessive detection (non-quoted)
@@ -689,7 +760,11 @@ jQuery(async () => {
           if (names_poss.length) {
             const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
             const lastP = lastNonQuotedMatch(combined, possRe, quoteRanges);
-            if (lastP && lastP.groups && lastP.groups.length) matchedName = lastP.groups[0].trim();
+            if (lastP && lastP.groups && lastP.groups.length) {
+              matchedName = lastP.groups[0].trim();
+              matchKind = 'possessive';
+              matchIndex = lastP.index || 0;
+            }
           }
         }
 
@@ -702,6 +777,8 @@ jQuery(async () => {
             const chosenFromStack = getMostRecentSpeakerBefore();
             if (chosenFromStack) {
               matchedName = chosenFromStack;
+              matchKind = 'pronoun-infer';
+              matchIndex = pM.index || 0;
             } else {
               const cutIndex = pM.index || 0;
               const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
@@ -710,7 +787,11 @@ jQuery(async () => {
               if (names_pron.length) {
                 const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
                 const lastMatch = lastNonQuotedMatch(sub, anyNameRe, getQuoteRanges(sub));
-                if (lastMatch && lastMatch.groups && lastMatch.groups.length) matchedName = lastMatch.groups[0].trim();
+                if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
+                  matchedName = lastMatch.groups[0].trim();
+                  matchKind = 'pronoun-infer';
+                  matchIndex = lookback + (lastMatch.index || 0);
+                }
               }
             }
           }
@@ -723,6 +804,8 @@ jQuery(async () => {
           const lastMatch = lastNonQuotedMatch(combined, narrationRe, quoteRanges);
           if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
             matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
+            matchKind = 'narration';
+            matchIndex = lastMatch.index || 0;
           }
         }
 
@@ -732,12 +815,15 @@ jQuery(async () => {
           if (names.length) {
             const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'gi');
             const lastMatch = lastNonQuotedMatch(combined, anyNameRe, quoteRanges);
-            if (lastMatch && lastMatch.groups && lastMatch.groups.length) matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
+            if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
+              matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
+              matchKind = 'name';
+              matchIndex = lastMatch.index || 0;
+            }
           }
         }
 
-        // Heuristic: prefer the most recent mention among known names
-        // Only accept chosen if it is recent enough
+        // Heuristic: prefer the most recent mention among known names (if still none)
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           let chosen = null; let chosenIdx = -1;
@@ -749,6 +835,8 @@ jQuery(async () => {
           const RECENT_WINDOW = 700;
           if (chosen && chosenIdx >= (combined.length - RECENT_WINDOW)) {
             matchedName = chosen;
+            matchKind = 'heuristic';
+            matchIndex = chosenIdx;
             perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
           }
         }
@@ -756,8 +844,23 @@ jQuery(async () => {
         if (settings.debug) console.error("Heavy scan error:", e);
       }
 
+      // Decision guard: if there's a different currentSpeaker present, block weak matches
       if (matchedName) {
-        if (settings.debug) console.debug("CS debug: heavy scan matchedName =", matchedName, "bufKey:", bufKey);
+        const stateNow = perMessageStates.get(bufKey) || { currentSpeaker: null };
+        const curSpeaker = stateNow.currentSpeaker;
+        const nameLower = (matchedName || '').toLowerCase();
+        if (curSpeaker && curSpeaker.toLowerCase() !== nameLower) {
+          // allow only these stronger kinds when a different speaker is active
+          const strongKinds = new Set(['action','speaker','attribution','vocative','narration','pronoun-infer']);
+          if (!strongKinds.has(matchKind)) {
+            if (settings.debug) console.debug("CS debug: suppressed heavy-scan match because different currentSpeaker present", { curSpeaker, matchedName, matchKind });
+            matchedName = null;
+          }
+        }
+      }
+
+      if (matchedName) {
+        if (settings.debug) console.debug("CS debug: heavy scan matchedName =", matchedName, "kind=", matchKind, "bufKey:", bufKey);
         issueCostumeForName(matchedName);
         scheduleResetIfIdle();
         try {
@@ -767,7 +870,7 @@ jQuery(async () => {
         } catch (e) { perMessageBuffers.set(bufKey, ''); }
       }
 
-      if (settings.debug) console.debug("CS debug: ", { bufKey, recent: combined.slice(-400), matchedName });
+      if (settings.debug) console.debug("CS debug: ", { bufKey, recent: combined.slice(-400), matchedName, matchKind, state: perMessageStates.get(bufKey) });
 
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
   };
@@ -775,9 +878,9 @@ jQuery(async () => {
   // -------------------------
   // OTHER EVENT HANDLERS
   // -------------------------
-  _genEndHandler = (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); scheduleResetIfIdle(); };
-  _msgRecvHandler = (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); };
-  _chatChangedHandler = () => { perMessageBuffers.clear(); lastIssuedCostume = null; recentSpeakers.length = 0; };
+  _genEndHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } scheduleResetIfIdle(); };
+  _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
+  _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; recentSpeakers.length = 0; };
 
   // Ensure previous handlers (if any) are cleared first to avoid duplication
   function unload() {
@@ -789,6 +892,7 @@ jQuery(async () => {
     } catch (e) { /* hosts may not expose off(); ignore */ }
     if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
     perMessageBuffers.clear();
+    perMessageStates.clear();
     lastIssuedCostume = null;
     lastTriggerTimes.clear();
     failedTriggerTimes.clear();
@@ -815,7 +919,7 @@ jQuery(async () => {
     window[globalKey] = unload;
   } catch (e) { /* ignore */ }
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.1 — quick-window quote fix + cleanup) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.2 — speaker-aware guards) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
@@ -831,7 +935,7 @@ function getSettingsObj() {
   if (typeof extension_settings !== 'undefined') {
     extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
     for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extension_settings[extensionName]] = DEFAULTS[k];
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
     }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
