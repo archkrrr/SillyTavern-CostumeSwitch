@@ -33,31 +33,70 @@
         </small>
       </div>
 
-      <!-- Costume Reset Timeout -->
-      <div class="tracker-block inline-group">
-        <label for="cs-timeout">Costume Reset Timeout</label><br />
-        <input id="cs-timeout" class="text_pole" type="number" min="0" value="300000" />
-        <small>
-          Set the timeout (in milliseconds) before resetting the costume back to the default costume if no new character names are detected. The default value is set to 5 minutes (300000ms).
-        </small>
+      <!-- Detection Methods -->
+      <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+          <b>Detection Methods</b>
+          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+          <small>Enable or disable specific detection methods. Disabling methods can improve accuracy if you only want to switch on specific cues (like speaker tags).</small>
+          
+          <div class="tracker-block">
+            <input id="cs-detect-attribution" type="checkbox" />
+            <label for="cs-detect-attribution">Detect Attribution ("...", said Name)</label>
+          </div>
+          <div class="tracker-block">
+            <input id="cs-detect-action" type="checkbox" />
+            <label for="cs-detect-action">Detect Action (Name nodded)</label>
+          </div>
+          <div class="tracker-block">
+            <input id="cs-detect-vocative" type="checkbox" />
+            <label for="cs-detect-vocative">Detect Vocative (Hello, Name)</label>
+          </div>
+          <div class="tracker-block">
+            <input id="cs-detect-possessive" type="checkbox" />
+            <label for="cs-detect-possessive">Detect Possessive (Name's book)</label>
+          </div>
+          <div class="tracker-block">
+            <input id="cs-detect-general" type="checkbox" />
+            <label for="cs-detect-general">Detect General Name Mentions</label>
+            <small>This is the lowest priority match and can be inaccurate. It will detect a character's name anywhere in the text.</small>
+          </div>
+        </div>
       </div>
 
-      <!-- Global Cooldown -->
-      <div class="tracker-block inline-group">
-        <label for="cs-global-cooldown">Global Cooldown</label><br />
-        <input id="cs-global-cooldown" class="text_pole" type="number" min="0" value="700" />
-        <small>
-          This value defines the global cooldown period (in milliseconds) between costume switches. It helps prevent flickering by ensuring there is a delay between consecutive costume switches.
-        </small>
-      </div>
-
-      <!-- Repeat Suppression -->
-      <div class="tracker-block inline-group">
-        <label for="cs-repeat-suppress">Repeat Suppression</label><br />
-        <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" value="800" />
-        <small>
-          This sets a suppression period (in milliseconds) for repeated costume switches. If the same character name appears again within this time, no costume change will occur.
-        </small>
+      <!-- Cooldowns and Timeouts -->
+      <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+          <b>Cooldowns & Timeouts</b>
+          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+          <div class="tracker-block inline-group">
+            <label for="cs-timeout">Costume Reset Timeout</label><br />
+            <input id="cs-timeout" class="text_pole" type="number" min="0" />
+            <small>
+              Set the timeout (in milliseconds) before resetting to the default costume. Default is 5 minutes (300000ms).
+            </small>
+          </div>
+    
+          <div class="tracker-block inline-group">
+            <label for="cs-global-cooldown">Global Cooldown</label><br />
+            <input id="cs-global-cooldown" class="text_pole" type="number" min="0" />
+            <small>
+              Cooldown (in milliseconds) between any two switches to prevent flickering.
+            </small>
+          </div>
+    
+          <div class="tracker-block inline-group">
+            <label for="cs-repeat-suppress">Repeat Suppression</label><br />
+            <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" />
+            <small>
+              Cooldown (in milliseconds) before the same character can be triggered again.
+            </small>
+          </div>
+        </div>
       </div>
 
       <!-- Costume Mappings -->
@@ -77,7 +116,7 @@
         </table>
         <button id="cs-mapping-add" class="menu_button fa-solid fa-file-circle-plus interactable">Add Mapping</button>
         <small>
-          Map character names to specific costume folders here. When a character name is detected in the AI’s messages, the extension will switch to the mapped costume folder. Use the "Add Mapping" button to add more mappings.
+          Map character names to specific costume folders here. When a character name is detected, the extension will switch to the mapped costume folder.
         </small>
       </div>
 
@@ -86,24 +125,14 @@
         <input id="cs-debug" type="checkbox" />
         <label for="cs-debug">Enable Debug Logging</label>
         <small>
-          When enabled, debug logging will be activated. This allows the extension to log detailed information about the costume-switching process, which can help with troubleshooting.
+          Logs detailed information to the browser console for troubleshooting.
         </small>
       </div>
 
-      <!-- Save Settings Button -->
+      <!-- Buttons -->
       <div class="tracker-block flex-container">
         <button id="cs-save" class="menu_button fa-solid fa-save interactable">Save Settings</button>
-        <small>
-          Click this button to save your changes to the settings. The changes will take effect immediately after saving.
-        </small>
-      </div>
-
-      <!-- Manual Reset Button -->
-      <div class="tracker-block flex-container">
         <button id="cs-reset" class="menu_button fa-solid fa-undo interactable">Manual Reset</button>
-        <small>
-          Click this button to manually reset the costume to the default, even if a character is detected in the stream. This will immediately revert to the default costume.
-        </small>
       </div>
 
       <!-- Status and Error Messages -->
