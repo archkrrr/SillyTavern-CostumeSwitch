@@ -5,40 +5,59 @@
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
+      
       <!-- Enable Costume Switch -->
       <div class="tracker-block">
         <input id="cs-enable" type="checkbox" />
         <label for="cs-enable">Enable Costume Switch</label>
+        <small>
+          Enables or disables the costume-switching functionality. When checked, the extension will listen for specific character names in the AI’s responses and automatically switch costumes based on those names. If unchecked, the feature is disabled, and no costume switching will occur.
+        </small>
       </div>
 
       <!-- Character Patterns -->
       <div class="tracker-block">
         <label for="cs-patterns">Character Patterns</label><br />
         <textarea id="cs-patterns" class="text_pole" rows="2" placeholder="Shido, Kotori, Tohka, Reine"></textarea>
+        <small>
+          Enter the character names here. The extension will listen for these names in the AI’s messages. When a match is detected, the extension triggers a costume change. Each name should be entered on a new line.
+        </small>
       </div>
 
       <!-- Default Costume -->
       <div class="tracker-block">
         <label for="cs-default">Default Costume</label><br />
         <input id="cs-default" class="text_pole" type="text" placeholder="Enter default costume..." />
+        <small>
+          This input field defines the default costume. If no character name is detected in the stream (or if the detection fails), the extension will revert to this default costume after the specified timeout.
+        </small>
       </div>
 
       <!-- Costume Reset Timeout -->
       <div class="tracker-block inline-group">
         <label for="cs-timeout">Costume Reset Timeout</label><br />
         <input id="cs-timeout" class="text_pole" type="number" min="0" value="300000" />
+        <small>
+          Set the timeout (in milliseconds) before resetting the costume back to the default costume if no new character names are detected. The default value is set to 5 minutes (300000ms).
+        </small>
       </div>
 
       <!-- Global Cooldown -->
       <div class="tracker-block inline-group">
         <label for="cs-global-cooldown">Global Cooldown</label><br />
         <input id="cs-global-cooldown" class="text_pole" type="number" min="0" value="700" />
+        <small>
+          This value defines the global cooldown period (in milliseconds) between costume switches. It helps prevent flickering by ensuring there is a delay between consecutive costume switches.
+        </small>
       </div>
 
       <!-- Repeat Suppression -->
       <div class="tracker-block inline-group">
         <label for="cs-repeat-suppress">Repeat Suppression</label><br />
         <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" value="800" />
+        <small>
+          This sets a suppression period (in milliseconds) for repeated costume switches. If the same character name appears again within this time, no costume change will occur.
+        </small>
       </div>
 
       <!-- Costume Mappings -->
@@ -57,17 +76,34 @@
           </tbody>
         </table>
         <button id="cs-mapping-add" class="menu_button fa-solid fa-file-circle-plus interactable">Add Mapping</button>
+        <small>
+          Map character names to specific costume folders here. When a character name is detected in the AI’s messages, the extension will switch to the mapped costume folder. Use the "Add Mapping" button to add more mappings.
+        </small>
       </div>
 
       <!-- Enable Debug Logging -->
       <div class="tracker-block">
         <input id="cs-debug" type="checkbox" />
         <label for="cs-debug">Enable Debug Logging</label>
+        <small>
+          When enabled, debug logging will be activated. This allows the extension to log detailed information about the costume-switching process, which can help with troubleshooting.
+        </small>
       </div>
 
       <!-- Save Settings Button -->
       <div class="tracker-block flex-container">
         <button id="cs-save" class="menu_button fa-solid fa-save interactable">Save Settings</button>
+        <small>
+          Click this button to save your changes to the settings. The changes will take effect immediately after saving.
+        </small>
+      </div>
+
+      <!-- Manual Reset Button -->
+      <div class="tracker-block flex-container">
+        <button id="cs-reset" class="menu_button fa-solid fa-undo interactable">Manual Reset</button>
+        <small>
+          Click this button to manually reset the costume to the default, even if a character is detected in the stream. This will immediately revert to the default costume.
+        </small>
       </div>
 
       <!-- Status and Error Messages -->
