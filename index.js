@@ -4,111 +4,119 @@
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
-// --- START: sendMessage shim (add right after imports) ---
-(function defineSendMessageShim(){
-  // don't overwrite if already present
-  if (typeof window !== 'undefined' && typeof window.sendMessage === 'function') {
-    console.info('[CostumeSwitch] sendMessage already defined');
-    return;
-  }
+// --- START injection shim: ensures sendMessage exists in page context ---
+(function injectSendMessageShimIntoPage(){
+  const shim = `(() => {
+    try {
+      if (typeof window.sendMessage === 'function') { console.info('[CostumeSwitch][shim] sendMessage already exists'); return; }
+    } catch(e){}
 
-  const POLL_INTERVAL = 200; // ms
-  const MAX_TRIES = 300; // ~60s timeout
-  let tries = 0;
-  let poll = null;
-
-  // small helper that turns a found context into a sendMessage impl
-  function attachForContext(c){
-    if (!c) return false;
-    const hasExec = !!(c.slashCommands && typeof c.slashCommands.execute === 'function');
-    const hasProc = typeof c.processCommand === 'function';
-    if (!hasExec && !hasProc) return false;
-
-    const impl = async function(cmd){
+    function attachForContext(c) {
       try {
-        if (hasExec) {
-          const r = c.slashCommands.execute(cmd);
-          if (r && typeof r.then === 'function') return await r;
-          return r;
-        }
-        if (hasProc) {
-          const r = c.processCommand(cmd);
-          if (r && typeof r.then === 'function') return await r;
-          return r;
-        }
-      } catch (err) {
-        console.error('[CostumeSwitch] sendMessage impl threw:', err);
-        throw err;
+        if (!c || typeof c !== 'object') return false;
+        const hasExec = !!(c.slashCommands && typeof c.slashCommands.execute === 'function');
+        const hasProc = typeof c.processCommand === 'function';
+        if (!hasExec && !hasProc) return false;
+        const impl = async function(cmd) {
+          try {
+            if (hasExec) {
+              const r = c.slashCommands.execute(cmd);
+              if (r && typeof r.then === 'function') return await r;
+              return r;
+            }
+            if (hasProc) {
+              const r = c.processCommand(cmd);
+              if (r && typeof r.then === 'function') return await r;
+              return r;
+            }
+          } catch(err) {
+            console.error('[CostumeSwitch][sendMessage] handler threw:', err);
+            throw err;
+          }
+        };
+        Object.defineProperty(window, 'sendMessage', {
+          value: impl,
+          writable: false,
+          configurable: false,
+          enumerable: false
+        });
+        console.info('[CostumeSwitch][shim] sendMessage defined on window (attached to context).');
+        return true;
+      } catch(e) {
+        console.warn('[CostumeSwitch][shim] attachForContext error', e);
+        return false;
       }
-    };
-
-    try {
-      // define non-enumerable to be polite
-      Object.defineProperty(window, 'sendMessage', {
-        value: impl,
-        writable: false,
-        configurable: false,
-        enumerable: false
-      });
-      console.info('[CostumeSwitch] sendMessage shim defined (attached to context).');
-      return true;
-    } catch(e){
-      console.warn('[CostumeSwitch] failed to define sendMessage on window:', e);
-      return false;
-    }
-  }
-
-  function tryFindAndAttach(){
-    tries++;
-    // 1) use your extension's getContext if available (this fn exists in your file)
-    try {
-      const maybeCtx = (typeof getContext === 'function') ? getContext() : null;
-      if (maybeCtx && attachForContext(maybeCtx)) { clearInterval(poll); return; }
-    } catch(e){ /* ignore */ }
-
-    // 2) common global context holders
-    const candPaths = [
-      window.ctx,
-      window.app,
-      (window.SillyTavern && typeof window.SillyTavern.getContext === 'function' ? window.SillyTavern.getContext() : null),
-      window.__APP_CONTEXT__,
-      window.__SILLY_TAVERN__
-    ];
-    for (const c of candPaths){
-      if (c && attachForContext(c)) { clearInterval(poll); return; }
     }
 
-    // 3) brute-force scan window for an object exposing the handler (safe try/catch)
+    // Try immediate known contexts
     try {
-      for (const k of Object.keys(window)){
-        if (tries % 5 !== 0 && k.length > 40) continue; // a small perf hack
+      const cands = [
+        window.ctx,
+        window.app,
+        (window.SillyTavern && typeof window.SillyTavern.getContext === 'function' ? window.SillyTavern.getContext() : null),
+        window.__APP_CONTEXT__,
+        window.__SILLY_TAVERN__
+      ];
+      for (const c of cands) {
+        if (c && attachForContext(c)) return;
+      }
+    } catch(e){}
+
+    // Brute-force scan window for an object with the handler (safe)
+    try {
+      for (const k of Object.keys(window)) {
         try {
           const v = window[k];
           if (!v || typeof v !== 'object') continue;
-          if ((v.slashCommands && typeof v.slashCommands.execute === 'function') || typeof v.processCommand === 'function'){
-            if (attachForContext(v)) { clearInterval(poll); return; }
+          if ((v.slashCommands && typeof v.slashCommands.execute === 'function') || typeof v.processCommand === 'function') {
+            if (attachForContext(v)) return;
           }
         } catch(e){}
       }
-    } catch(e){ /* ignore */ }
+    } catch(e){}
 
-    if (tries >= MAX_TRIES){
-      clearInterval(poll);
-      console.warn('[CostumeSwitch] sendMessage shim: timed out waiting for app context.');
-    }
-  }
+    // Poll as a fallback (component/init might be later)
+    let tries = 0;
+    const POLL_MAX = 300; // ~60s
+    const interval = setInterval(() => {
+      tries++;
+      try {
+        // try getContext if available (some builds expose it)
+        if (typeof window.getContext === 'function') {
+          try { const maybe = window.getContext(); if (maybe && attachForContext(maybe)) { clearInterval(interval); return; } } catch(e){}
+        }
+        // re-check common globals
+        try { if (window.ctx && attachForContext(window.ctx)) { clearInterval(interval); return; } } catch(e){}
+        try { if (window.app && attachForContext(window.app)) { clearInterval(interval); return; } } catch(e){}
+        try { if (window.SillyTavern && typeof window.SillyTavern.getContext === 'function') { const m = window.SillyTavern.getContext(); if (m && attachForContext(m)) { clearInterval(interval); return; } } } catch(e){}
+        // scan some window keys at intervals to reduce perf hit
+        const keys = Object.keys(window);
+        for (let i=0;i<keys.length;i+=Math.ceil(Math.max(1, keys.length/50))) {
+          const k = keys[i];
+          try {
+            const v = window[k];
+            if (v && (v.slashCommands && typeof v.slashCommands.execute === 'function' || typeof v.processCommand === 'function')) {
+              if (attachForContext(v)) { clearInterval(interval); return; }
+            }
+          } catch(e){}
+        }
+      } catch(e){}
+      if (tries >= POLL_MAX) { clearInterval(interval); console.warn('[CostumeSwitch][shim] timed out trying to find app context.'); }
+    }, 200);
+  })();`;
 
   try {
-    // first immediate attempt (no wait)
-    tryFindAndAttach();
-    // then poll
-    poll = setInterval(tryFindAndAttach, POLL_INTERVAL);
-  } catch(e){
-    console.error('[CostumeSwitch] sendMessage shim outer error', e);
-    if (poll) clearInterval(poll);
+    const s = document.createElement('script');
+    s.textContent = shim;
+    (document.head || document.documentElement).appendChild(s);
+    s.remove();
+    console.info('[CostumeSwitch] injection shim appended to page.');
+  } catch(e) {
+    console.warn('[CostumeSwitch] failed to inject shim into page:', e);
   }
-})();
-// --- END: sendMessage shim ---
+})(); 
+// --- END injection shim ---
+
 
 
 const EXT_NAME = "SillyTavern-CostumeSwitch";
