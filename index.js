@@ -484,21 +484,22 @@ jQuery(async () => {
     if (settings.debug) console.debug(`CS debug: Generation started for ${bufKey}, resetting state.`);
     perMessageStates.delete(bufKey);
     perMessageBuffers.delete(bufKey);
+    isReasoning = false; // Reset reasoning flag at the start of a new message
   };
   
   _reasoningStartHandler = () => {
-      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block started. Pausing detection.");
+      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block started (event). Pausing detection.");
       isReasoning = true;
   };
 
   _reasoningEndHandler = () => {
-      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block ended. Resuming detection.");
+      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block ended (event). Resuming detection.");
       isReasoning = false;
   };
 
   _streamHandler = (...args) => {
     try {
-      if (!settings.enabled || isReasoning) return;
+      if (!settings.enabled) return;
       
       let tokenText = ""; let messageId = null;
       if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); }
@@ -507,6 +508,21 @@ jQuery(async () => {
       else tokenText = String(args.join(' ') || "");
       if (!tokenText) return;
 
+      // Manual detection of <think> tags, which might not fire the official events.
+      if (!isReasoning && tokenText.includes('<think>')) {
+          if (settings.debug) console.debug("[CostumeSwitch] Manual <think> tag detected. Pausing detection.");
+          isReasoning = true;
+      }
+      
+      if (isReasoning) {
+          if (tokenText.includes('</think>')) {
+              if (settings.debug) console.debug("[CostumeSwitch] Manual </think> tag detected. Resuming detection.");
+              isReasoning = false;
+          }
+          // While inside a think block (event-based or manual), do nothing else.
+          return;
+      }
+      
       const bufKey = messageId != null ? `m${messageId}` : 'live';
 
       if (sceneChangeRegex.test(tokenText.trim())) {
@@ -566,7 +582,14 @@ jQuery(async () => {
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
   };
 
-  _genEndHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } scheduleResetIfIdle(); };
+  _genEndHandler = (messageId) => { 
+      if (messageId != null) { 
+          perMessageBuffers.delete(`m${messageId}`); 
+          perMessageStates.delete(`m${messageId}`); 
+      }
+      isReasoning = false; // Ensure reasoning is false at the end of generation
+      scheduleResetIfIdle(); 
+  };
   _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
   _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; };
 
