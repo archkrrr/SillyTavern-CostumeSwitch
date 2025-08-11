@@ -163,9 +163,15 @@ jQuery(async () => {
   if (jQuery("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
   if (jQuery("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
   if (jQuery("#cs-timeout").length) $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-  if (jQuery("#cs-narration").length) $("#cs-narration").prop("checked", !!settings.narrationSwitch);
-  if (jQuery("#cs-debug").length) $("#cs-debug").prop("checked", !!settings.debug);
-  $("#cs-status").text("Ready");
+    if (jQuery("#cs-narration").length) $("#cs-narration").prop("checked", !!settings.narrationSwitch);
+    if (jQuery("#cs-debug").length) $("#cs-debug").prop("checked", !!settings.debug);
+
+    // populate cooldown fields (new)
+    if ($("#cs-global-cooldown").length) $("#cs-global-cooldown").val(settings.globalCooldownMs || DEFAULTS.globalCooldownMs);
+    if ($("#cs-per-cooldown").length) $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
+    if ($("#cs-failed-cooldown").length) $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
+
+    $("#cs-status").text("Ready");
 
   function persistSettings() {
     if (save) save();
@@ -197,6 +203,11 @@ jQuery(async () => {
         settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
         if ($("#cs-narration").length) settings.narrationSwitch = !!$("#cs-narration").prop("checked");
         if ($("#cs-debug").length) settings.debug = !!$("#cs-debug").prop("checked");
+
+                // save cooldowns from UI
+                settings.globalCooldownMs = parseInt($("#cs-global-cooldown").val() || DEFAULTS.globalCooldownMs, 10);
+                settings.perTriggerCooldownMs = parseInt($("#cs-per-cooldown").val() || DEFAULTS.perTriggerCooldownMs, 10);
+                settings.failedTriggerCooldownMs = parseInt($("#cs-failed-cooldown").val() || DEFAULTS.failedTriggerCooldownMs, 10);
         // rebuild regexes
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
         speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
