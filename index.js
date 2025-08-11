@@ -401,24 +401,25 @@ jQuery(async () => {
                 }
             }
 
-            // Priority 4: Optional fallback - find last-mentioned name outside quotes (narration)
-            if (!matchedName && nameRegex && settings.narrationSwitch) {
-                const searchRe = new RegExp(nameRegex.source, 'gi');
-                let lastMatch = null;
-                let mm;
-                while ((mm = searchRe.exec(combined)) !== null) {
-                    if (isInsideQuotes(combined, mm.index)) continue;
-                    for (let i = 1; i < mm.length; i++) {
-                        if (mm[i]) {
-                            lastMatch = { name: mm[i], idx: mm.index };
-                            break;
-                        }
-                    }
-                }
-                if (lastMatch) {
-                    matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
-                }
+            // Priority 4: Optional fallback - match names outside quotes if likely subject of sentence
+if (!matchedName && nameRegex && settings.narrationSwitch) {
+    const sentenceStartRe = new RegExp(`(?:^|[.!?]\\s+|\\*\\*[^*]+\\*\\*\\s*)${nameRegex.source}`, 'gi');
+    let lastMatch = null;
+    let mm;
+    while ((mm = sentenceStartRe.exec(combined)) !== null) {
+        if (isInsideQuotes(combined, mm.index)) continue; // skip if inside dialogue
+        for (let i = 1; i < mm.length; i++) {
+            if (mm[i]) {
+                lastMatch = { name: mm[i], idx: mm.index };
+                break;
             }
+        }
+    }
+    if (lastMatch) {
+        matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
+    }
+}
+
 
             // --- End of Tiered Logic ---
 
