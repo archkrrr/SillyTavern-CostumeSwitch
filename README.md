@@ -58,7 +58,7 @@ Quick Replies allows the Costume Switcher extension to interact with predefined 
 
 Here are a few visual examples to help guide you through the configuration:
 
-#### Quick Replies Setup in SillyTavern
+### Quick Replies Setup in SillyTavern
 
 <img width="689" height="481" alt="image" src="https://github.com/user-attachments/assets/a5f9ab40-af5b-4ea1-aa0b-1bdf085eb943" />
 
@@ -75,7 +75,7 @@ Here are a few visual examples to help guide you through the configuration:
 *This is how you want to setup Quick Replies for it to work with the extension*
 
 
-#### Costume Switcher Settings
+### Costume Switcher Settings
 
 <img width="694" height="597" alt="image" src="https://github.com/user-attachments/assets/4318ac06-3e60-492c-9ab7-fc87fc86f7e2" />
 
