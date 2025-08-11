@@ -23,7 +23,8 @@ const DEFAULTS = {
   // NEW warmup & suppression settings:
   minCharsBeforeSwitch: 8,     // require at least N chars to be streamed before switching
   minMsBeforeSwitch: 200,      // require at least N ms since generation start before switching
-  suppressIfInsideParens: true // if match is inside (), [], or {}, suppress it
+  suppressIfInsideParens: true, // if match is inside (), [], or {}, suppress it
+  suppressThinkTags: true      // if match is inside <think>...</think>, suppress it (case-insensitive)
 };
 
 function escapeRegex(s) {
@@ -297,6 +298,7 @@ jQuery(async () => {
   if ($("#cs-min-chars").length) $("#cs-min-chars").val(settings.minCharsBeforeSwitch ?? DEFAULTS.minCharsBeforeSwitch);
   if ($("#cs-min-ms").length) $("#cs-min-ms").val(settings.minMsBeforeSwitch ?? DEFAULTS.minMsBeforeSwitch);
   if ($("#cs-suppress-paren").length) $("#cs-suppress-paren").prop("checked", !!settings.suppressIfInsideParens);
+  if ($("#cs-suppress-think").length) $("#cs-suppress-think").prop("checked", !!settings.suppressThinkTags);
 
   $("#cs-status").text("Ready");
 
@@ -336,6 +338,8 @@ jQuery(async () => {
         const minMs = parseInt($("#cs-min-ms").val() || DEFAULTS.minMsBeforeSwitch, 10);
         settings.minMsBeforeSwitch = isFinite(minMs) && minMs >= 0 ? minMs : DEFAULTS.minMsBeforeSwitch;
         settings.suppressIfInsideParens = !!$("#cs-suppress-paren").prop("checked");
+        // optional UI checkbox for think suppression if present
+        if ($("#cs-suppress-think").length) settings.suppressThinkTags = !!$("#cs-suppress-think").prop("checked");
 
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
         speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
@@ -508,6 +512,28 @@ jQuery(async () => {
     return false;
   }
 
+  // NEW: detect if an index is inside <think>...</think> (case-insensitive, supports attributes)
+  function isInsideThinkTags(str, idx) {
+    if (!str || idx == null || idx < 0) return false;
+    // find last opening <think ...> before idx (case-insensitive)
+    const openRe = /<think\b[^>]*>/gi;
+    let m;
+    let lastOpenEnd = -1;
+    while ((m = openRe.exec(str)) !== null) {
+      if (m.index <= idx) lastOpenEnd = openRe.lastIndex;
+      else break;
+    }
+    if (lastOpenEnd === -1) return false;
+    // find first closing </think> after the last open
+    const closeRe = /<\/think\s*>/gi;
+    closeRe.lastIndex = lastOpenEnd;
+    const cm = closeRe.exec(str);
+    // if there is no closing tag yet in the buffer, we consider it "inside" (streaming not finished)
+    if (!cm) return true;
+    // if the closing tag is after idx, it's inside
+    return cm.index > idx;
+  }
+
   _genStartHandler = (messageId) => {
     const bufKey = messageId != null ? `m${messageId}` : 'live';
     if (settings.debug) console.debug(`CS debug: Generation started for ${bufKey}, resetting state.`);
@@ -594,6 +620,14 @@ jQuery(async () => {
           if (matchedName && settings.suppressIfInsideParens) {
               if (isInsidePairedDelims(combined, bestMatch.matchIndex)) {
                   if (settings.debug) console.debug('CS debug: suppressing match inside parentheses/brackets', { matchedName, matchIndex: bestMatch.matchIndex });
+                  matchedName = null;
+              }
+          }
+
+          // Suppress if inside explicit <think>...</think> tags (case-insensitive)
+          if (matchedName && settings.suppressThinkTags) {
+              if (isInsideThinkTags(combined, bestMatch.matchIndex)) {
+                  if (settings.debug) console.debug('CS debug: suppressing match inside <think> tags', { matchedName, matchIndex: bestMatch.matchIndex });
                   matchedName = null;
               }
           }
