@@ -77,7 +77,8 @@ function buildAttributionRegex(patternList) {
   const names = entries.map(e => `(?:${e.body})`).join('|');
   const verbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)';
   const patA = '(["\\u201C\\u201D].{0,400}["\\u201C\\u201D])\\s*,?\\s*(' + names + ')\\s+' + verbs;
-  const patB = '(?:^|\\n)\\s*(' + names + ')\\s+' + verbs + '\\s*[:,]?\\s*["\\u201C\\u201D]';
+  // PATCHED: Replaced (?:^|\\n) with \\b for more flexible matching
+  const patB = '\\b(' + names + ')\\s+' + verbs + '\\s*[:,]?\\s*["\\u201C\\u201D]';
   const body = `(?:${patA})|(?:${patB})`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildAttributionRegex compile failed:", e); return null; }
@@ -87,7 +88,8 @@ function buildActionRegex(patternList) {
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
   const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved)';
-  const body = `(?:^|\\n)\\s*(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b`;
+  // PATCHED: Replaced (?:^|\\n)\\s* with \\b for more flexible matching
+  const body = `\\b(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
 }
@@ -949,7 +951,7 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.5 — chronological matching) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.6 — flexible regex) loaded.");
 });
 
 // getSettingsObj - unchanged pattern
