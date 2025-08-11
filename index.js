@@ -231,7 +231,6 @@ let lastIssuedCostume = null;
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
-const failedTriggerTimes = new Map();
 let _clickInProgress = new Set();
 
 let _streamHandler = null;
@@ -239,6 +238,8 @@ let _genStartHandler = null;
 let _genEndHandler = null;
 let _msgRecvHandler = null;
 let _chatChangedHandler = null;
+let _reasoningStartHandler = null;
+let _reasoningEndHandler = null;
 
 const MAX_MESSAGE_BUFFERS = 60;
 function ensureBufferLimit() {
@@ -264,6 +265,7 @@ function waitForSelector(selector, timeout = 3000, interval = 120) {
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
   const settings = store[extensionName];
+  let isReasoning = false;
 
   try {
     const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
@@ -483,10 +485,21 @@ jQuery(async () => {
     perMessageStates.delete(bufKey);
     perMessageBuffers.delete(bufKey);
   };
+  
+  _reasoningStartHandler = () => {
+      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block started. Pausing detection.");
+      isReasoning = true;
+  };
+
+  _reasoningEndHandler = () => {
+      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block ended. Resuming detection.");
+      isReasoning = false;
+  };
 
   _streamHandler = (...args) => {
     try {
-      if (!settings.enabled) return;
+      if (!settings.enabled || isReasoning) return;
+      
       let tokenText = ""; let messageId = null;
       if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); }
       else if (typeof args[0] === 'string' && args.length === 1) tokenText = args[0];
@@ -564,13 +577,14 @@ jQuery(async () => {
       if (eventSource && _genEndHandler) eventSource.off?.(event_types.GENERATION_ENDED, _genEndHandler);
       if (eventSource && _msgRecvHandler) eventSource.off?.(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
       if (eventSource && _chatChangedHandler) eventSource.off?.(event_types.CHAT_CHANGED, _chatChangedHandler);
+      if (eventSource && _reasoningStartHandler) eventSource.off?.(event_types.STREAM_REASONING_STARTED, _reasoningStartHandler);
+      if (eventSource && _reasoningEndHandler) eventSource.off?.(event_types.STREAM_REASONING_DONE, _reasoningEndHandler);
     } catch (e) { /* ignore */ }
     if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
     perMessageBuffers.clear();
     perMessageStates.clear();
     lastIssuedCostume = null;
     lastTriggerTimes.clear();
-    failedTriggerTimes.clear();
     _clickInProgress.clear();
   }
 
@@ -582,6 +596,8 @@ jQuery(async () => {
     eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
     eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
     eventSource.on(event_types.CHAT_CHANGED, _chatChangedHandler);
+    eventSource.on(event_types.STREAM_REASONING_STARTED, _reasoningStartHandler);
+    eventSource.on(event_types.STREAM_REASONING_DONE, _reasoningEndHandler);
   } catch (e) {
     console.error("CostumeSwitch: failed to attach event handlers:", e);
   }
