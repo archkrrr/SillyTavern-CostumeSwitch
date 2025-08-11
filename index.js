@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (patched: commit delay + min-switch interval)
+// index.js - SillyTavern-CostumeSwitch (patched: debug + commit-on-generation-end)
 // Keep relative imports like the official examples
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -14,8 +14,8 @@ const DEFAULTS = {
   defaultCostume: "", // empty => use current character's own folder
 
   // smoothing / debouncing settings (patched)
-  commitDelayMs: 300,        // ms to wait before committing a detected name
-  minSwitchIntervalMs: 600,  // ms minimum between applied switches
+  commitDelayMs: 200,        // ms to wait before committing a detected name (reduced default)
+  minSwitchIntervalMs: 400,  // ms minimum between applied switches (reduced default)
 };
 
 // simple safe regex-building util (escape plain text)
@@ -115,7 +115,7 @@ jQuery(async () => {
     settings.defaultCostume = $("#cs-default").val().trim();
     settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
 
-    // new smoothing settings
+    // new smoothing settings (UI may not have inputs; these fall back to defaults)
     settings.commitDelayMs = parseInt($("#cs-commit-delay").val()||DEFAULTS.commitDelayMs, 10) || DEFAULTS.commitDelayMs;
     settings.minSwitchIntervalMs = parseInt($("#cs-min-switch-interval").val()||DEFAULTS.minSwitchIntervalMs, 10) || DEFAULTS.minSwitchIntervalMs;
 
@@ -123,9 +123,6 @@ jQuery(async () => {
     nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
     persistSettings();
   });
-
-  // If the settings UI from file doesn't include inputs for commit delay / min interval,
-  // users can still edit them via storage; we attempt to set reasonable defaults above.
 
   $("#cs-reset").on("click", async () => {
     await manualReset();
@@ -156,6 +153,7 @@ jQuery(async () => {
           const b = normalizedTarget.replace(/\s+/g, ' ').trim();
           if (a === b || a.toLowerCase() === b.toLowerCase()) {
             btn.click();
+            console.debug("triggerQuickReply: clicked by label", a, "-> target", normalizedTarget);
             return true;
           }
         }
@@ -165,6 +163,7 @@ jQuery(async () => {
           const b = normalizedTarget.replace(/\s+/g, ' ').trim();
           if (t === b || t.toLowerCase() === b.toLowerCase()) {
             btn.click();
+            console.debug("triggerQuickReply: clicked by title", t, "-> target", normalizedTarget);
             return true;
           }
         }
@@ -173,6 +172,7 @@ jQuery(async () => {
       // DOM might not be available; ignore
       console.warn("triggerQuickReply error:", err);
     }
+    console.debug("triggerQuickReply: no quick-reply matched for", labelOrMsg);
     return false;
   }
 
@@ -235,6 +235,7 @@ jQuery(async () => {
     const last = lastTriggerTimes.get(argFolder) || 0;
     if (now - last < TRIGGER_COOLDOWN_MS) {
       // too soon to re-trigger the same costume; skip
+      console.debug("issueCostumeForName: cooldown skip for", argFolder);
       return;
     }
 
@@ -243,9 +244,11 @@ jQuery(async () => {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
       $("#cs-status").text(`Switched -> ${argFolder}`);
+      console.debug("issueCostumeForName: switched ->", argFolder);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
       $("#cs-status").text(`Quick Reply not found for ${name}`);
+      console.debug("issueCostumeForName: quick-reply not found for", name);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     }
   }
@@ -265,6 +268,7 @@ jQuery(async () => {
           if (ok) {
             lastIssuedCostume = costumeArg;
             $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
+            console.debug("scheduleResetIfIdle: auto-reset ->", costumeArg);
             setTimeout(()=>$("#cs-status").text(""), 1200);
           } else {
             console.debug("Auto-reset quick reply not found for", costumeArg);
@@ -285,6 +289,7 @@ jQuery(async () => {
     // if already using this costume, don't re-schedule (but still refresh idle timer)
     if (lastIssuedCostume === argFolder) {
       scheduleResetIfIdle();
+      console.debug("schedulePendingSwitch: already on", argFolder);
       return;
     }
 
@@ -294,33 +299,45 @@ jQuery(async () => {
       pendingTimer = null;
     }
     pendingName = name;
+    console.debug("schedulePendingSwitch: pending ->", pendingName);
 
     const delay = (settings && settings.commitDelayMs) || DEFAULTS.commitDelayMs;
     const minInterval = (settings && settings.minSwitchIntervalMs) || DEFAULTS.minSwitchIntervalMs;
 
     pendingTimer = setTimeout(async () => {
       pendingTimer = null;
-      if (!pendingName) return;
+      if (!pendingName) {
+        console.debug("schedulePendingSwitch: pendingName cleared before commit");
+        return;
+      }
 
       const now = Date.now();
       const sinceLast = now - (lastSwitchTime || 0);
 
       const doSwitch = async () => {
-        await issueCostumeForName(pendingName);
+        const currentPending = pendingName;
+        // call issue; it will update lastIssuedCostume if successful
+        await issueCostumeForName(currentPending);
         lastSwitchTime = Date.now();
         pendingName = null;
-        scheduleResetIfIdle();
       };
 
       if (sinceLast >= minInterval) {
+        console.debug("schedulePendingSwitch: committing", pendingName, "after delay");
         await doSwitch();
+        scheduleResetIfIdle();
       } else {
         // wait remaining time to satisfy min interval
         const remaining = minInterval - sinceLast;
+        console.debug("schedulePendingSwitch: delaying commit for remaining", remaining, "ms for", pendingName);
         pendingTimer = setTimeout(async () => {
           pendingTimer = null;
-          if (!pendingName) return;
+          if (!pendingName) {
+            console.debug("schedulePendingSwitch: pendingName cleared in second wait");
+            return;
+          }
           await doSwitch();
+          scheduleResetIfIdle();
         }, remaining);
       }
     }, delay);
@@ -352,6 +369,9 @@ jQuery(async () => {
 
       if (!tokenText) return;
 
+      // debug visibility of incoming token
+      console.debug("stream token:", tokenText.slice(0, 200), "messageId:", messageId);
+
       // decide a key for buffer; prefer messageId if known, else use 'live'
       const bufKey = messageId != null ? `m${messageId}` : 'live';
       const prev = perMessageBuffers.get(bufKey) || "";
@@ -381,6 +401,7 @@ jQuery(async () => {
         }
 
         if (matchedName) {
+          console.debug("stream match ->", matchedName, "bufKey:", bufKey);
           // schedule a debounced commit instead of immediate switch
           schedulePendingSwitch(matchedName);
 
@@ -397,13 +418,33 @@ jQuery(async () => {
   // Also listen for GENERATION_ENDED and MESSAGE_RECEIVED to clear buffers for finished message ids
   eventSource.on(event_types.GENERATION_ENDED, (messageId) => {
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
-    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
+    // If generation ended and we still have a pendingName, commit it immediately (prevents lost pending commits)
+    if (pendingName) {
+      console.debug("GENERATION_ENDED: committing pendingName immediately ->", pendingName);
+      // call issue directly (this respects per-costume cooldown inside issueCostumeForName)
+      issueCostumeForName(pendingName).catch(e => console.warn("issueCostumeForName error on generation_end:", e));
+      // clear pending timer/state
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+      pendingName = null;
+      lastSwitchTime = Date.now();
+    } else {
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
+    }
     scheduleResetIfIdle();
   });
 
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
-    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
+    // If a message is fully received and a pendingName exists, commit it
+    if (pendingName) {
+      console.debug("MESSAGE_RECEIVED: committing pendingName immediately ->", pendingName);
+      issueCostumeForName(pendingName).catch(e => console.warn("issueCostumeForName error on message_received:", e));
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+      pendingName = null;
+      lastSwitchTime = Date.now();
+    } else {
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
+    }
   });
 
   // When chat/character changes, clear state
@@ -413,5 +454,5 @@ jQuery(async () => {
     if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
   });
 
-  console.log("SillyTavern-CostumeSwitch (patched: commit-delay + min-switch-interval) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched: debug + commit-on-generation-end) loaded.");
 });
