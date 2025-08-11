@@ -1,4 +1,5 @@
 // index.js - SillyTavern-CostumeSwitch
+
 // Keep relative imports like the official examples
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -106,8 +107,9 @@ jQuery(async () => {
 
   // get ST context (eventSource, event_types, characters, etc.)
   const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
-  if (!realCtx) {
-    console.error("SillyTavern context not found. Extension won't run.");
+  if (!realCtx || !realCtx.slashCommands) { // CHANGED: Added check for slashCommands
+    console.error("SillyTavern context or slashCommands not found. Extension won't run.");
+    $("#cs-status").text("Error: Context not found.");
     return;
   }
   const { eventSource, event_types, characters } = realCtx;
@@ -116,31 +118,26 @@ jQuery(async () => {
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
 
   // rebuild regex when user saves new patterns
-  // (we already bound Save button to update settings, here we listen to our store)
-  // If saveSettingsDebounced triggers some event for settings, we could listen. For simplicity, re-read when Save pressed:
   $("#cs-save").on("click", () => {
     nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   });
 
   // manual reset helper
   async function manualReset() {
-    // choose default costume:
     let costumeArg = settings.defaultCostume || "";
+    // NOTE: If defaultCostume is blank, it resets to the character's base sprite folder.
     if (!costumeArg) {
-      // use current character name as both folder and name (typical)
       const ch = realCtx.characters?.[realCtx.characterId];
-      if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
+      if (ch && ch.name) costumeArg = ch.name;
     }
+    
     if (!costumeArg) {
       $("#cs-status").text("No default costume defined.");
       return;
     }
-    // emit a MESSAGE_SENT event with the slash command
-    await eventSource.emit(event_types.MESSAGE_SENT, {
-      message: `/costume ${costumeArg}`,
-      // name field may be optional; supply current character name if available
-      name: realCtx.characters?.[realCtx.characterId]?.name || ''
-    });
+
+    // CHANGED: Use the correct slash command execution method.
+    realCtx.slashCommands.execute(`/costume ${costumeArg}`);
     lastIssuedCostume = costumeArg;
     $("#cs-status").text(`Reset -> ${costumeArg}`);
     setTimeout(()=>$("#cs-status").text(""), 1500);
@@ -149,15 +146,12 @@ jQuery(async () => {
   // function to issue costume switch when a new character is detected
   async function issueCostumeForName(name) {
     if (!name) return;
-    // Format: /costume character_name/folder_name
-    // Use the simple convention <name>/<name>. You can enhance with mappings later.
-    const arg = `${name}/${name}`;
-    // avoid spam if already set
+    // NOTE: The argument is now just the name, which should match the costume folder name.
+    const arg = name; 
     if (arg === lastIssuedCostume) return;
-    await eventSource.emit(event_types.MESSAGE_SENT, {
-      message: `/costume ${arg}`,
-      name: realCtx.characters?.[realCtx.characterId]?.name || ''
-    });
+    
+    // CHANGED: Use the correct slash command execution method.
+    realCtx.slashCommands.execute(`/costume ${arg}`);
     lastIssuedCostume = arg;
     $("#cs-status").text(`Switched -> ${arg}`);
     setTimeout(()=>$("#cs-status").text(""), 1000);
@@ -167,15 +161,15 @@ jQuery(async () => {
   function scheduleResetIfIdle() {
     if (resetTimer) clearTimeout(resetTimer);
     resetTimer = setTimeout(() => {
-      // if defaultCostume configured, use it; else use character folder
       (async () => {
         let costumeArg = settings.defaultCostume || "";
         if (!costumeArg) {
           const ch = realCtx.characters?.[realCtx.characterId];
-          if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
+          if (ch && ch.name) costumeArg = ch.name;
         }
         if (costumeArg) {
-          await eventSource.emit(event_types.MESSAGE_SENT, { message: `/costume ${costumeArg}`, name: realCtx.characters?.[realCtx.characterId]?.name || '' });
+          // CHANGED: Use the correct slash command execution method.
+          realCtx.slashCommands.execute(`/costume ${costumeArg}`);
           lastIssuedCostume = costumeArg;
           $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
           setTimeout(()=>$("#cs-status").text(""), 1200);
@@ -184,16 +178,12 @@ jQuery(async () => {
     }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
   }
 
-  // STREAM_TOKEN_RECEIVED fires on every token/chunk (good for mid-stream detection). Use fallback to MESSAGE_RECEIVED if not available.
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-  // message buffer and detection:
   eventSource.on(streamEventName, (...args) => {
     try {
       if (!settings.enabled) return;
 
-      // Determine token text and message id from args - shape can vary by ST version.
-      // Common shapes: (messageId, token) OR ({ token, messageId }) OR (tokenString)
       let tokenText = "";
       let messageId = null;
 
@@ -211,26 +201,20 @@ jQuery(async () => {
 
       if (!tokenText) return;
 
-      // decide a key for buffer; prefer messageId if known, else use 'live'
       const bufKey = messageId != null ? `m${messageId}` : 'live';
       const prev = perMessageBuffers.get(bufKey) || "";
       const combined = prev + tokenText;
       perMessageBuffers.set(bufKey, combined);
 
-      // run regex search on the combined text for "Name:" pattern
       if (!nameRegex) return;
       const m = combined.match(nameRegex);
       if (m) {
-        // extract the matched name (strip trailing colon/space)
-        // find first capture group that matched (m[1]..)
         let matchedName = null;
         for (let i = 1; i < m.length; i++) {
           if (m[i]) { matchedName = m[i].replace(/\s*:/, '').trim(); break; }
         }
         if (matchedName) {
-          // issue costume immediately (no awaiting to avoid blocking stream processing)
           issueCostumeForName(matchedName);
-          // reset idle timer
           scheduleResetIfIdle();
         }
       }
@@ -239,23 +223,19 @@ jQuery(async () => {
     }
   });
 
-  // Also listen for GENERATION_ENDED and MESSAGE_RECEIVED to clear buffers for finished message ids
   eventSource.on(event_types.GENERATION_ENDED, (messageId) => {
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
     scheduleResetIfIdle();
   });
 
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
-    // sometimes MESSAGE_RECEIVED means full message is present; clear older buffers
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
   });
 
-  // When chat/character changes, clear state
   eventSource.on(event_types.CHAT_CHANGED, () => {
     perMessageBuffers.clear();
     lastIssuedCostume = null;
   });
 
-  // done
   console.log("SillyTavern-CostumeSwitch loaded.");
 });
