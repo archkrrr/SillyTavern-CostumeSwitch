@@ -154,35 +154,34 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
         name: 1,
     };
 
-    // Speaker
     if (speakerRegex) {
         findNonQuotedMatches(combined, speakerRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'speaker', matchIndex: m.index, priority: priorities.speaker });
         });
     }
-    // Attribution
+    
     if (attributionRegex) {
         findNonQuotedMatches(combined, attributionRegex, quoteRanges).forEach(m => {
             const name = m.groups?.find(g => g)?.trim();
             if (name) allMatches.push({ name, matchKind: 'attribution', matchIndex: m.index, priority: priorities.attribution });
         });
     }
-    // Action
+
     if (actionRegex) {
         findNonQuotedMatches(combined, actionRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'action', matchIndex: m.index, priority: priorities.action });
         });
     }
-    // Vocative
+
     if (vocativeRegex) {
         findNonQuotedMatches(combined, vocativeRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'vocative', matchIndex: m.index, priority: priorities.vocative });
         });
     }
-    // Possessive
+
     if (settings.patterns && settings.patterns.length) {
         const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
         if (names_poss.length) {
@@ -193,7 +192,7 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
             });
         }
     }
-    // General Name (lowest priority)
+
     if (nameRegex && settings.narrationSwitch) {
          findNonQuotedMatches(combined, nameRegex, quoteRanges).forEach(m => {
             const name = String(m.groups?.[0] || m.match).replace(/-(?:sama|san)$/i, '').trim();
@@ -203,12 +202,11 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
 
     if (allMatches.length === 0) return null;
 
-    // Sort by index (latest first), then by priority (highest first)
     allMatches.sort((a, b) => {
-        if (b.matchIndex !== a.matchIndex) {
-            return b.matchIndex - a.matchIndex;
+        if (b.priority !== a.priority) {
+            return b.priority - a.priority;
         }
-        return b.priority - a.priority;
+        return b.matchIndex - a.matchIndex;
     });
 
     return allMatches[0];
