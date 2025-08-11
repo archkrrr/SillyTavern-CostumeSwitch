@@ -238,8 +238,6 @@ let _genStartHandler = null;
 let _genEndHandler = null;
 let _msgRecvHandler = null;
 let _chatChangedHandler = null;
-let _reasoningStartHandler = null;
-let _reasoningEndHandler = null;
 
 const MAX_MESSAGE_BUFFERS = 60;
 function ensureBufferLimit() {
@@ -265,7 +263,6 @@ function waitForSelector(selector, timeout = 3000, interval = 120) {
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
   const settings = store[extensionName];
-  let isReasoning = false;
 
   try {
     const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
@@ -484,19 +481,8 @@ jQuery(async () => {
     if (settings.debug) console.debug(`CS debug: Generation started for ${bufKey}, resetting state.`);
     perMessageStates.delete(bufKey);
     perMessageBuffers.delete(bufKey);
-    isReasoning = false; // Reset reasoning flag at the start of a new message
   };
   
-  _reasoningStartHandler = () => {
-      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block started (event). Pausing detection.");
-      isReasoning = true;
-  };
-
-  _reasoningEndHandler = () => {
-      if (settings.debug) console.debug("[CostumeSwitch] Reasoning block ended (event). Resuming detection.");
-      isReasoning = false;
-  };
-
   _streamHandler = (...args) => {
     try {
       if (!settings.enabled) return;
@@ -508,21 +494,6 @@ jQuery(async () => {
       else tokenText = String(args.join(' ') || "");
       if (!tokenText) return;
 
-      // Manual detection of <think> tags, which might not fire the official events.
-      if (!isReasoning && tokenText.includes('<think>')) {
-          if (settings.debug) console.debug("[CostumeSwitch] Manual <think> tag detected. Pausing detection.");
-          isReasoning = true;
-      }
-      
-      if (isReasoning) {
-          if (tokenText.includes('</think>')) {
-              if (settings.debug) console.debug("[CostumeSwitch] Manual </think> tag detected. Resuming detection.");
-              isReasoning = false;
-          }
-          // While inside a think block (event-based or manual), do nothing else.
-          return;
-      }
-      
       const bufKey = messageId != null ? `m${messageId}` : 'live';
 
       if (sceneChangeRegex.test(tokenText.trim())) {
@@ -587,7 +558,6 @@ jQuery(async () => {
           perMessageBuffers.delete(`m${messageId}`); 
           perMessageStates.delete(`m${messageId}`); 
       }
-      isReasoning = false; // Ensure reasoning is false at the end of generation
       scheduleResetIfIdle(); 
   };
   _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
@@ -600,8 +570,6 @@ jQuery(async () => {
       if (eventSource && _genEndHandler) eventSource.off?.(event_types.GENERATION_ENDED, _genEndHandler);
       if (eventSource && _msgRecvHandler) eventSource.off?.(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
       if (eventSource && _chatChangedHandler) eventSource.off?.(event_types.CHAT_CHANGED, _chatChangedHandler);
-      if (eventSource && _reasoningStartHandler) eventSource.off?.(event_types.STREAM_REASONING_STARTED, _reasoningStartHandler);
-      if (eventSource && _reasoningEndHandler) eventSource.off?.(event_types.STREAM_REASONING_DONE, _reasoningEndHandler);
     } catch (e) { /* ignore */ }
     if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
     perMessageBuffers.clear();
@@ -619,8 +587,6 @@ jQuery(async () => {
     eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
     eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
     eventSource.on(event_types.CHAT_CHANGED, _chatChangedHandler);
-    eventSource.on(event_types.STREAM_REASONING_STARTED, _reasoningStartHandler);
-    eventSource.on(event_types.STREAM_REASONING_DONE, _reasoningEndHandler);
   } catch (e) {
     console.error("CostumeSwitch: failed to attach event handlers:", e);
   }
