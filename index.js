@@ -1,261 +1,437 @@
-// index.js - SillyTavern-CostumeSwitch
-// Keep relative imports like the official examples
+// index.js - SillyTavern-CostumeSwitch (MutationObserver + direct slash-command execution)
+// Drop into: data/default-user/extensions/SillyTavern-CostumeSwitch/index.js
+
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
-const extensionName = "SillyTavern-CostumeSwitch";
-const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+const EXT_NAME = "SillyTavern-CostumeSwitch";
+const EXT_FOLDER = `scripts/extensions/third-party/${EXT_NAME}`;
 
-// default settings
 const DEFAULTS = {
   enabled: true,
-  resetTimeoutMs: 3000,
-  patterns: ["Shido", "Kotori"], // default simple names (one per line in UI)
-  defaultCostume: "" // empty => use current character's own folder
+  patterns: ["Shido", "Kotori"], // one per line in UI
+  defaultCostume: "Date a Live",  // exact arg used for manual reset (works for you)
+  resetTimeoutMs: 3000
 };
 
-// simple safe regex-building util (escape plain text)
-function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-// helper - read or init settings (works with either import-based or getContext() storage)
-function getSettingsObj() {
-  const ctx = getContext ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
-  // prefer context.extensionSettings when available
-  if (ctx && ctx.extensionSettings) {
-    ctx.extensionSettings[extensionName] = ctx.extensionSettings[extensionName] || structuredClone(DEFAULTS);
-    // ensure defaults are present (useful after updates)
-    for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(ctx.extensionSettings[extensionName], k)) ctx.extensionSettings[extensionName][k] = DEFAULTS[k];
-    }
-    return { store: ctx.extensionSettings, save: ctx.saveSettingsDebounced || saveSettingsDebounced, ctx };
-  }
-
-  // fallback to import-based extension_settings
-  if (typeof extension_settings !== 'undefined') {
-    extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
-    for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
-    }
-    return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
-  }
-
-  throw new Error("Can't find SillyTavern extension settings storage.");
-}
-
-// small utility to build a combined regex from pattern list
-function buildNameRegex(patternList) {
-  const escaped = patternList.map(p => {
-    // if the user provided something that looks like /.../ flags, try to honor it:
-    const trimmed = (p || '').trim();
-    if (!trimmed) return null;
-    const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
-    if (m) return `(${m[1]})`;
-    // else escape plain string
-    return `(${escapeRegex(trimmed)})`;
-  }).filter(Boolean);
-
-  if (escaped.length === 0) return null;
-  // match "Name:" with optional whitespace before colon; case-insensitive
-  return new RegExp(`\\b(?:${escaped.join('|')})\\s*:`, 'i');
-}
-
-// store runtime buffers per-message so we can check mid-stream
-const perMessageBuffers = new Map();
-let lastIssuedCostume = null;
+let settingsStorage = null;
+let saveSettingsFn = null;
+let ctx = null;
+let nameRegex = null;
+let observer = null;
+let lastDetectedCharacter = null;
 let resetTimer = null;
+const buffers = { currentText: "" };
 
-jQuery(async () => {
-  const { store, save, ctx } = getSettingsObj();
-  const settings = store[extensionName];
+// ---------- Helpers ----------
+function safeLog(...args) { try { console.log("[CostumeSwitch]", ...args); } catch(e){} }
+function safeWarn(...args) { try { console.warn("[CostumeSwitch]", ...args); } catch(e){} }
+function safeError(...args) { try { console.error("[CostumeSwitch]", ...args); } catch(e){}; }
 
-  // load settings UI HTML
-  try {
-    const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
-    $("#extensions_settings").append(settingsHtml);
-  } catch (e) {
-    console.warn("Failed to load settings.html:", e);
-    // If load fails, create a minimal UI container
-    $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
-  }
-
-  // initialize UI values
-  $("#cs-enable").prop("checked", !!settings.enabled);
-  $("#cs-patterns").val((settings.patterns || []).join("\n"));
-  $("#cs-default").val(settings.defaultCostume || "");
-  $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-  $("#cs-status").text("Ready");
-
-  // a tiny helper to persist
-  function persistSettings() {
-    if (save) save();
-    $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
-    setTimeout(()=>$("#cs-status").text(""), 1500);
-  }
-
-  $("#cs-save").on("click", () => {
-    settings.enabled = !!$("#cs-enable").prop("checked");
-    settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    settings.defaultCostume = $("#cs-default").val().trim();
-    settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
-    persistSettings();
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function buildRegexFromPatterns(patterns) {
+  const arr = (patterns || []).map(p => (p||'').trim()).filter(Boolean);
+  if (!arr.length) return null;
+  const pieces = arr.map(p => {
+    const m = p.match(/^\/(.+)\/([gimsuy]*)$/);
+    return m ? `(${m[1]})` : `(${escapeRegex(p)})`;
   });
+  return new RegExp(`\\b(?:${pieces.join('|')})\\s*:`, 'i');
+}
 
-  $("#cs-reset").on("click", async () => {
-    await manualReset();
-  });
+function getContextSafe() {
+  try { if (typeof getContext === 'function') return getContext(); } catch(e) {}
+  try { if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') return SillyTavern.getContext(); } catch(e) {}
+  return null;
+}
 
-  // get ST context (eventSource, event_types, characters, etc.)
-  const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
-  if (!realCtx) {
-    console.error("SillyTavern context not found. Extension won't run.");
+function ensureSettings() {
+  // prefer live context storage, fallback to extension_settings import
+  ctx = getContextSafe();
+  if (ctx && ctx.extensionSettings) {
+    ctx.extensionSettings[EXT_NAME] = ctx.extensionSettings[EXT_NAME] || structuredClone(DEFAULTS);
+    settingsStorage = ctx.extensionSettings;
+    saveSettingsFn = ctx.saveSettingsDebounced || saveSettingsDebounced;
     return;
   }
-  const { eventSource, event_types, characters } = realCtx;
+  if (typeof extension_settings !== 'undefined') {
+    extension_settings[EXT_NAME] = extension_settings[EXT_NAME] || structuredClone(DEFAULTS);
+    settingsStorage = extension_settings;
+    saveSettingsFn = saveSettingsDebounced;
+    ctx = null;
+    return;
+  }
+  throw new Error("CostumeSwitch: cannot find extension settings storage.");
+}
 
-  // Build initial regex
-  let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
+function getSettings() {
+  return (settingsStorage && settingsStorage[EXT_NAME]) || DEFAULTS;
+}
 
-  // rebuild regex when user saves new patterns
-  // (we already bound Save button to update settings, here we listen to our store)
-  // If saveSettingsDebounced triggers some event for settings, we could listen. For simplicity, re-read when Save pressed:
-  $("#cs-save").on("click", () => {
-    nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
-  });
-
-  // manual reset helper
-  async function manualReset() {
-    // choose default costume:
-    let costumeArg = settings.defaultCostume || "";
-    if (!costumeArg) {
-      // use current character name as both folder and name (typical)
-      const ch = realCtx.characters?.[realCtx.characterId];
-      if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
+// Execute slash command using the most-direct available API so it works mid-stream
+async function executeSlashCommand(command) {
+  try {
+    // 1) ctx.slashCommands.execute (preferred)
+    if (ctx && ctx.slashCommands && typeof ctx.slashCommands.execute === 'function') {
+      safeLog("executeSlashCommand -> using ctx.slashCommands.execute:", command);
+      const res = ctx.slashCommands.execute(command);
+      if (res && typeof res.then === 'function') await res;
+      return true;
     }
-    if (!costumeArg) {
-      $("#cs-status").text("No default costume defined.");
+    // 2) common global fn names
+    const globalCandidates = [
+      window.processSlashCommand,
+      window.processCommand,
+      window.handleSlashCommand,
+      window.process_input_command,
+      (window.SillyTavern && window.SillyTavern.processCommand) ? window.SillyTavern.processCommand : null,
+      (window.SillyTavern && window.SillyTavern.handleCommand) ? window.SillyTavern.handleCommand : null,
+    ];
+    for (const fn of globalCandidates) {
+      if (typeof fn === 'function') {
+        safeLog("executeSlashCommand -> using global function:", fn.name || fn);
+        const r = fn(command);
+        if (r && typeof r.then === 'function') await r;
+        return true;
+      }
+    }
+    // 3) best-effort: emit MESSAGE_SENT (some ST setups may process this)
+    if (ctx && ctx.eventSource && ctx.event_types && typeof ctx.eventSource.emit === 'function') {
+      safeLog("executeSlashCommand -> emitting MESSAGE_SENT (fallback):", command);
+      await ctx.eventSource.emit(ctx.event_types.MESSAGE_SENT || 'message_sent', { message: command, name: ctx.characters?.[ctx.characterId]?.name || '' });
+      return true;
+    }
+    safeWarn("executeSlashCommand: no command runner found to execute:", command);
+    return false;
+  } catch (err) {
+    safeError("executeSlashCommand error:", err);
+    return false;
+  }
+}
+
+// Fallback: try to type in the chat input and click send (only used if direct execution fails)
+function inputSendFallback(command) {
+  try {
+    safeLog("inputSendFallback -> attempting to send via chat input:", command);
+    const selectors = [
+      '#prompt', '#prompt_input', '#send_textarea', '#send_input', '#chat_input', 'textarea#prompt', 'textarea#chat_input', 'textarea'
+    ];
+    let inputEl = null;
+    for (const s of selectors) {
+      const el = document.querySelector(s);
+      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) { inputEl = el; break; }
+    }
+    if (!inputEl) { safeWarn("inputSendFallback: input element not found"); return false; }
+
+    const sendBtnSelectors = ['button[data-action="send"]', 'button.send', 'button#send', 'button[type="submit"]', 'button[title="Send"]'];
+    let sendBtn = null;
+    for (const s of sendBtnSelectors) {
+      const b = document.querySelector(s);
+      if (b) { sendBtn = b; break; }
+    }
+
+    // fill input
+    if (inputEl.tagName === 'TEXTAREA' || inputEl.tagName === 'INPUT') {
+      inputEl.focus();
+      inputEl.value = command;
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (inputEl.isContentEditable) {
+      inputEl.focus();
+      inputEl.innerText = command;
+      inputEl.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    } else {
+      safeWarn("inputSendFallback: unsupported input element");
+      return false;
+    }
+
+    if (sendBtn && !sendBtn.disabled) {
+      sendBtn.click();
+      safeLog("inputSendFallback: clicked send button");
+      return true;
+    } else if (sendBtn && sendBtn.disabled) {
+      safeWarn("inputSendFallback: send button is disabled (likely streaming in progress)");
+      return false;
+    } else {
+      // try to submit enclosing form
+      const form = inputEl.closest('form');
+      if (form) {
+        try { form.requestSubmit ? form.requestSubmit() : form.submit(); safeLog("inputSendFallback: submitted enclosing form"); return true; } catch(e){ safeWarn("inputSendFallback form submit failed", e); return false; }
+      }
+    }
+    return false;
+  } catch (e) {
+    safeError("inputSendFallback error:", e);
+    return false;
+  }
+}
+
+// Unified function to run a /costume command; tries direct execution first, falls back to input-send.
+async function runCostumeCommand(rawArg) {
+  if (!rawArg) return false;
+  const command = `/costume ${rawArg}`;
+  safeLog("runCostumeCommand -> attempting:", command);
+
+  // 1) try direct runner
+  const didDirect = await executeSlashCommand(command);
+  if (didDirect) { safeLog("runCostumeCommand -> executed via direct runner"); return true; }
+
+  // 2) fallback to input-send (may be blocked during streaming)
+  const didInput = inputSendFallback(command);
+  if (didInput) { safeLog("runCostumeCommand -> executed via input-send fallback"); return true; }
+
+  // 3) queue until generation ends (if ctx available) and try then
+  if (ctx && ctx.eventSource && ctx.event_types) {
+    safeLog("runCostumeCommand -> queuing command until generation ends:", command);
+    pendingQueueCommand(command);
+    return true;
+  }
+
+  safeWarn("runCostumeCommand -> could not execute command by any method.");
+  return false;
+}
+
+// If direct methods are unavailable, queue a command and send when generation ends.
+let queuedCommand = null;
+function pendingQueueCommand(command) {
+  queuedCommand = command;
+  // listen once for generation end events
+  try {
+    const et = ctx.event_types;
+    ctx.eventSource.once(et.GENERATION_ENDED || 'GENERATION_ENDED', async () => {
+      safeLog("pendingQueueCommand -> generation ended, trying queued command:", queuedCommand);
+      if (queuedCommand) {
+        // try direct runner then input fallback
+        const ok = await executeSlashCommand(queuedCommand) || inputSendFallback(queuedCommand);
+        safeLog("pendingQueueCommand -> attempted queued command, success:", !!ok);
+        queuedCommand = null;
+      }
+    });
+  } catch (e) {
+    safeError("pendingQueueCommand error:", e);
+  }
+}
+
+// ---------- MutationObserver logic ----------
+function handleMutations(mutationsList) {
+  try {
+    let newText = "";
+    for (const mut of mutationsList) {
+      if (mut.type === "characterData") {
+        // some MutationRecords have oldValue; guard
+        const added = (mut.target && mut.target.textContent) || "";
+        newText += added;
+      } else if (mut.type === "childList") {
+        for (const node of mut.addedNodes) {
+          if (node && node.textContent) newText += node.textContent;
+        }
+      }
+    }
+    if (!newText) return;
+
+    buffers.currentText += newText;
+
+    if (!nameRegex) return;
+    const m = buffers.currentText.match(nameRegex);
+    if (m) {
+      // find the first non-empty capture (pattern groups)
+      let matched = null;
+      for (let i = 1; i < m.length; i++) {
+        if (m[i]) { matched = m[i].replace(/\s*:/,'').trim(); break; }
+      }
+      if (matched && matched !== lastDetectedCharacter) {
+        lastDetectedCharacter = matched;
+        safeLog("handleMutations -> detected speaker:", matched);
+        // default behavior: try costume using name/name (you can change mapping later)
+        const candidateArg = `${matched}/${matched}`;
+        runCostumeCommand(candidateArg).then(() => {
+          // reset timer
+          clearTimeout(resetTimer);
+          resetTimer = setTimeout(() => {
+            // revert to default
+            const s = getSettings();
+            if (s && s.defaultCostume) {
+              runCostumeCommand(s.defaultCostume);
+            }
+            lastDetectedCharacter = null;
+          }, (getSettings().resetTimeoutMs || DEFAULTS.resetTimeoutMs));
+        });
+      }
+    }
+  } catch (err) {
+    safeError("handleMutations error:", err);
+  }
+}
+
+function startObservingLastMessage() {
+  try {
+    if (!getSettings().enabled) { safeLog("startObservingLastMessage -> disabled by settings"); return; }
+    // selector from community guide; adapt if ST updates markup
+    const lastMsg = document.querySelector('#chat > .mes:last-child.mes_text') || document.querySelector('#chat .mes:last-child');
+    if (!lastMsg) { safeWarn("startObservingLastMessage -> no last message node found"); return; }
+    buffers.currentText = lastMsg.textContent || "";
+    lastDetectedCharacter = null;
+    if (!observer) {
+      observer = new MutationObserver(handleMutations);
+    } else {
+      observer.disconnect();
+    }
+    // Observe for characterData, childList and subtree changes
+    observer.observe(lastMsg, { childList: true, subtree: true, characterData: true });
+    safeLog("startObservingLastMessage -> observing node:", lastMsg);
+  } catch (e) {
+    safeError("startObservingLastMessage error:", e);
+  }
+}
+
+function stopObserving() {
+  try {
+    if (observer) observer.disconnect();
+    if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+    // final reset if desired
+    const s = getSettings();
+    if (s && s.defaultCostume && lastDetectedCharacter !== null) {
+      runCostumeCommand(s.defaultCostume);
+    }
+    lastDetectedCharacter = null;
+    buffers.currentText = "";
+    safeLog("stopObserving -> observer stopped and cleaned up");
+  } catch (e) {
+    safeError("stopObserving error:", e);
+  }
+}
+
+// ---------- UI injection ----------
+function buildSettingsUI() {
+  try {
+    const settingsDiv = document.querySelector('#extensions_settings > .container') || document.querySelector('#extensions_settings');
+    if (!settingsDiv) {
+      safeWarn("buildSettingsUI -> extension settings container not found");
       return;
     }
-    // emit a MESSAGE_SENT event with the slash command
-    await eventSource.emit(event_types.MESSAGE_SENT, {
-      message: `/costume ${costumeArg}`,
-      // name field may be optional; supply current character name if available
-      name: realCtx.characters?.[realCtx.characterId]?.name || ''
+
+    // Avoid multiple inserts
+    if (document.querySelector('.st-costume-switcher-card')) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'st-costume-switcher-card';
+    wrapper.style.padding = '8px';
+    wrapper.style.marginTop = '10px';
+    wrapper.style.border = '1px solid var(--border-color,#444)';
+    wrapper.style.borderRadius = '6px';
+    wrapper.innerHTML = `
+      <h3 style="margin:0 0 8px 0;">Costume Switcher</h3>
+      <label><input id="cs-enable" type="checkbox"> Enable real-time switching</label>
+      <div style="margin-top:8px;">
+        <label style="display:block;font-size:0.9em">Character name patterns (one per line)</label>
+        <textarea id="cs-patterns" rows="4" style="width:100%;"></textarea>
+      </div>
+      <div style="margin-top:8px;">
+        <label style="display:block;font-size:0.9em">Default costume (exact arg for /costume)</label>
+        <input id="cs-default" type="text" style="width:100%;" placeholder="e.g. Date a Live">
+      </div>
+      <div style="margin-top:8px;">
+        <label>Reset timeout (ms): <input id="cs-timeout" type="number" min="500" style="width:120px"></label>
+      </div>
+      <div style="margin-top:10px;">
+        <button id="cs-save">Save</button>
+        <button id="cs-reset" style="margin-left:8px;">Manual Reset Costume</button>
+        <span id="cs-status" style="margin-left:10px;color:#aaa"></span>
+      </div>
+    `;
+    settingsDiv.appendChild(wrapper);
+
+    const s = getSettings();
+    document.getElementById('cs-enable').checked = !!s.enabled;
+    document.getElementById('cs-patterns').value = (s.patterns || []).join("\n");
+    document.getElementById('cs-default').value = s.defaultCostume || "";
+    document.getElementById('cs-timeout').value = s.resetTimeoutMs || DEFAULTS.resetTimeoutMs;
+
+    document.getElementById('cs-save').addEventListener('click', () => {
+      s.enabled = !!document.getElementById('cs-enable').checked;
+      s.patterns = document.getElementById('cs-patterns').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+      s.defaultCostume = document.getElementById('cs-default').value.trim();
+      s.resetTimeoutMs = parseInt(document.getElementById('cs-timeout').value || DEFAULTS.resetTimeoutMs, 10);
+      if (saveSettingsFn) saveSettingsFn();
+      nameRegex = buildRegexFromPatterns(s.patterns || DEFAULTS.patterns);
+      document.getElementById('cs-status').textContent = "Saved";
+      setTimeout(()=>document.getElementById('cs-status').textContent = "", 1200);
+      safeLog("Settings saved:", s);
     });
-    lastIssuedCostume = costumeArg;
-    $("#cs-status").text(`Reset -> ${costumeArg}`);
-    setTimeout(()=>$("#cs-status").text(""), 1500);
-  }
 
-  // function to issue costume switch when a new character is detected
-  async function issueCostumeForName(name) {
-    if (!name) return;
-    // Format: /costume character_name/folder_name
-    // Use the simple convention <name>/<name>. You can enhance with mappings later.
-    const arg = `${name}/${name}`;
-    // avoid spam if already set
-    if (arg === lastIssuedCostume) return;
-    await eventSource.emit(event_types.MESSAGE_SENT, {
-      message: `/costume ${arg}`,
-      name: realCtx.characters?.[realCtx.characterId]?.name || ''
+    document.getElementById('cs-reset').addEventListener('click', async () => {
+      const s = getSettings();
+      if (!s.defaultCostume) {
+        safeWarn("Manual reset: no default costume configured");
+        return;
+      }
+      // execute immediately via direct runner
+      const ok = await runCostumeCommand(s.defaultCostume);
+      safeLog("Manual reset attempted, ok:", ok);
     });
-    lastIssuedCostume = arg;
-    $("#cs-status").text(`Switched -> ${arg}`);
-    setTimeout(()=>$("#cs-status").text(""), 1000);
+  } catch (e) {
+    safeError("buildSettingsUI error:", e);
   }
+}
 
-  // reset timer management
-  function scheduleResetIfIdle() {
-    if (resetTimer) clearTimeout(resetTimer);
-    resetTimer = setTimeout(() => {
-      // if defaultCostume configured, use it; else use character folder
-      (async () => {
-        let costumeArg = settings.defaultCostume || "";
-        if (!costumeArg) {
-          const ch = realCtx.characters?.[realCtx.characterId];
-          if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
-        }
-        if (costumeArg) {
-          await eventSource.emit(event_types.MESSAGE_SENT, { message: `/costume ${costumeArg}`, name: realCtx.characters?.[realCtx.characterId]?.name || '' });
-          lastIssuedCostume = costumeArg;
-          $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
-          setTimeout(()=>$("#cs-status").text(""), 1200);
-        }
-      })();
-    }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-  }
+// ---------- Startup: wire into ST events ----------
+jQuery(async () => {
+  try {
+    safeLog("Initializing CostumeSwitch extension...");
+    ensureSettings();
+    const s = getSettings();
+    nameRegex = buildRegexFromPatterns(s.patterns || DEFAULTS.patterns);
 
-  // STREAM_TOKEN_RECEIVED fires on every token/chunk (good for mid-stream detection). Use fallback to MESSAGE_RECEIVED if not available.
-  const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
+    // Build settings UI when DOM ready
+    try { buildSettingsUI(); } catch(e) { safeWarn("UI build failed:", e); }
 
-  // message buffer and detection:
-  eventSource.on(streamEventName, (...args) => {
-    try {
-      if (!settings.enabled) return;
-
-      // Determine token text and message id from args - shape can vary by ST version.
-      // Common shapes: (messageId, token) OR ({ token, messageId }) OR (tokenString)
-      let tokenText = "";
-      let messageId = null;
-
-      if (typeof args[0] === 'number') {
-        messageId = args[0];
-        tokenText = String(args[1] ?? "");
-      } else if (typeof args[0] === 'string' && args.length === 1) {
-        tokenText = args[0];
-      } else if (args[0] && typeof args[0] === 'object') {
-        tokenText = String(args[0].token ?? args[0].text ?? "");
-        messageId = args[0].messageId ?? args[1] ?? null;
-      } else {
-        tokenText = String(args.join(' ') || "");
-      }
-
-      if (!tokenText) return;
-
-      // decide a key for buffer; prefer messageId if known, else use 'live'
-      const bufKey = messageId != null ? `m${messageId}` : 'live';
-      const prev = perMessageBuffers.get(bufKey) || "";
-      const combined = prev + tokenText;
-      perMessageBuffers.set(bufKey, combined);
-
-      // run regex search on the combined text for "Name:" pattern
-      if (!nameRegex) return;
-      const m = combined.match(nameRegex);
-      if (m) {
-        // extract the matched name (strip trailing colon/space)
-        // find first capture group that matched (m[1]..)
-        let matchedName = null;
-        for (let i = 1; i < m.length; i++) {
-          if (m[i]) { matchedName = m[i].replace(/\s*:/, '').trim(); break; }
-        }
-        if (matchedName) {
-          // issue costume immediately (no awaiting to avoid blocking stream processing)
-          issueCostumeForName(matchedName);
-          // reset idle timer
-          scheduleResetIfIdle();
-        }
-      }
-    } catch (err) {
-      console.error("CostumeSwitch stream handler error:", err);
+    // Acquire context (again) and hook generation events
+    ctx = ctx || getContextSafe();
+    if (!ctx) {
+      safeWarn("SillyTavern context not found; extension will remain inactive until context available.");
+      // Try one more time later (after app_ready)
+      document.addEventListener('DOMContentLoaded', () => { buildSettingsUI(); ctx = getContextSafe(); });
+      return;
     }
-  });
 
-  // Also listen for GENERATION_ENDED and MESSAGE_RECEIVED to clear buffers for finished message ids
-  eventSource.on(event_types.GENERATION_ENDED, (messageId) => {
-    if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
-    scheduleResetIfIdle();
-  });
+    // Listen to generation lifecycle events to start/stop observer
+    const es = ctx.eventSource;
+    const et = ctx.event_types || {};
+    const genStart = et.GENERATION_AFTER_COMMANDS || et.GENERATION_STARTED || 'GENERATION_AFTER_COMMANDS';
+    const genEnd = et.GENERATION_ENDED || 'GENERATION_ENDED';
+    const genStop = et.GENERATION_STOPPED || 'GENERATION_STOPPED';
 
-  eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
-    // sometimes MESSAGE_RECEIVED means full message is present; clear older buffers
-    if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
-  });
+    try {
+      es.on(genStart, () => {
+        safeLog("Generation started - starting observer");
+        // small delay to let the DOM create the last message node
+        setTimeout(startObservingLastMessage, 40);
+      });
+      es.on(genEnd, () => {
+        safeLog("Generation ended - stopping observer");
+        stopObserving();
+        // if a queued command exists, pendingQueueCommand will handle it when generation ends
+      });
+      es.on(genStop, () => {
+        safeLog("Generation stopped - stopping observer");
+        stopObserving();
+      });
+    } catch (e) {
+      safeWarn("Failed to attach to eventSource generation events:", e);
+    }
 
-  // When chat/character changes, clear state
-  eventSource.on(event_types.CHAT_CHANGED, () => {
-    perMessageBuffers.clear();
-    lastIssuedCostume = null;
-  });
+    // Also watch for manual toggles to reload the regex
+    // Not strictly necessary but helpful: re-build regex when settings change externally
+    if (ctx && ctx.eventSource && ctx.event_types) {
+      try {
+        ctx.eventSource.on(ctx.event_types.SETTINGS_UPDATED || 'settings_updated', () => {
+          const s2 = getSettings();
+          nameRegex = buildRegexFromPatterns(s2.patterns || DEFAULTS.patterns);
+        });
+      } catch(e){ /* ignore */ }
+    }
 
-  // done
-  console.log("SillyTavern-CostumeSwitch loaded.");
+    safeLog("CostumeSwitch initialized. Patterns regex:", nameRegex);
+  } catch (err) {
+    safeError("CostumeSwitch init error:", err);
+  }
 });
