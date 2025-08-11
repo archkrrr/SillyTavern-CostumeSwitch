@@ -559,19 +559,27 @@ jQuery(async () => {
             }
           }
 
-          // 4) simple name-in-token scan on window (case-insensitive) — accept only if overlap
+          // 4) simple name-in-token scan on window (case-insensitive)
+          // FIX: use findNonQuotedMatches on the small window so matches inside quotes are excluded reliably
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names.length) {
               const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'i');
-              const mm = anyNameRe.exec(window);
-              if (mm && mm[1]) {
-                const mmIdx = mm.index || 0;
-                if (matchOverlapsNewToken(mmIdx, mm[0].length)) {
-                  const posInCombined = windowOffset + mmIdx;
-                  if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) matchedName = mm[1].trim();
-                } else {
-                  if (settings.debug) console.debug("CS debug: name-in-window match ignored (entirely in prev buffer).");
+              const matches = findNonQuotedMatches(window, anyNameRe, windowQuoteRanges);
+              if (matches.length) {
+                // choose first match in window that overlaps into new token
+                for (const mm of matches) {
+                  if (!matchOverlapsNewToken(mm.index, mm.match.length)) {
+                    if (settings.debug) console.debug("CS debug: name-in-window match ignored (entirely in prev buffer).", mm);
+                    continue;
+                  }
+                  const posInCombined = windowOffset + mm.index;
+                  if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
+                    matchedName = (mm.groups && mm.groups[0]) ? mm.groups[0].trim() : mm.match;
+                    break;
+                  } else {
+                    if (settings.debug) console.debug("CS debug: name-in-window match skipped due to quotes", mm);
+                  }
                 }
               }
             }
@@ -710,7 +718,7 @@ jQuery(async () => {
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
   eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.0 — quote-aware) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.1 — quick-window quote fix) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
