@@ -23,6 +23,27 @@
     </div>
 
     <div style="margin-top:8px;">
+      <label>Cooldowns (ms)</label>
+      <div class="costume-switcher-settings inline-group" style="gap:8px;">
+        <div style="min-width:140px">
+          <label style="display:block; font-size:90%;">Global switch cooldown</label>
+          <input id="cs-global-cooldown" type="number" min="0" step="100" style="width:100%" />
+        </div>
+        <div style="min-width:140px">
+          <label style="display:block; font-size:90%;">Per-trigger cooldown</label>
+          <input id="cs-per-cooldown" type="number" min="0" step="50" style="width:100%" />
+        </div>
+        <div style="min-width:140px">
+          <label style="display:block; font-size:90%;">Failed-trigger cooldown</label>
+          <input id="cs-failed-cooldown" type="number" min="0" step="500" style="width:100%" />
+        </div>
+      </div>
+      <div style="font-size:90%; opacity:0.85; margin-top:4px;">
+        Tunable cooldowns to reduce thrashing or repeated failed attempts to trigger non-existent quick replies.
+      </div>
+    </div>
+
+    <div style="margin-top:8px;">
       <label>
         <input id="cs-narration" type="checkbox" />
         Enable loose narration fallback
@@ -33,11 +54,22 @@
       </div>
     </div>
 
+    <div style="margin-top:8px;">
+      <label>
+        <input id="cs-debug" type="checkbox" />
+        Enable debug logging
+      </label>
+      <div style="font-size:90%; opacity:0.8; margin-top:4px;">
+        When enabled, the extension will print helpful debug lines to the browser console (buffers, matches).
+      </div>
+    </div>
+
     <div style="margin-top:12px;">
       <button id="cs-reset">Manual Reset Costume</button>
       <button id="cs-save" style="margin-left:8px;">Save</button>
     </div>
 
     <div id="cs-status" style="margin-top:8px; opacity:0.8;"></div>
+    <div class="costume-switcher-note">Tip: Save after editing patterns so regexes are rebuilt immediately.</div>
   </div>
 </details>
