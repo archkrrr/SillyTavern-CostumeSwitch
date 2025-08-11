@@ -428,7 +428,6 @@ jQuery(async () => {
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
     if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
       if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
-      scheduleResetIfIdle();
       return;
     }
 
@@ -530,7 +529,6 @@ jQuery(async () => {
           }
       }
 
-      scheduleResetIfIdle();
 
       if (settings.debug) console.debug("CS debug:", { bufKey, bestMatch, state });
 
@@ -541,8 +539,7 @@ jQuery(async () => {
       if (messageId != null) { 
           perMessageBuffers.delete(`m${messageId}`); 
           perMessageStates.delete(`m${messageId}`); 
-      }
-      scheduleResetIfIdle(); 
+      } 
   };
   _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
   _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; };
