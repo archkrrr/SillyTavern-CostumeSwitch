@@ -1,13 +1,3 @@
-/* SillyTavern-CostumeSwitch - patched
-   - tighter flicker suppression / cooldowns
-   - debugLog helper
-   - failed-trigger cooldown handling
-   - mapping support (name -> costumeFolder)
-   - safer regex validation & UI feedback
-   - deterministic LRU trimming
-   - LIVE pattern recompile on UI input (fixes "must edit index.js to add Reine")
-*/
-
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
