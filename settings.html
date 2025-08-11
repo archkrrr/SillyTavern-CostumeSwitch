@@ -1,240 +1,43 @@
-<!-- settings.html - Costume Switch (pixel-match header by cloning existing panel) -->
-<style>
-/* Fallback card styling (used only if cloning fails) */
-.cs-fallback {
-  margin-bottom: 8px;
-  border-radius: 6px;
-  background: rgba(0,0,0,0.02);
-}
-.cs-body {
-  padding: 10px;
-  color: #dfe8ee;
-}
+<div class="st-ext-card" style="padding:8px;">
+  <h3>Costume Switch</h3>
 
-/* Dark inputs for both clone and fallback */
-.cs-body input[type="text"],
-.cs-body input[type="number"],
-.cs-body textarea,
-.cs-body select {
-  background-color: rgba(255,255,255,0.03) !important;
-  color: #e8eef2 !important;
-  border: 1px solid rgba(255,255,255,0.06) !important;
-  box-shadow: none !important;
-  outline: none !important;
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 13px;
-  -webkit-font-smoothing: subpixel-antialiased;
-  text-rendering: optimizeLegibility;
-}
-.cs-body textarea { min-height:110px; resize: vertical; }
+  <label>
+    <input id="cs-enable" type="checkbox" />
+    Enable real-time switching
+  </label>
 
-/* Buttons */
-.cs-body button {
-  background: rgba(255,255,255,0.035);
-  color: #eaeef0;
-  border: 1px solid rgba(255,255,255,0.06);
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-.cs-body small, .cs-body .help { color: #95a0a6; }
-
-/* Small helper to ensure cloned header and content align */
-.cs-cloned-container { margin-bottom: 6px; }
-
-/* Hidden-by-default content area used while cloning runs */
-.cs-hidden { display: none; }
-</style>
-
-<!-- container used while we find/clone a real header. We put the real content inside .cs-body -->
-<div id="cs-root" class="cs-cloned-container cs-hidden" aria-hidden="true">
-  <div class="cs-body">
-    <label>
-      <input id="cs-enable" type="checkbox" />
-      Enable real-time switching
-    </label>
-
-    <div style="margin-top:8px;">
-      <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
-      <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>Default costume folder (optional):</label><br/>
-      <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
-      <small>Leave blank to use current character's own folder.</small>
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>Reset timeout (ms):</label>
-      <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
-    </div>
-
-    <div style="margin-top:8px;">
-      <label>
-        <input id="cs-narration" type="checkbox" />
-        Enable loose narration fallback
-      </label>
-      <div style="font-size:90%; color:#666; margin-top:4px;">
-        If enabled, the extension will try to auto-switch on loose name mentions <strong>outside</strong> quotes
-        (useful for narrative-style AI output). Disabled by default to avoid false switches.
-      </div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <button id="cs-reset">Manual Reset Costume</button>
-      <button id="cs-save" style="margin-left:8px;">Save</button>
-    </div>
-
-    <div id="cs-status" style="margin-top:8px;color:#777;"></div>
+  <div style="margin-top:8px;">
+    <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
+    <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
   </div>
+
+  <div style="margin-top:8px;">
+    <label>Default costume folder (optional):</label><br/>
+    <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
+    <small>Leave blank to use current character's own folder.</small>
+  </div>
+
+  <div style="margin-top:8px;">
+    <label>Reset timeout (ms):</label>
+    <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
+  </div>
+
+  <!-- NEW: Narration fallback toggle -->
+  <div style="margin-top:8px;">
+    <label>
+      <input id="cs-narration" type="checkbox" />
+      Enable loose narration fallback
+    </label>
+    <div style="font-size:90%; color:#666; margin-top:4px;">
+      If enabled, the extension will try to auto-switch on loose name mentions **outside** quotes
+      (useful for narrative-style AI output). Disabled by default to avoid false switches.
+    </div>
+  </div>
+
+  <div style="margin-top:12px;">
+    <button id="cs-reset">Manual Reset Costume</button>
+    <button id="cs-save" style="margin-left:8px;">Save</button>
+  </div>
+
+  <div id="cs-status" style="margin-top:8px;color:#777;"></div>
 </div>
-
-<script>
-/*
-  Strategy:
-  1) Try to locate an existing extension panel header in the Extensions UI and clone it (so our panel header
-     visually matches the other ones exactly).
-  2) Insert our cloned header + content into the extensions list.
-  3) Wire the header's toggle logic so clicking it expands/collapses our content to match UX.
-  4) If cloning fails (unexpected DOM), fall back to inserting a neutral-styled card using .cs-fallback.
-*/
-
-(function() {
-  const root = document.getElementById('cs-root');
-  if (!root) return;
-
-  function findCloneSource() {
-    // try multiple selectors to find a representative extension header element used by the UI
-    const selectors = [
-      '#extensions_settings .st-ext-card > summary',   // some builds use <summary>
-      '#extensions_settings details.st-ext-card > summary',
-      '#extensions_settings .st-ext-card .st-ext-header', // hypothetical header class
-      '#extensions_settings details',                  // generic details elements
-      '#extensions_settings .st-ext-card'              // fallback: a card wrapper
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) return el;
-    }
-    return null;
-  }
-
-  function insertClonedPanel(headerSource) {
-    // We'll clone the headerSource's immediate header container (if summary, clone its parent details if exists)
-    let headerToClone = headerSource;
-    if (headerSource.tagName.toLowerCase() === 'summary' && headerSource.parentElement) {
-      headerToClone = headerSource.parentElement; // clone the <details> so we keep header/chevron
-    } else {
-      // climb up to a likely wrapper with similar look
-      let p = headerSource.closest('.st-ext-card') || headerSource.parentElement || headerSource;
-      headerToClone = p;
-    }
-
-    const clone = headerToClone.cloneNode(true);
-    // sanitize: remove any IDs to avoid duplicates
-    clone.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
-
-    // try to set the title text inside the clone to "Costume Switch"
-    let titleSet = false;
-    // common places where the title text lives:
-    ['summary','h3','.title','.st-ext-title','.header-text'].forEach(sel => {
-      if (titleSet) return;
-      const t = clone.querySelector(sel);
-      if (t) { t.textContent = 'Costume Switch'; titleSet = true; }
-    });
-    if (!titleSet) {
-      // fallback: update first text node inside clone
-      const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
-      const node = walker.nextNode();
-      if (node && node.nodeValue && node.nodeValue.trim()) node.nodeValue = 'Costume Switch';
-    }
-
-    // place the clone and the content near the top of the extensions list for visibility
-    const parent = document.querySelector('#extensions_settings') || document.body;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'cs-cloned-wrapper';
-    wrapper.appendChild(clone);
-    wrapper.appendChild(root);
-    // make visible
-    root.classList.remove('cs-hidden');
-    root.setAttribute('aria-hidden', 'false');
-
-    // insert before the end of the extensions list
-    parent.insertBefore(wrapper, parent.firstChild);
-
-    // toggle behaviour: when the cloned header is clicked, toggle our content's display
-    // many cloned headers already have click handlers; to be safe, we attach our own
-    clone.style.cursor = 'pointer';
-    clone.addEventListener('click', (ev) => {
-      // attempt to preserve any "open" attribute if we cloned a <details>
-      const details = clone.tagName.toLowerCase() === 'details' ? clone : null;
-      if (details) {
-        // toggle the details open state and mirror it onto our content
-        const isOpen = details.hasAttribute('open');
-        if (isOpen) details.removeAttribute('open'); else details.setAttribute('open', '');
-        root.style.display = isOpen ? 'none' : '';
-      } else {
-        // toggle by toggling a class
-        if (root.style.display === 'none' || root.style.display === '') {
-          const currentlyHidden = root.style.display === 'none' || getComputedStyle(root).display === 'none';
-          root.style.display = currentlyHidden ? '' : 'none';
-        } else {
-          root.style.display = (root.style.display === 'none') ? '' : 'none';
-        }
-      }
-      // prevent double-click bubbling to avoid accidental triggers
-      ev.stopPropagation();
-    });
-
-    // ensure content starts visible (matching many extension panels)
-    root.style.display = '';
-  }
-
-  function insertFallback() {
-    const parent = document.querySelector('#extensions_settings') || document.body;
-    const fallback = document.createElement('div');
-    fallback.className = 'cs-fallback st-ext-card';
-    const inner = document.createElement('div');
-    inner.className = 'cs-body';
-    inner.innerHTML = root.innerHTML; // move contents into fallback
-    fallback.appendChild(inner);
-    // replace root with fallback
-    if (root.parentElement) root.parentElement.replaceChild(fallback, root);
-    // ensure visible
-    fallback.style.display = '';
-  }
-
-  // Run clone attempt when DOM looks ready. Use a small retry loop because SillyTavern builds UI dynamically.
-  let attempts = 0;
-  const maxAttempts = 10;
-  const tryClone = () => {
-    attempts++;
-    const source = findCloneSource();
-    if (source) {
-      try {
-        insertClonedPanel(source);
-        return;
-      } catch (e) {
-        console.warn('CostumeSwitch: clone insert failed, falling back.', e);
-      }
-    }
-    if (attempts < maxAttempts) {
-      setTimeout(tryClone, 200); // retry a few times while UI populates
-    } else {
-      // fallback
-      insertFallback();
-    }
-  };
-  // start attempt
-  tryClone();
-})();
-
-/* Note: the extension's index.js will look for elements by ID:
-   - #cs-enable, #cs-patterns, #cs-default, #cs-timeout, #cs-narration
-   - #cs-reset, #cs-save, #cs-status
-   This file provides those IDs inside the inserted content; the JS will work unchanged.
-*/
-</script>
