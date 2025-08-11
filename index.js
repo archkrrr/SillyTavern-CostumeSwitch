@@ -15,7 +15,11 @@ const DEFAULTS = {
   perTriggerCooldownMs: 250,
   failedTriggerCooldownMs: 10000,
   maxBufferChars: 2000,
-  repeatSuppressMs: 800
+
+  // NEW tunables (safe defaults)
+  tokenBoundarySize: 80,      // chars of prev buffer to include when quick-scanning tokens
+  pronounLookbackChars: 1400,   // how far back to search for names when resolving pronouns
+  repeatSuppressMs: 800         // suppress repeated accepted matches/logs for this many ms
 };
 
 function escapeRegex(s) {
@@ -98,39 +102,45 @@ function getQuoteRanges(s) {
   for (let i = 0; i + 1 < pos.length; i += 2) ranges.push([pos[i], pos[i + 1]]);
   return ranges;
 }
+function isIndexInsideQuotesRanges(ranges, idx) {
+  for (const [a, b] of ranges) if (idx > a && idx < b) return true;
+  return false;
+}
+function posIsInsideQuotes(pos, combined, quoteRanges) {
+  if (pos == null || !combined) return false;
+  if (quoteRanges && quoteRanges.length) {
+    if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
+  }
+  return isInsideQuotes(combined, pos);
+}
+function isInsideQuotes(text, pos) {
+  if (!text || pos <= 0) return false;
+  const before = text.slice(0, pos);
+  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
+  return (quoteCount % 2) === 1;
+}
 
-function findNonQuotedMatches(text, regex, quoteRanges) {
-  if (!text || !regex) return [];
-  const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
+function findNonQuotedMatches(combined, regex, quoteRanges) {
+  if (!combined || !regex) return [];
+  const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
+  const re = new RegExp(regex.source, flags);
   const results = [];
-  let match;
-
-  while ((match = re.exec(text)) !== null) {
-      let isQuoted = false;
-      const matchIndex = match.index;
-
-      for (const range of quoteRanges) {
-          if (matchIndex >= range[0] && matchIndex < range[1]) {
-              isQuoted = true;
-              break;
-          }
-      }
-
-      if (!isQuoted) {
-          results.push({ match: match[0], groups: match.slice(1), index: matchIndex });
-      }
-      if (match.index === re.lastIndex) {
-          re.lastIndex++;
-      }
+  let m;
+  while ((m = re.exec(combined)) !== null) {
+    const idx = m.index || 0;
+    if (!posIsInsideQuotes(idx, combined, quoteRanges)) {
+      results.push({ match: m[0], groups: m.slice(1), index: idx });
+    }
+    if (re.lastIndex === m.index) re.lastIndex++;
   }
   return results;
 }
 
 /**
- * Scans the full text buffer for the best character match based on a priority system.
+ * Scans the text for all match types, prioritizes them, and returns the single best candidate.
  */
-function findBestMatch(buffer, regexes, settings, quoteRanges) {
-    if (!buffer) return null;
+function findBestMatch(combined, regexes, settings, quoteRanges) {
+    if (!combined) return null;
 
     const allMatches = [];
     const { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex } = regexes;
@@ -138,38 +148,54 @@ function findBestMatch(buffer, regexes, settings, quoteRanges) {
     const priorities = {
         speaker: 5,
         attribution: 4,
-        action: 4, // Increased priority to match attribution
-        vocative: 2,
+        action: 3,
+        vocative: 3,
+        possessive: 2,
         name: 1,
     };
 
-    // Find matches for each type
+    // Speaker
     if (speakerRegex) {
-        findNonQuotedMatches(buffer, speakerRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(combined, speakerRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'speaker', matchIndex: m.index, priority: priorities.speaker });
         });
     }
+    // Attribution
     if (attributionRegex) {
-        findNonQuotedMatches(buffer, attributionRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(combined, attributionRegex, quoteRanges).forEach(m => {
             const name = m.groups?.find(g => g)?.trim();
             if (name) allMatches.push({ name, matchKind: 'attribution', matchIndex: m.index, priority: priorities.attribution });
         });
     }
+    // Action
     if (actionRegex) {
-        findNonQuotedMatches(buffer, actionRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(combined, actionRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'action', matchIndex: m.index, priority: priorities.action });
         });
     }
+    // Vocative
     if (vocativeRegex) {
-        findNonQuotedMatches(buffer, vocativeRegex, quoteRanges).forEach(m => {
+        findNonQuotedMatches(combined, vocativeRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
             if (name) allMatches.push({ name, matchKind: 'vocative', matchIndex: m.index, priority: priorities.vocative });
         });
     }
+    // Possessive
+    if (settings.patterns && settings.patterns.length) {
+        const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+        if (names_poss.length) {
+            const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
+            findNonQuotedMatches(combined, possRe, quoteRanges).forEach(m => {
+                const name = m.groups?.[0]?.trim();
+                if (name) allMatches.push({ name, matchKind: 'possessive', matchIndex: m.index, priority: priorities.possessive });
+            });
+        }
+    }
+    // General Name (lowest priority)
     if (nameRegex && settings.narrationSwitch) {
-         findNonQuotedMatches(buffer, nameRegex, quoteRanges).forEach(m => {
+         findNonQuotedMatches(combined, nameRegex, quoteRanges).forEach(m => {
             const name = String(m.groups?.[0] || m.match).replace(/-(?:sama|san)$/i, '').trim();
             if (name) allMatches.push({ name, matchKind: 'name', matchIndex: m.index, priority: priorities.name });
         });
@@ -213,13 +239,25 @@ let lastIssuedCostume = null;
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
-let _clickInProgress = new Set();
+const failedTriggerTimes = new Map();
 
-// Event handlers
 let _streamHandler = null;
 let _genStartHandler = null;
 let _genEndHandler = null;
+let _msgRecvHandler = null;
 let _chatChangedHandler = null;
+
+let _clickInProgress = new Set();
+
+const MAX_MESSAGE_BUFFERS = 60;
+function ensureBufferLimit() {
+  if (perMessageBuffers.size <= MAX_MESSAGE_BUFFERS) return;
+  while (perMessageBuffers.size > MAX_MESSAGE_BUFFERS) {
+    const firstKey = perMessageBuffers.keys().next().value;
+    perMessageBuffers.delete(firstKey);
+    perMessageStates.delete(firstKey);
+  }
+}
 
 function waitForSelector(selector, timeout = 3000, interval = 120) {
   return new Promise((resolve) => {
@@ -244,20 +282,25 @@ jQuery(async () => {
     $("#extensions_settings").append('<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>');
   }
 
-  await waitForSelector("#cs-save", 3000, 100);
+  const ok = await waitForSelector("#cs-save", 3000, 100);
+  if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
 
   // Load settings into UI
-  $("#cs-enable").prop("checked", !!settings.enabled);
-  $("#cs-patterns").val((settings.patterns || []).join("\n"));
-  $("#cs-default").val(settings.defaultCostume || "");
-  $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-  $("#cs-narration").prop("checked", !!settings.narrationSwitch);
-  $("#cs-debug").prop("checked", !!settings.debug);
-  $("#cs-global-cooldown").val(settings.globalCooldownMs || DEFAULTS.globalCooldownMs);
-  $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
-  $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
+  if (jQuery("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
+  if (jQuery("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
+  if (jQuery("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
+  if (jQuery("#cs-timeout").length) $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
+  if (jQuery("#cs-narration").length) $("#cs-narration").prop("checked", !!settings.narrationSwitch);
+  if (jQuery("#cs-debug").length) $("#cs-debug").prop("checked", !!settings.debug);
+  if ($("#cs-global-cooldown").length) $("#cs-global-cooldown").val(settings.globalCooldownMs || DEFAULTS.globalCooldownMs);
+  if ($("#cs-per-cooldown").length) $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
+  if ($("#cs-failed-cooldown").length) $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
+  if ($("#cs-max-buffer").length) $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
+  if ($("#cs-repeat-suppress").length) $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
 
   $("#cs-status").text("Ready");
+
+  function persistSettings() { if (save) save(); if (jQuery("#cs-status").length) $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`); setTimeout(()=>jQuery("#cs-status").text(""), 1500); }
 
   const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (!realCtx) { console.error("SillyTavern context not found. Extension won't run."); return; }
@@ -265,36 +308,41 @@ jQuery(async () => {
   const { eventSource, event_types } = realCtx;
 
   // Build initial regexes
-  let nameRegex = buildNameRegex(settings.patterns);
-  let speakerRegex = buildSpeakerRegex(settings.patterns);
-  let attributionRegex = buildAttributionRegex(settings.patterns);
-  let actionRegex = buildActionRegex(settings.patterns);
-  let vocativeRegex = buildVocativeRegex(settings.patterns);
+  let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
+  let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
+  let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
+  let actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
+  let vocativeRegex = buildVocativeRegex(settings.patterns || DEFAULTS.patterns);
 
-  function saveAndRebuild() {
-    settings.enabled = $("#cs-enable").prop("checked");
-    settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    settings.defaultCostume = $("#cs-default").val().trim();
-    settings.resetTimeoutMs = parseInt($("#cs-timeout").val(), 10) || DEFAULTS.resetTimeoutMs;
-    settings.narrationSwitch = $("#cs-narration").prop("checked");
-    settings.debug = $("#cs-debug").prop("checked");
-    settings.globalCooldownMs = parseInt($("#cs-global-cooldown").val(), 10) || DEFAULTS.globalCooldownMs;
-    settings.perTriggerCooldownMs = parseInt($("#cs-per-cooldown").val(), 10) || DEFAULTS.perTriggerCooldownMs;
-    settings.repeatSuppressMs = parseInt($("#cs-repeat-suppress").val(), 10) || DEFAULTS.repeatSuppressMs;
+  function tryWireUI() {
+    if ($("#cs-save").length) {
+      $("#cs-save").off('click.cs').on("click.cs", () => {
+        settings.enabled = !!$("#cs-enable").prop("checked");
+        settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        settings.defaultCostume = $("#cs-default").val().trim();
+        settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
+        settings.narrationSwitch = !!$("#cs-narration").prop("checked");
+        settings.debug = !!$("#cs-debug").prop("checked");
+        settings.globalCooldownMs = parseInt($("#cs-global-cooldown").val() || DEFAULTS.globalCooldownMs, 10);
+        settings.perTriggerCooldownMs = parseInt($("#cs-per-cooldown").val() || DEFAULTS.perTriggerCooldownMs, 10);
+        settings.failedTriggerCooldownMs = parseInt($("#cs-failed-cooldown").val() || DEFAULTS.failedTriggerCooldownMs, 10);
+        const mb = parseInt($("#cs-max-buffer").val() || DEFAULTS.maxBufferChars, 10);
+        settings.maxBufferChars = isFinite(mb) && mb > 0 ? mb : DEFAULTS.maxBufferChars;
+        const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
+        settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
 
-    nameRegex = buildNameRegex(settings.patterns);
-    speakerRegex = buildSpeakerRegex(settings.patterns);
-    attributionRegex = buildAttributionRegex(settings.patterns);
-    actionRegex = buildActionRegex(settings.patterns);
-    vocativeRegex = buildVocativeRegex(settings.patterns);
-
-    save();
-    $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
-    setTimeout(() => $("#cs-status").text("Ready"), 1500);
+        // rebuild regexes
+        nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
+        speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
+        attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
+        actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
+        vocativeRegex = buildVocativeRegex(settings.patterns || DEFAULTS.patterns);
+        persistSettings();
+      });
+    }
+    if ($("#cs-reset").length) { $("#cs-reset").off('click.cs').on("click.cs", async () => { await manualReset(); }); }
   }
-
-  $("#cs-save").on("click", saveAndRebuild);
-  $("#cs-reset").on("click", () => manualReset());
+  tryWireUI(); setTimeout(tryWireUI, 500);
 
   function triggerQuickReply(labelOrMessage) {
     try {
@@ -369,11 +417,11 @@ jQuery(async () => {
     if (!costumeArg) {
       const ch = realCtx.characters?.[realCtx.characterId]; if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
     }
-    if (!costumeArg) { $("#cs-status").text("No default costume defined."); return; }
+    if (!costumeArg) { if ($("#cs-status").length) $("#cs-status").text("No default costume defined."); return; }
     const ok = triggerQuickReplyVariants(costumeArg);
-    if (ok) { lastIssuedCostume = costumeArg; $("#cs-status").text(`Reset -> ${costumeArg}`); }
-    else { $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); }
-    setTimeout(()=>$("#cs-status").text("Ready"), 1500);
+    if (ok) { lastIssuedCostume = costumeArg; if ($("#cs-status").length) $("#cs-status").text(`Reset -> ${costumeArg}`); }
+    else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); }
+    setTimeout(()=>$("#cs-status").text(""), 1500);
   }
 
   function issueCostumeForName(name, opts = {}) {
@@ -384,6 +432,7 @@ jQuery(async () => {
 
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
     if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
+      if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
       scheduleResetIfIdle();
       return;
     }
@@ -406,11 +455,11 @@ jQuery(async () => {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
       lastSwitchTimestamp = now;
-      $("#cs-status").text(`Switched -> ${argFolder}`);
-      setTimeout(()=>$("#cs-status").text("Ready"), 1000);
+      if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
+      setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
-      $("#cs-status").text(`Quick Reply not found for ${name}`);
-      setTimeout(()=>$("#cs-status").text("Ready"), 1000);
+      if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
+      setTimeout(()=>$("#cs-status").text(""), 1000);
     }
   }
 
@@ -424,8 +473,8 @@ jQuery(async () => {
       }
       if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
         lastIssuedCostume = costumeArg;
-        $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
-        setTimeout(()=>$("#cs-status").text("Ready"), 1200);
+        if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
+        setTimeout(()=>$("#cs-status").text(""), 1200);
       }
     }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
   }
@@ -452,47 +501,58 @@ jQuery(async () => {
       tokenText = normalizeStreamText(tokenText);
 
       const bufKey = messageId != null ? `m${messageId}` : 'live';
-      const prevBuffer = perMessageBuffers.get(bufKey) || "";
-      const newCombinedBuffer = (prevBuffer + tokenText).slice(-(settings.maxBufferChars || DEFAULTS.maxBufferChars));
-      perMessageBuffers.set(bufKey, newCombinedBuffer);
+      const prev = perMessageBuffers.get(bufKey) || "";
+      const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars));
+      perMessageBuffers.set(bufKey, combined);
+      ensureBufferLimit();
 
       if (!perMessageStates.has(bufKey)) {
-          perMessageStates.set(bufKey, { lastAcceptedName: null, lastAcceptedTs: 0, lastAcceptedIndex: -1 });
+          perMessageStates.set(bufKey, {
+              lastAcceptedName: null,
+              lastAcceptedTs: 0,
+          });
       }
       const state = perMessageStates.get(bufKey);
-      const quoteRanges = getQuoteRanges(newCombinedBuffer);
+      const quoteRanges = getQuoteRanges(combined);
 
-      const bestMatch = findBestMatch(newCombinedBuffer, {
-          speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex
+      const bestMatch = findBestMatch(combined, {
+          speakerRegex,
+          attributionRegex,
+          actionRegex,
+          vocativeRegex,
+          nameRegex
       }, settings, quoteRanges);
 
-      if (bestMatch) {
-          let { name: matchedName, matchKind, matchIndex } = bestMatch;
-          
-          if (matchIndex > state.lastAcceptedIndex) {
-              const now = Date.now();
-              // Flicker guard
-              if (state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < settings.repeatSuppressMs)) {
-                  if (settings.debug) console.debug('CS debug: suppressing repeat match for same name (flicker guard)', { matchedName });
-                  matchedName = null;
-              }
 
-              if (matchedName) {
-                  state.lastAcceptedName = matchedName;
-                  state.lastAcceptedTs = now;
-                  state.lastAcceptedIndex = matchIndex;
-                  issueCostumeForName(matchedName, { matchKind, bufKey });
-              }
+      if (bestMatch) {
+          let { name: matchedName, matchKind } = bestMatch;
+
+          const now = Date.now();
+          const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
+          if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < suppressMs)) {
+              if (settings.debug) console.debug('CS debug: suppressing repeat accepted match for same name (flicker guard)', { matchedName });
+              matchedName = null;
+          }
+
+          if (matchedName) {
+              // Update state with the new accepted match
+              state.lastAcceptedName = matchedName;
+              state.lastAcceptedTs = now;
+              perMessageStates.set(bufKey, state);
+
+              issueCostumeForName(matchedName, { matchKind, bufKey });
           }
       }
 
       scheduleResetIfIdle();
+
       if (settings.debug) console.debug("CS debug:", { bufKey, bestMatch, state });
 
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
   };
 
-  _genEndHandler = () => { scheduleResetIfIdle(); };
+  _genEndHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } scheduleResetIfIdle(); };
+  _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
   _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; };
 
   function unload() {
@@ -500,6 +560,7 @@ jQuery(async () => {
       if (eventSource && _streamHandler) eventSource.off?.(streamEventName, _streamHandler);
       if (eventSource && _genStartHandler) eventSource.off?.(event_types.GENERATION_STARTED, _genStartHandler);
       if (eventSource && _genEndHandler) eventSource.off?.(event_types.GENERATION_ENDED, _genEndHandler);
+      if (eventSource && _msgRecvHandler) eventSource.off?.(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
       if (eventSource && _chatChangedHandler) eventSource.off?.(event_types.CHAT_CHANGED, _chatChangedHandler);
     } catch (e) { /* ignore */ }
     if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
@@ -507,6 +568,7 @@ jQuery(async () => {
     perMessageStates.clear();
     lastIssuedCostume = null;
     lastTriggerTimes.clear();
+    failedTriggerTimes.clear();
     _clickInProgress.clear();
   }
 
@@ -516,6 +578,7 @@ jQuery(async () => {
     eventSource.on(streamEventName, _streamHandler);
     eventSource.on(event_types.GENERATION_STARTED, _genStartHandler);
     eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
+    eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
     eventSource.on(event_types.CHAT_CHANGED, _chatChangedHandler);
   } catch (e) {
     console.error("CostumeSwitch: failed to attach event handlers:", e);
@@ -523,17 +586,24 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v5.2 — priority fix) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v5.0 — state fix) loaded.");
 });
 
+// getSettingsObj - unchanged pattern
 function getSettingsObj() {
   const ctx = typeof getContext === 'function' ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (ctx && ctx.extensionSettings) {
-    ctx.extensionSettings[extensionName] = ctx.extensionSettings[extensionName] || { ...DEFAULTS };
+    ctx.extensionSettings[extensionName] = ctx.extensionSettings[extensionName] || structuredClone(DEFAULTS);
+    for (const k of Object.keys(DEFAULTS)) {
+      if (!Object.hasOwn(ctx.extensionSettings[extensionName], k)) ctx.extensionSettings[extensionName][k] = DEFAULTS[k];
+    }
     return { store: ctx.extensionSettings, save: ctx.saveSettingsDebounced || saveSettingsDebounced, ctx };
   }
   if (typeof extension_settings !== 'undefined') {
-    extension_settings[extensionName] = extension_settings[extensionName] || { ...DEFAULTS };
+    extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
+    for (const k of Object.keys(DEFAULTS)) {
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
+    }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
   throw new Error("Can't find SillyTavern extension settings storage.");
