@@ -64,53 +64,12 @@
       </div>
     </div>
 
-    <hr style="margin:12px 0; border:0; border-top:1px solid rgba(0,0,0,0.06)"/>
-
-    <div style="margin-top:6px;">
-      <label style="font-weight:600; display:block;">Warm-up & reasoning protection</label>
-      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:6px;">
-        <div style="min-width:160px">
-          <label style="display:block; font-size:90%;">Min streamed chars</label>
-          <input id="cs-min-chars" type="number" min="0" step="1" style="width:100%" />
-          <div style="font-size:85%; opacity:0.85; margin-top:4px;">Default ~8 — prevents very short fragments from switching.</div>
-        </div>
-        <div style="min-width:160px">
-          <label style="display:block; font-size:90%;">Min ms since start</label>
-          <input id="cs-min-ms" type="number" min="0" step="50" style="width:100%" />
-          <div style="font-size:85%; opacity:0.85; margin-top:4px;">Default ~200ms — adds a short time buffer for internal reasoning.</div>
-        </div>
-        <div style="min-width:220px; display:flex; align-items:center; gap:8px;">
-          <label style="white-space:nowrap;">
-            <input id="cs-suppress-paren" type="checkbox" />
-            Suppress inside parentheses/brackets
-          </label>
-          <div style="font-size:85%; opacity:0.85;">Treat matches inside (), [], {} as likely internal thought.</div>
-        </div>
-      </div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <label style="font-weight:600; display:block;">Buffer & flicker protection</label>
-      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:6px;">
-        <div style="min-width:160px">
-          <label style="display:block; font-size:90%;">Max buffer chars</label>
-          <input id="cs-max-buffer" type="number" min="500" step="100" style="width:100%" />
-          <div style="font-size:85%; opacity:0.85; margin-top:4px;">How much of recent stream to scan (default ~2000)</div>
-        </div>
-        <div style="min-width:160px">
-          <label style="display:block; font-size:90%;">Repeat suppress (ms)</label>
-          <input id="cs-repeat-suppress" type="number" min="0" step="50" style="width:100%" />
-          <div style="font-size:85%; opacity:0.85; margin-top:4px;">Silences repeated same-name matches (default ~800ms)</div>
-        </div>
-      </div>
-    </div>
-
     <div style="margin-top:12px;">
       <button id="cs-reset">Manual Reset Costume</button>
       <button id="cs-save" style="margin-left:8px;">Save</button>
     </div>
 
     <div id="cs-status" style="margin-top:8px; opacity:0.8;"></div>
-    <div class="costume-switcher-note" style="margin-top:6px; font-size:90%;">Tip: Save after editing patterns so regexes are rebuilt immediately.</div>
+    <div class="costume-switcher-note">Tip: Save after editing patterns so regexes are rebuilt immediately.</div>
   </div>
 </details>
