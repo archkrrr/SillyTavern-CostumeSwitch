@@ -1,187 +1,63 @@
-// index.js - Main logic for the Costume Switcher extension
+// The main script for the extension
+// The following are examples of some basic extension functionality
 
-import {
-    getContext,
-    getApiUrl,
-    extension_settings,
-    saveSettingsDebounced,
-} from '../../../../script/context.js';
-import { eventSource, event_types } from '../../../../script/event-bus.js';
-import { executeSlashCommand } from '../../../../script/slash-commands.js';
+//You'll likely need to import extension_settings, getContext, and loadExtensionSettings from extensions.js
+import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 
-// A unique identifier for our settings
-const EXTENSION_NAME = 'SillyTavern-CostumeSwitch';
+//You'll likely need to import some other functions from the main script
+import { saveSettingsDebounced } from "../../../../script.js";
 
-// Default settings
-const defaultSettings = {
-    enabled: false,
-    // Example characters and their corresponding costume folder names
-    characterMap: {
-        'Shido': 'Shido',
-        'Kotori': 'Kotori_Itsuka',
-    },
-    defaultCostume: 'Date_a_Live', // The costume to reset to
-    resetDelay: 5000, // 5 seconds
-};
+// Keep track of where your extension is located, name should match repo name
+const extensionName = "st-extension-example";
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+const extensionSettings = extension_settings[extensionName];
+const defaultSettings = {};
 
-// Internal state variables
-let lastDetectedCharacter = null;
-let resetTimerId = null;
-let mutationObserver = null;
 
-/**
- * Loads the extension's settings, merging defaults with saved data.
- */
-function loadSettings() {
-    // Ensure our settings object exists
-    if (!extension_settings) {
-        extension_settings = {};
-    }
-    // Merge defaults with saved settings
-    Object.assign(extension_settings, {
-       ...defaultSettings,
-       ...extension_settings,
-    });
+ 
+// Loads the extension settings if they exist, otherwise initializes them to the defaults.
+async function loadSettings() {
+  //Create the settings if they don't exist
+  extension_settings[extensionName] = extension_settings[extensionName] || {};
+  if (Object.keys(extension_settings[extensionName]).length === 0) {
+    Object.assign(extension_settings[extensionName], defaultSettings);
+  }
+
+  // Updating settings in the UI
+  $("#example_setting").prop("checked", extension_settings[extensionName].example_setting).trigger("input");
 }
 
-/**
- * Executes the /costume slash command.
- * @param {string} costumeName The name of the costume folder to switch to.
- */
-async function switchCostume(costumeName) {
-    if (!costumeName) {
-        console.warn(`${EXTENSION_NAME}: Attempted to switch to an invalid costume name.`);
-        return;
-    }
-    console.log(`${EXTENSION_NAME}: Switching costume to "${costumeName}"`);
-    await executeSlashCommand(`/costume ${costumeName}`);
-    lastDetectedCharacter = costumeName;
+// This function is called when the extension settings are changed in the UI
+function onExampleInput(event) {
+  const value = Boolean($(event.target).prop("checked"));
+  extension_settings[extensionName].example_setting = value;
+  saveSettingsDebounced();
 }
 
-/**
- * The callback function for the MutationObserver.
- * Parses new text and triggers costume switches.
- * @param {MutationRecord} mutationsList List of mutations that occurred.
- */
-function handleMessageStream(mutationsList) {
-    const settings = extension_settings;
-    if (!settings.enabled) return;
-
-    let fullText = '';
-    for (const mutation of mutationsList) {
-        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-            mutation.addedNodes.forEach(node => {
-                fullText += node.textContent;
-            });
-        } else if (mutation.type === 'characterData') {
-            fullText += mutation.target.textContent;
-        }
-    }
-
-    if (fullText) {
-        // Build a dynamic regex from the character map in settings
-        const characterNames = Object.keys(settings.characterMap).join('|');
-        const regex = new RegExp(`(${characterNames}):`, 'g');
-        let match;
-        let foundCharacter = null;
-
-        // Find the last match in the new text chunk
-        while ((match = regex.exec(fullText))!== null) {
-            foundCharacter = match;
-        }
-
-        if (foundCharacter) {
-            const targetCostume = settings.characterMap[foundCharacter];
-            if (targetCostume && targetCostume!== lastDetectedCharacter) {
-                // A new character is speaking, cancel any pending reset
-                if (resetTimerId) {
-                    clearTimeout(resetTimerId);
-                    resetTimerId = null;
-                }
-                switchCostume(targetCostume);
-
-                // Set a new timer to reset to default
-                resetTimerId = setTimeout(() => {
-                    console.log(`${EXTENSION_NAME}: Inactivity timer expired. Resetting to default.`);
-                    switchCostume(settings.defaultCostume);
-                }, settings.resetDelay);
-            }
-        }
-    }
+// This function is called when the button is clicked
+function onButtonClick() {
+  // You can do whatever you want here
+  // Let's make a popup appear with the checked setting
+  toastr.info(
+    `The checkbox is ${extension_settings[extensionName].example_setting ? "checked" : "not checked"}`,
+    "A popup appeared because you clicked the button!"
+  );
 }
 
-/**
- * Starts observing the latest character message for new text.
- */
-function startObserver() {
-    const settings = extension_settings;
-    if (!settings.enabled |
+// This function is called when the extension is loaded
+jQuery(async () => {
+  // This is an example of loading HTML from a file
+  const settingsHtml = await $.get(`${extensionFolderPath}/example.html`);
 
-| mutationObserver) return;
+  // Append settingsHtml to extensions_settings
+  // extension_settings and extensions_settings2 are the left and right columns of the settings menu
+  // Left should be extensions that deal with system functions and right should be visual/UI related 
+  $("#extensions_settings").append(settingsHtml);
 
-    const targetNode = document.querySelector('#chat.mes.character-message:last-of-type.mes_text');
-    if (targetNode) {
-        mutationObserver = new MutationObserver(handleMessageStream);
-        const config = { childList: true, subtree: true, characterData: true };
-        mutationObserver.observe(targetNode, config);
-        console.log(`${EXTENSION_NAME}: Observer started.`);
-    }
-}
+  // These are examples of listening for events
+  $("#my_button").on("click", onButtonClick);
+  $("#example_setting").on("input", onExampleInput);
 
-/**
- * Stops the MutationObserver.
- */
-function stopObserver() {
-    if (mutationObserver) {
-        mutationObserver.disconnect();
-        mutationObserver = null;
-        console.log(`${EXTENSION_NAME}: Observer stopped.`);
-    }
-    // Also clear any pending reset timer
-    if (resetTimerId) {
-        clearTimeout(resetTimerId);
-        resetTimerId = null;
-    }
-    lastDetectedCharacter = null; // Reset state
-}
-
-/**
- * Wires up the UI elements from settings.html to the extension's logic.
- */
-function connectUi() {
-    const settings = extension_settings;
-    const toggle = document.getElementById('costume-switcher-toggle');
-    const resetButton = document.getElementById('costume-switcher-reset');
-
-    if (toggle) {
-        toggle.checked = settings.enabled;
-        toggle.addEventListener('change', () => {
-            settings.enabled = toggle.checked;
-            saveSettingsDebounced();
-            if (!settings.enabled) {
-                stopObserver(); // Immediately stop if disabled
-            }
-        });
-    }
-
-    if (resetButton) {
-        resetButton.addEventListener('click', () => {
-            console.log(`${EXTENSION_NAME}: Manual reset triggered.`);
-            switchCostume(settings.defaultCostume);
-        });
-    }
-}
-
-// Main execution block
-(function () {
-    loadSettings();
-    connectUi();
-
-    // Start observing when a generation begins
-    eventSource.on(event_types.GENERATION_STARTED, startObserver);
-    // Stop observing when generation ends or is stopped
-    eventSource.on(event_types.GENERATION_ENDED, stopObserver);
-    eventSource.on(event_types.GENERATION_STOPPED, stopObserver);
-
-    console.log(`${EXTENSION_NAME} loaded.`);
-})();
+  // Load settings when starting things up (if you have any)
+  loadSettings();
+});
