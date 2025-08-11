@@ -2,7 +2,7 @@ import { extension_settings, getContext, loadExtensionSettings } from "../../../
 import { saveSettingsDebounced } from "../../../../script.js";
 
 const extensionName = "SillyTavern-CostumeSwitch";
-const extensionFolderPath = scripts/extensions/third-party/${extensionName};
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 // This regex identifies common scene change markers to reset context.
 const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$|^Back in Central Park,$/i;
@@ -47,8 +47,8 @@ function computeFlagsFromEntries(entries, requireI = true) {
 function buildNameRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
-  const parts = entries.map(e => (?:${e.body}));
-  const body = (?:^|\\n|[\\(\\[\\-—–])(?:${parts.join('|')})(?:\\W|$);
+  const parts = entries.map(e => `(?:${e.body})`);
+  const body = `(?:^|\\n|[\\(\\[\\-—–])(?:${parts.join('|')})(?:\\W|$)`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildNameRegex compile failed:", e); return null; }
 }
@@ -56,8 +56,8 @@ function buildNameRegex(patternList) {
 function buildSpeakerRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
-  const parts = entries.map(e => (?:${e.body}));
-  const body = (?:^|\\n)\\s*(${parts.join('|')})\\s*(?:[:;,]|\\b)\\s*;
+  const parts = entries.map(e => `(?:${e.body})`);
+  const body = `(?:^|\\n)\\s*(${parts.join('|')})\\s*(?:[:;,]|\\b)\\s*`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildSpeakerRegex compile failed:", e); return null; }
 }
@@ -65,8 +65,8 @@ function buildSpeakerRegex(patternList) {
 function buildVocativeRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
-  const parts = entries.map(e => (?:${e.body}));
-  const body = (?:^|\\n|\\s)(${parts.join('|')})\\s*,;
+  const parts = entries.map(e => `(?:${e.body})`);
+  const body = `(?:^|\\n|\\s)(${parts.join('|')})\\s*,`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildVocativeRegex compile failed:", e); return null; }
 }
@@ -74,11 +74,11 @@ function buildVocativeRegex(patternList) {
 function buildAttributionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
-  const names = entries.map(e => (?:${e.body})).join('|');
+  const names = entries.map(e => `(?:${e.body})`).join('|');
   const verbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)';
   const patA = '(["\\u201C\\u201D].{0,400}["\\u201C\\u201D])\\s*,?\\s*(' + names + ')\\s+' + verbs;
   const patB = '\\b(' + names + ')\\s+' + verbs + '\\s*[:,]?\\s*["\\u201C\\u201D]';
-  const body = (?:${patA})|(?:${patB});
+  const body = `(?:${patA})|(?:${patB})`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildAttributionRegex compile failed:", e); return null; }
 }
@@ -86,9 +86,9 @@ function buildAttributionRegex(patternList) {
 function buildActionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
-  const parts = entries.map(e => (?:${e.body}));
+  const parts = entries.map(e => `(?:${e.body})`);
   const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved)';
-  const body = \\b(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b;
+  const body = `\\b(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
 }
@@ -180,7 +180,7 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
     if (settings.patterns && settings.patterns.length) {
         const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
         if (names_poss.length) {
-            const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’']s\\b", 'gi');
+            const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
             findNonQuotedMatches(combined, possRe, quoteRanges).forEach(m => {
                 const name = m.groups?.[0]?.trim();
                 if (name) allMatches.push({ name, matchKind: 'possessive', matchIndex: m.index, priority: priorities.possessive });
@@ -212,7 +212,7 @@ function normalizeStreamText(s) {
   s = String(s);
   s = s.replace(/[\uFEFF\u200B\u200C\u200D]/g, '');
   s = s.replace(/[\u2018\u2019\u201A\u201B]/g, "'").replace(/[\u201C\u201D\u201E\u201F]/g, '"');
-  s = s.replace(/(\*\*|__|~~|{1,3})/g, '');
+  s = s.replace(/(\*\*|__|~~|`{1,3})/g, '');
   s = s.replace(/\u00A0/g, ' ');
   return s;
 }
@@ -265,7 +265,7 @@ jQuery(async () => {
   const settings = store[extensionName];
 
   try {
-    const settingsHtml = await $.get(${extensionFolderPath}/settings.html);
+    const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
     $("#extensions_settings").append(settingsHtml);
   } catch (e) {
     console.warn("Failed to load settings.html:", e);
@@ -289,7 +289,7 @@ jQuery(async () => {
 
   $("#cs-status").text("Ready");
 
-  function persistSettings() { if (save) save(); if (jQuery("#cs-status").length) $("#cs-status").text(Saved ${new Date().toLocaleTimeString()}); setTimeout(()=>jQuery("#cs-status").text(""), 1500); }
+  function persistSettings() { if (save) save(); if (jQuery("#cs-status").length) $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`); setTimeout(()=>jQuery("#cs-status").text(""), 1500); }
 
   const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (!realCtx) { console.error("SillyTavern context not found. Extension won't run."); return; }
@@ -363,14 +363,14 @@ jQuery(async () => {
         if (buttonToClick) {
             if (settings.debug) {
                 let matchType = (exactLabelMatch ? "exact label" : (exactTitleMatch ? "exact title" : "case-insensitive"));
-                console.debug([CostumeSwitch] Clicking Quick Reply (${matchType}): "${label}");
+                console.debug(`[CostumeSwitch] Clicking Quick Reply (${matchType}): "${label}"`);
             }
             
             setTimeout(() => {
                 try {
                     buttonToClick.click();
                 } catch (e) {
-                    console.error([CostumeSwitch] Error during deferred click for "${label}":, e);
+                    console.error(`[CostumeSwitch] Error during deferred click for "${label}":`, e);
                 }
             }, 0);
             
@@ -378,7 +378,7 @@ jQuery(async () => {
         }
         return false;
     } catch (err) {
-        console.error([CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":, err);
+        console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
         return false;
     }
   }
@@ -388,7 +388,7 @@ jQuery(async () => {
     const name = normalizeCostumeName(String(costumeArg));
     if (!name) return false;
 
-    const rawCandidates = [ ${name}, ${name}/${name}, /costume ${name} ];
+    const rawCandidates = [ `${name}`, `${name}/${name}`, `/costume ${name}` ];
 
     for (let c of rawCandidates) {
       c = String(c).trim();
@@ -410,12 +410,12 @@ jQuery(async () => {
   async function manualReset() {
     let costumeArg = settings.defaultCostume || "";
     if (!costumeArg) {
-      const ch = realCtx.characters?.[realCtx.characterId]; if (ch && ch.name) costumeArg = ${ch.name}/${ch.name};
+      const ch = realCtx.characters?.[realCtx.characterId]; if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
     }
     if (!costumeArg) { if ($("#cs-status").length) $("#cs-status").text("No default costume defined."); return; }
     const ok = triggerQuickReplyVariants(costumeArg);
-    if (ok) { lastIssuedCostume = costumeArg; if ($("#cs-status").length) $("#cs-status").text(Reset -> ${costumeArg}); }
-    else { if ($("#cs-status").length) $("#cs-status").text(Quick Reply not found for ${costumeArg}); }
+    if (ok) { lastIssuedCostume = costumeArg; if ($("#cs-status").length) $("#cs-status").text(`Reset -> ${costumeArg}`); }
+    else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); }
     setTimeout(()=>$("#cs-status").text(""), 1500);
   }
 
@@ -437,7 +437,7 @@ jQuery(async () => {
       return;
     }
 
-    const argFolder = ${name}/${name};
+    const argFolder = `${name}/${name}`;
     const last = lastTriggerTimes.get(argFolder) || 0;
     if (now - last < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) {
       if (settings.debug) console.debug("CS debug: per-trigger cooldown active, skipping", argFolder);
@@ -450,10 +450,10 @@ jQuery(async () => {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
       lastSwitchTimestamp = now;
-      if ($("#cs-status").length) $("#cs-status").text(Switched -> ${argFolder});
+      if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
-      if ($("#cs-status").length) $("#cs-status").text(Quick Reply not found for ${name});
+      if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     }
   }
@@ -464,11 +464,11 @@ jQuery(async () => {
       let costumeArg = settings.defaultCostume || "";
       if (!costumeArg) {
         const ch = realCtx.characters?.[realCtx.characterId];
-        if (ch && ch.name) costumeArg = ${ch.name}/${ch.name};
+        if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
       }
       if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
         lastIssuedCostume = costumeArg;
-        if ($("#cs-status").length) $("#cs-status").text(Auto-reset -> ${costumeArg});
+        if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
         setTimeout(()=>$("#cs-status").text(""), 1200);
       }
     }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
@@ -477,8 +477,8 @@ jQuery(async () => {
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
   _genStartHandler = (messageId) => {
-    const bufKey = messageId != null ? m${messageId} : 'live';
-    if (settings.debug) console.debug(CS debug: Generation started for ${bufKey}, resetting state.);
+    const bufKey = messageId != null ? `m${messageId}` : 'live';
+    if (settings.debug) console.debug(`CS debug: Generation started for ${bufKey}, resetting state.`);
     perMessageStates.delete(bufKey);
     perMessageBuffers.delete(bufKey);
   };
@@ -494,10 +494,10 @@ jQuery(async () => {
       else tokenText = String(args.join(' ') || "");
       if (!tokenText) return;
 
-      const bufKey = messageId != null ? m${messageId} : 'live';
+      const bufKey = messageId != null ? `m${messageId}` : 'live';
 
       if (sceneChangeRegex.test(tokenText.trim())) {
-          if (settings.debug) console.debug([CostumeSwitch] Scene change detected. Resetting context for: ${bufKey});
+          if (settings.debug) console.debug(`[CostumeSwitch] Scene change detected. Resetting context for: ${bufKey}`);
           perMessageBuffers.delete(bufKey);
           perMessageStates.delete(bufKey);
           return; 
@@ -555,12 +555,12 @@ jQuery(async () => {
 
   _genEndHandler = (messageId) => { 
       if (messageId != null) { 
-          perMessageBuffers.delete(m${messageId}); 
-          perMessageStates.delete(m${messageId}); 
+          perMessageBuffers.delete(`m${messageId}`); 
+          perMessageStates.delete(`m${messageId}`); 
       }
       scheduleResetIfIdle(); 
   };
-  _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(m${messageId}); perMessageStates.delete(m${messageId}); } };
+  _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
   _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; };
 
   function unload() {
@@ -591,7 +591,7 @@ jQuery(async () => {
     console.error("CostumeSwitch: failed to attach event handlers:", e);
   }
 
-  try { window[__${extensionName}_unload] = unload; } catch(e) {}
+  try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
   console.log("SillyTavern-CostumeSwitch (fully patched) loaded.");
 });
