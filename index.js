@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (full patched)
+// index.js - SillyTavern-CostumeSwitch (patched: commit delay + min-switch interval)
 // Keep relative imports like the official examples
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
@@ -11,7 +11,11 @@ const DEFAULTS = {
   enabled: true,
   resetTimeoutMs: 3000,
   patterns: ["Shido", "Kotori"], // default simple names (one per line in UI)
-  defaultCostume: "" // empty => use current character's own folder
+  defaultCostume: "", // empty => use current character's own folder
+
+  // smoothing / debouncing settings (patched)
+  commitDelayMs: 300,        // ms to wait before committing a detected name
+  minSwitchIntervalMs: 600,  // ms minimum between applied switches
 };
 
 // simple safe regex-building util (escape plain text)
@@ -68,6 +72,11 @@ const perMessageBuffers = new Map();
 let lastIssuedCostume = null;
 let resetTimer = null;
 
+// smoothing/debounce runtime state (patched)
+let pendingName = null;
+let pendingTimer = null;
+let lastSwitchTime = 0; // timestamp of last actual switch
+
 // throttling map and cooldown
 const lastTriggerTimes = new Map();
 const TRIGGER_COOLDOWN_MS = 250; // ms between repeated triggers for same costume (tunable)
@@ -105,10 +114,18 @@ jQuery(async () => {
     settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     settings.defaultCostume = $("#cs-default").val().trim();
     settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
+
+    // new smoothing settings
+    settings.commitDelayMs = parseInt($("#cs-commit-delay").val()||DEFAULTS.commitDelayMs, 10) || DEFAULTS.commitDelayMs;
+    settings.minSwitchIntervalMs = parseInt($("#cs-min-switch-interval").val()||DEFAULTS.minSwitchIntervalMs, 10) || DEFAULTS.minSwitchIntervalMs;
+
     // rebuild regex after saving patterns
     nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
     persistSettings();
   });
+
+  // If the settings UI from file doesn't include inputs for commit delay / min interval,
+  // users can still edit them via storage; we attempt to set reasonable defaults above.
 
   $("#cs-reset").on("click", async () => {
     await manualReset();
@@ -129,17 +146,27 @@ jQuery(async () => {
   // Try to find a quick-reply button whose visible label or title equals labelOrMsg and click it.
   function triggerQuickReply(labelOrMsg) {
     try {
+      const normalizedTarget = String(labelOrMsg || "").trim();
       const qrButtons = document.querySelectorAll('.qr--button');
       for (const btn of qrButtons) {
         const labelEl = btn.querySelector('.qr--button-label');
-        if (labelEl && labelEl.innerText && labelEl.innerText.trim() === labelOrMsg) {
-          btn.click();
-          return true;
+        if (labelEl && labelEl.innerText) {
+          // normalize both sides: trim, collapse whitespace, compare case-insensitively
+          const a = labelEl.innerText.replace(/\s+/g, ' ').trim();
+          const b = normalizedTarget.replace(/\s+/g, ' ').trim();
+          if (a === b || a.toLowerCase() === b.toLowerCase()) {
+            btn.click();
+            return true;
+          }
         }
         // some quick replies set the underlying message on the title attribute
-        if (btn.title && btn.title === labelOrMsg) {
-          btn.click();
-          return true;
+        if (btn.title) {
+          const t = String(btn.title).replace(/\s+/g, ' ').trim();
+          const b = normalizedTarget.replace(/\s+/g, ' ').trim();
+          if (t === b || t.toLowerCase() === b.toLowerCase()) {
+            btn.click();
+            return true;
+          }
         }
       }
     } catch (err) {
@@ -247,6 +274,58 @@ jQuery(async () => {
     }, settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
   }
 
+  // ===== Debounce / commit-delay + min-switch-interval helper (patched) =====
+  // Schedule a pending switch with commit delay + min-interval enforcement.
+  // This preserves mid-stream detection (no ':' required) but avoids token-by-token blitzing.
+  function schedulePendingSwitch(name) {
+    if (!name) return;
+
+    const argFolder = `${name}/${name}`;
+
+    // if already using this costume, don't re-schedule (but still refresh idle timer)
+    if (lastIssuedCostume === argFolder) {
+      scheduleResetIfIdle();
+      return;
+    }
+
+    // reset any pending timer and set new pendingName
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+    pendingName = name;
+
+    const delay = (settings && settings.commitDelayMs) || DEFAULTS.commitDelayMs;
+    const minInterval = (settings && settings.minSwitchIntervalMs) || DEFAULTS.minSwitchIntervalMs;
+
+    pendingTimer = setTimeout(async () => {
+      pendingTimer = null;
+      if (!pendingName) return;
+
+      const now = Date.now();
+      const sinceLast = now - (lastSwitchTime || 0);
+
+      const doSwitch = async () => {
+        await issueCostumeForName(pendingName);
+        lastSwitchTime = Date.now();
+        pendingName = null;
+        scheduleResetIfIdle();
+      };
+
+      if (sinceLast >= minInterval) {
+        await doSwitch();
+      } else {
+        // wait remaining time to satisfy min interval
+        const remaining = minInterval - sinceLast;
+        pendingTimer = setTimeout(async () => {
+          pendingTimer = null;
+          if (!pendingName) return;
+          await doSwitch();
+        }, remaining);
+      }
+    }, delay);
+  }
+
   // STREAM_TOKEN_RECEIVED fires on every token/chunk (good for mid-stream detection). Use fallback to MESSAGE_RECEIVED if not available.
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
@@ -302,10 +381,8 @@ jQuery(async () => {
         }
 
         if (matchedName) {
-          // trigger switch (honorific removed)
-          issueCostumeForName(matchedName);
-          // schedule reset timer
-          scheduleResetIfIdle();
+          // schedule a debounced commit instead of immediate switch
+          schedulePendingSwitch(matchedName);
 
           // advance/truncate the buffer up to the end of the handled match so we don't re-handle it
           const cutPos = lastMatch.index + lastMatch.len;
@@ -320,18 +397,21 @@ jQuery(async () => {
   // Also listen for GENERATION_ENDED and MESSAGE_RECEIVED to clear buffers for finished message ids
   eventSource.on(event_types.GENERATION_ENDED, (messageId) => {
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
     scheduleResetIfIdle();
   });
 
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
     if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
   });
 
   // When chat/character changes, clear state
   eventSource.on(event_types.CHAT_CHANGED, () => {
     perMessageBuffers.clear();
     lastIssuedCostume = null;
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingName = null; }
   });
 
-  console.log("SillyTavern-CostumeSwitch (patched, honorific-aware, last-match + cooldown) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched: commit-delay + min-switch-interval) loaded.");
 });
