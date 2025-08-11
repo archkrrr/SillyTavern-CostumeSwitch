@@ -242,7 +242,7 @@ const lastTriggerTimes = new Map();
 const failedTriggerTimes = new Map();
 
 let _streamHandler = null;
-let _genStartHandler = null; // NEW
+let _genStartHandler = null;
 let _genEndHandler = null;
 let _msgRecvHandler = null;
 let _chatChangedHandler = null;
@@ -259,7 +259,6 @@ function ensureBufferLimit() {
   }
 }
 
-// ADDED BACK: This function was accidentally removed.
 function waitForSelector(selector, timeout = 3000, interval = 120) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -482,7 +481,6 @@ jQuery(async () => {
 
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-  // NEW: Handler to reset state at the start of a generation
   _genStartHandler = (messageId) => {
     const bufKey = messageId != null ? `m${messageId}` : 'live';
     if (settings.debug) console.debug(`CS debug: Generation started for ${bufKey}, resetting state.`);
@@ -511,7 +509,6 @@ jQuery(async () => {
       if (!perMessageStates.has(bufKey)) {
           perMessageStates.set(bufKey, {
               lastAcceptedName: null,
-              lastAcceptedIndex: -1,
               lastAcceptedTs: 0,
           });
       }
@@ -528,13 +525,7 @@ jQuery(async () => {
 
 
       if (bestMatch) {
-          let { name: matchedName, matchKind, matchIndex } = bestMatch;
-
-          // Suppression Logic
-          if (matchIndex <= (state.lastAcceptedIndex || -1)) {
-              if (settings.debug) console.debug('CS debug: skipping matched occurrence because its index is not new', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
-              matchedName = null;
-          }
+          let { name: matchedName, matchKind } = bestMatch;
 
           const now = Date.now();
           const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
@@ -546,11 +537,10 @@ jQuery(async () => {
           if (matchedName) {
               // Update state with the new accepted match
               state.lastAcceptedName = matchedName;
-              state.lastAcceptedIndex = matchIndex;
               state.lastAcceptedTs = now;
               perMessageStates.set(bufKey, state);
 
-              issueCostumeForName(matchedName, { matchKind, matchIndex, bufKey });
+              issueCostumeForName(matchedName, { matchKind, bufKey });
           }
       }
 
@@ -596,7 +586,7 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.9 — reference error fix) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v5.0 — state fix) loaded.");
 });
 
 // getSettingsObj - unchanged pattern
