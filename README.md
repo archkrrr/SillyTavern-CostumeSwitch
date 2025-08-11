@@ -95,7 +95,7 @@ Here are a few visual examples to help guide you through the configuration:
 
 ## Support and Contributions
 
-- **Support**: If you encounter any issues or need help using this extension, feel free to reach out via [GitHub Issues](https://github.com/your-repo/issues) or join the **SillyTavern community** on Discord.
+- **Support**: If you encounter any issues or need help using this extension, feel free to reach out via [GitHub Issues](https://github.com/archkrrr/SillyTavern-CostumeSwitch/issues) or the **SillyTavern community** on Discord.
   
 - **Contributing**: Contributions are always welcome! If you’d like to improve this extension, please fork the repository, create a new branch, and submit a pull request. You can help by:
   - Adding new features.
