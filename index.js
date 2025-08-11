@@ -1,18 +1,3 @@
-/**
- * SillyTavern-CostumeSwitch (patched v3)
- * - Fixes and improvements from review:
- *   - escapeRegex / isInsideQuotes corrected
- *   - preserves simple /pattern/flags (merges flags sensibly)
- *   - reuses compiled RegExp objects (avoid recreating in hot path)
- *   - improved quick-reply matching (title -> label -> fuzzy)
- *   - possessive detection accepts curly apostrophes
- *   - buffer length capped to avoid unbounded growth
- *   - minor performance and readability improvements
- *
- * NOTE: This file intentionally mirrors your original layout so it
- * integrates into SillyTavern's extension system unchanged.
- */
-
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
@@ -40,22 +25,24 @@ function escapeRegex(s) {
 }
 
 /**
- * Parse a pattern entry. If pattern is like /body/flags, capture body and flags.
- * Otherwise treat as a literal string (escaped).
- * Returns { body, flags } (flags maybe empty).
+ * Parse a pattern entry robustly.
+ * Accepts literal strings or regex-literal form like /body/flags.
+ * Supports escaped slashes inside the body (e.g. /a\/b/i).
+ * Returns { body, flags } or null.
  */
 function parsePatternEntry(raw) {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return null;
-  const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
+  // Capture sequence of either an escaped char (\\.) or any char that's not an unescaped slash
+  // This allows bodies like: /a\/b/i
+  const m = trimmed.match(/^\/((?:\\.|[^\/])+)\/([gimsuy]*)$/);
   if (m) return { body: m[1], flags: (m[2] || '') };
   return { body: escapeRegex(trimmed), flags: '' };
 }
 
 /**
  * Helper to compute union flags we want to apply to a combined RegExp.
- * We will ensure 'i' is present by default for name matching (case-insensitive),
- * and include 'u' if any pattern had it. 'g' is omitted here; callers may add 'g' as needed.
+ * We will ensure 'i' is present by default for name matching (case-insensitive).
  */
 function computeFlagsFromEntries(entries, requireI = true) {
   let flagsSet = new Set();
@@ -72,12 +59,11 @@ function computeFlagsFromEntries(entries, requireI = true) {
 
 /**
  * Build different regexes. Each returns a RegExp or null.
- * We reuse pattern bodies (unescaped for regex entries) and intelligently set flags.
+ * Pattern entries that were provided as regex literal keep their bodies and flags.
  */
 function buildNameRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
-  // we want a "word-like" match but keep user-supplied regex bodies as-is
   const parts = entries.map(e => `(?:${e.body})`);
   const body = `(?:^|\\n|[\\(\\[\\-—–])(?:${parts.join('|')})(?:\\W|$)`;
   const flags = computeFlagsFromEntries(entries, true); // default i
@@ -128,13 +114,11 @@ function buildActionRegex(patternList) {
 
 /**
  * Count quotes before position to infer whether pos is inside quotes.
- * Only counts double-quotes and unicode curly double quotes to avoid
- * false positives from contractions with single quotes.
+ * Only counts ASCII double-quote and curly double quotes.
  */
 function isInsideQuotes(text, pos) {
   if (!text || pos <= 0) return false;
   const before = text.slice(0, pos);
-  // match ASCII double-quote or left/right curly double quotes
   const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
   return (quoteCount % 2) === 1;
 }
@@ -156,6 +140,15 @@ function waitForSelector(selector, timeout = 3000, interval = 120) {
       if (Date.now() - start > timeout) { clearInterval(iv); resolve(false); }
     }, interval);
   });
+}
+
+/**
+ * Utility: return flags string without 'g' (safe for single-shot exec/test).
+ * If regex is falsy returns empty string.
+ */
+function flagsWithoutG(regex) {
+  if (!regex) return '';
+  return (regex.flags || '').replace(/g/g, '');
 }
 
 jQuery(async () => {
@@ -227,10 +220,7 @@ jQuery(async () => {
   }
   tryWireUI(); setTimeout(tryWireUI, 500); setTimeout(tryWireUI, 1500);
 
-  function normalizeCostumeName(n) {
-    if (!n) return n;
-    return String(n).replace(/[-_](?:sama|san)$/i, '').split(/\s+/)[0];
-  }
+  function normalizeCostumeName(n) { if (!n) return n; return String(n).replace(/[-_](?:sama|san)$/i, '').split(/\s+/)[0]; }
 
   /**
    * Trigger a quick-reply button. Matching strategy:
@@ -274,15 +264,7 @@ jQuery(async () => {
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
     const name = normalizeCostumeName(String(costumeArg));
-    const candidates = new Set([
-      `${name}/${name}`,
-      `${name}`,
-      `/costume ${name}`,
-      `/costume ${name}/${name}`,
-      `${name} / ${name}`,
-      `/${name}`,
-      String(costumeArg)
-    ]);
+    const candidates = new Set([`${name}/${name}`, `${name}`, `/costume ${name}`, `/costume ${name}/${name}`, `${name} / ${name}`, `/${name}`, String(costumeArg)]);
     const now = Date.now();
     for (const c of Array.from(candidates)) {
       if (!c) continue;
@@ -318,17 +300,8 @@ jQuery(async () => {
     const last = lastTriggerTimes.get(argFolder) || 0;
     if (now - last < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) return;
     const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
-    if (ok) {
-      lastTriggerTimes.set(argFolder, now);
-      lastIssuedCostume = argFolder;
-      lastSwitchTimestamp = now;
-      if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
-      setTimeout(()=>$("#cs-status").text(""), 1000);
-    } else {
-      failedTriggerTimes.set(argFolder, Date.now());
-      if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
-      setTimeout(()=>$("#cs-status").text(""), 1000);
-    }
+    if (ok) { lastTriggerTimes.set(argFolder, now); lastIssuedCostume = argFolder; lastSwitchTimestamp = now; if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
+    else { failedTriggerTimes.set(argFolder, Date.now()); if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
   }
 
   function scheduleResetIfIdle() {
@@ -370,19 +343,22 @@ jQuery(async () => {
       (function quickTokenScan() {
         try {
           const short = String(tokenText || '').trim(); if (!short) return;
-          // Try speakerRegex (already compiled) on token-level
+          // Use single-shot non-global regex to avoid lastIndex issues
           if (speakerRegex) {
-            const m = speakerRegex.exec(short);
+            const tmp = new RegExp(speakerRegex.source, flagsWithoutG(speakerRegex) || 'i');
+            const m = tmp.exec(short);
             if (m && m[1]) { matchedName = m[1].trim(); return; }
           }
           // vocative
           if (!matchedName && vocativeRegex) {
-            const m = vocativeRegex.exec(short);
+            const tmp = new RegExp(vocativeRegex.source, flagsWithoutG(vocativeRegex) || 'i');
+            const m = tmp.exec(short);
             if (m && m[1]) { matchedName = m[1].trim(); return; }
           }
           // action-style: "Kotori smiled"
           if (!matchedName && actionRegex) {
-            const m = actionRegex.exec(short);
+            const tmp = new RegExp(actionRegex.source, flagsWithoutG(actionRegex) || 'i');
+            const m = tmp.exec(short);
             if (m && m[1]) { matchedName = m[1].trim(); return; }
           }
           // simple name-in-token scan (avoid matches inside quotes)
@@ -408,10 +384,10 @@ jQuery(async () => {
       } else {
         // Heavier scanning on the whole combined buffer
         try {
-          // 1) speakerRegex last occurrence
+          // 1) speakerRegex last occurrence (use global loop to find last match)
           if (!matchedName && speakerRegex) {
             let lastSpeakerMatch = null;
-            const sr = new RegExp(speakerRegex.source, speakerRegex.flags.includes('g') ? speakerRegex.flags : speakerRegex.flags + 'g'); // ensure global for loop
+            const sr = new RegExp(speakerRegex.source, speakerRegex.flags.includes('g') ? speakerRegex.flags : speakerRegex.flags + 'g');
             let m;
             while ((m = sr.exec(combined)) !== null) lastSpeakerMatch = m;
             if (lastSpeakerMatch) matchedName = lastSpeakerMatch[1]?.trim();
@@ -448,7 +424,7 @@ jQuery(async () => {
             if (lastV) matchedName = lastV[1]?.trim();
           }
 
-          // 5a) possessive detection including curly apostrophes (e.g., Kotori’s)
+          // 5a) possessive detection including curly/grave apostrophes (e.g., Kotori’s)
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names_poss.length) {
@@ -509,7 +485,7 @@ jQuery(async () => {
             }
           }
 
-          // Heuristic: prefer the most recent mention among known names
+          // Heuristic: prefer the most recent mention among known names (RECENT_WINDOW)
           if (settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             let chosen = null; let chosenIdx = -1;
@@ -546,7 +522,6 @@ jQuery(async () => {
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
   });
 
-  // Clean up per-message buffers on generation/message events
   eventSource.on(event_types.GENERATION_ENDED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); scheduleResetIfIdle(); });
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
   eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
