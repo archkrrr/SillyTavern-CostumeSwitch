@@ -1,7 +1,7 @@
 {
   "display_name": "Costume Switcher",
   "author": "Archkr",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "description": "Automatically switches character costumes based on dialogue cues in real-time.",
   "homepage": "https://github.com/archkrrr/SillyTavern-CostumeSwitch",
   "js": "script.js",
