@@ -1,137 +1,171 @@
-<div class="settings-panel">
-  <h3 class="settings-title">Costume Switch Settings</h3>
+<div id="costume-switcher-settings" class="extension_container">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+      <b>Costume Switch Settings</b>
+      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+      <!-- Costume Switch Settings -->
+      <div class="tracker-block flex-container">
+        <input id="cs-enable" type="checkbox" />
+        <label for="cs-enable">Enable Costume Switch</label>
+      </div>
+      <hr class="sysHR" />
 
-  <div class="setting-section">
-    <label for="cs-enable">Enable Costume Switch</label>
-    <input type="checkbox" id="cs-enable" name="cs-enable">
+      <!-- Character Patterns -->
+      <div class="tracker-block m-b-1 m-t-1">
+        <label for="cs-patterns">Character Patterns</label><br />
+        <small>Enter character names for costume switching:</small><br />
+        <textarea id="cs-patterns" class="text_pole" rows="4" placeholder="Shido, Kotori, Tohka, Reine"></textarea>
+      </div>
+
+      <!-- Default Costume -->
+      <div class="tracker-block m-b-1 m-t-1">
+        <label for="cs-default">Default Costume</label><br />
+        <input id="cs-default" class="text_pole" type="text" placeholder="Enter default costume..." />
+      </div>
+
+      <!-- Costume Reset Timeout -->
+      <div class="tracker-block m-b-1 m-t-1 inline-group">
+        <label for="cs-timeout">Costume Reset Timeout (ms)</label><br />
+        <input id="cs-timeout" class="text_pole" type="number" min="0" value="300000" />
+      </div>
+
+      <!-- Global Cooldown -->
+      <div class="tracker-block m-b-1 m-t-1 inline-group">
+        <label for="cs-global-cooldown">Global Cooldown (ms)</label><br />
+        <input id="cs-global-cooldown" class="text_pole" type="number" min="0" value="700" />
+      </div>
+
+      <!-- Repeat Suppression -->
+      <div class="tracker-block m-b-1 m-t-1 inline-group">
+        <label for="cs-repeat-suppress">Repeat Suppression (ms)</label><br />
+        <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" value="800" />
+      </div>
+
+      <hr class="sysHR" />
+
+      <!-- Costume Mappings -->
+      <div class="tracker-block m-b-1 m-t-1">
+        <label for="cs-mappings">Costume Mappings</label><br />
+        <small>Character Name and Costume Folder Mappings:</small><br />
+        <table id="cs-mappings">
+          <thead>
+            <tr>
+              <th>Character Name</th>
+              <th>Costume Folder</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="cs-mappings-tbody">
+            <!-- Mappings will be dynamically inserted here -->
+          </tbody>
+        </table>
+        <button id="cs-mapping-add" class="menu_button fa-solid fa-file-circle-plus interactable" title="Add Mapping">Add Mapping</button>
+      </div>
+
+      <hr class="sysHR" />
+
+      <!-- Enable Debug Logging -->
+      <div class="tracker-block flex-container">
+        <input id="cs-debug" type="checkbox" />
+        <label for="cs-debug">Enable Debug Logging</label>
+      </div>
+
+      <!-- Save Settings Button -->
+      <div class="tracker-block flex-container">
+        <button id="cs-save" class="menu_button fa-solid fa-save interactable">Save Settings</button>
+      </div>
+
+      <!-- Status and Error Messages -->
+      <div id="cs-status" class="status-message">Ready</div>
+      <div id="cs-error" class="error-message"></div>
+    </div>
   </div>
+</div>
 
-  <div class="setting-section">
-    <label for="cs-patterns">Character Patterns</label>
-    <textarea id="cs-patterns" name="cs-patterns" rows="4" placeholder="Enter character names, one per line..."></textarea>
-  </div>
-
-  <div class="setting-section">
-    <label for="cs-default">Default Costume</label>
-    <input type="text" id="cs-default" name="cs-default" placeholder="Enter default costume...">
-  </div>
-
-  <div class="setting-section">
-    <label for="cs-timeout">Costume Reset Timeout (ms)</label>
-    <input type="number" id="cs-timeout" name="cs-timeout" min="0" value="3000">
-  </div>
-
-  <div class="setting-section">
-    <label for="cs-global-cooldown">Global Cooldown (ms)</label>
-    <input type="number" id="cs-global-cooldown" name="cs-global-cooldown" min="0" value="1200">
-  </div>
-
-  <div class="setting-section">
-    <label for="cs-repeat-suppress">Repeat Suppression (ms)</label>
-    <input type="number" id="cs-repeat-suppress" name="cs-repeat-suppress" min="0" value="800">
-  </div>
-
-  <div class="setting-section">
-    <label for="cs-mappings">Costume Mappings</label>
-    <table id="cs-mappings">
-      <thead>
-        <tr>
-          <th>Character Name</th>
-          <th>Costume Folder</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="cs-mappings-tbody">
-        <!-- Mappings will be dynamically inserted here -->
-      </tbody>
-    </table>
-    <button id="cs-mapping-add">Add Mapping</button>
-  </div>
-
-  <div class="setting-section">
-    <label for="cs-debug">Enable Debug Logging</label>
-    <input type="checkbox" id="cs-debug" name="cs-debug">
-  </div>
-
-  <div class="setting-section">
-    <button id="cs-save">Save Settings</button>
-  </div>
-
-  <div id="cs-status" class="status-message">Ready</div>
-  <div id="cs-error" class="error-message"></div>
+<!-- Dropdown for Vectorization Source -->
+<div class="tracker-block m-b-1 m-t-1">
+  <label for="cs-vector-source">Vectorization Source</label><br />
+  <select id="cs-vector-source" class="text_pole">
+    <option value="local" selected>Local (Transformers)</option>
+    <option value="cloud">Cloud (External Service)</option>
+  </select>
 </div>
 
 <style>
-  .settings-panel {
-    background: #2f2f2f;
+  .extension_container {
+    font-family: Arial, sans-serif;
+    background-color: #333;
+    color: #fff;
     padding: 20px;
     border-radius: 8px;
-    color: white;
-    font-family: Arial, sans-serif;
   }
 
-  .settings-title {
-    font-size: 18px;
+  .inline-drawer-header {
+    font-size: 1.2em;
     font-weight: bold;
-    margin-bottom: 15px;
-  }
-
-  .setting-section {
-    margin-bottom: 15px;
-  }
-
-  label {
-    font-size: 14px;
-    margin-bottom: 5px;
-    display: block;
-  }
-
-  input[type="text"],
-  input[type="number"],
-  textarea {
-    width: 100%;
-    padding: 8px;
-    background: #3a3a3a;
-    color: white;
-    border: 1px solid #555;
-    border-radius: 5px;
-  }
-
-  textarea {
-    resize: vertical;
-  }
-
-  button {
-    padding: 8px 16px;
-    background-color: #5a5a5a;
-    color: white;
-    border: none;
-    border-radius: 5px;
     cursor: pointer;
   }
 
-  button:hover {
-    background-color: #707070;
+  .inline-drawer-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
-  .status-message,
-  .error-message {
-    margin-top: 10px;
-    padding: 8px;
+  .tracker-block {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .tracker-block.inline-group {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .text_pole {
+    background-color: #444;
+    color: white;
+    border: 1px solid #555;
     border-radius: 5px;
+    padding: 8px;
+    font-size: 0.9em;
+    box-sizing: border-box;
+  }
+
+  button.menu_button {
+    background-color: #666;
+    color: white;
+    border-radius: 5px;
+    padding: 8px 16px;
+    cursor: pointer;
+  }
+
+  button.menu_button:hover {
+    background-color: #888;
+  }
+
+  hr.sysHR {
+    border: none;
+    height: 1px;
+    background-color: #555;
+    margin: 20px 0;
   }
 
   .status-message {
+    padding: 10px;
     background-color: #4CAF50;
+    border-radius: 5px;
+    margin-top: 10px;
   }
 
   .error-message {
-    background-color: #F44336;
-  }
-
-  #cs-mappings-table th,
-  #cs-mappings-table td {
     padding: 10px;
-    text-align: left;
+    background-color: #F44336;
+    border-radius: 5px;
+    margin-top: 10px;
   }
 </style>
