@@ -42,7 +42,7 @@ The **SillyTavern Costume Switcher** extension allows users to automatically swi
 
 ## License
 
-This extension is licensed under the **MIT License**.
+This extension is licensed under the **GNU General Public License v3.0**.
 
 ---
 
