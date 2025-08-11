@@ -75,6 +75,14 @@ Here are a few visual examples to help guide you through the configuration:
 *This is how you want to setup Quick Replies for it to work with the extension*
 
 
+#### Costume Switcher Settings
+
+![Costume Switcher Settings](path/to/your/image2.png)
+
+*Here, you can see how the Costume Switcher settings match the Quick Reply labels. The character names like `Char A`, `Char B`, etc., are mapped to specific costumes.*
+
+
+
 ## Support and Contributions
 
 - **Support**: If you encounter any issues or need help using this extension, feel free to reach out via [GitHub Issues](https://github.com/your-repo/issues) or join the **SillyTavern community** on Discord.
