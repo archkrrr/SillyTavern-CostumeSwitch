@@ -17,7 +17,7 @@ const DEFAULTS = {
   maxBufferChars: 2000,
 
   // NEW tunables (safe defaults)
-  tokenBoundarySize: 80,        // chars of prev buffer to include when quick-scanning tokens
+  tokenBoundarySize: 80,      // chars of prev buffer to include when quick-scanning tokens
   pronounLookbackChars: 1400,   // how far back to search for names when resolving pronouns
   repeatSuppressMs: 800         // suppress repeated accepted matches/logs for this many ms
 };
@@ -134,6 +134,57 @@ function lastNonQuotedMatch(combined, regex, quoteRanges) {
   const ms = findNonQuotedMatches(combined, regex, quoteRanges);
   return ms.length ? ms[ms.length - 1] : null;
 }
+
+/**
+ * Finds all strong matches (speaker, attribution, action) and returns the one that occurs latest in the text.
+ * @param {string} combined The text buffer to search.
+ * @param {object} regexes An object containing the regex patterns { speakerRegex, attributionRegex, actionRegex }.
+ * @param {Array<[number, number]>} quoteRanges Pre-computed quote ranges.
+ * @returns {object|null} The latest match object { name, matchKind, matchIndex } or null.
+ */
+function findLatestStrongMatch(combined, regexes, quoteRanges) {
+    if (!combined) return null;
+
+    const allMatches = [];
+    const { speakerRegex, attributionRegex, actionRegex } = regexes;
+
+    // 1. Find all matches for each type
+    if (speakerRegex) {
+        const speakerMatches = findNonQuotedMatches(combined, speakerRegex, quoteRanges);
+        speakerMatches.forEach(m => {
+            const name = m.groups?.[0]?.trim();
+            if (name) allMatches.push({ name, matchKind: 'speaker', matchIndex: m.index });
+        });
+    }
+
+    if (attributionRegex) {
+        const attrMatches = findNonQuotedMatches(combined, attributionRegex, quoteRanges);
+        attrMatches.forEach(m => {
+            // Find the first valid group, which is the name
+            const name = m.groups?.find(g => g)?.trim();
+            if (name) allMatches.push({ name, matchKind: 'attribution', matchIndex: m.index });
+        });
+    }
+
+    if (actionRegex) {
+        const actionMatches = findNonQuotedMatches(combined, actionRegex, quoteRanges);
+        actionMatches.forEach(m => {
+            const name = m.groups?.[0]?.trim();
+            if (name) allMatches.push({ name, matchKind: 'action', matchIndex: m.index });
+        });
+    }
+
+    if (allMatches.length === 0) {
+        return null;
+    }
+
+    // 2. Sort by index to find the one that appears latest
+    allMatches.sort((a, b) => b.matchIndex - a.matchIndex);
+
+    // 3. Return the latest match
+    return allMatches[0];
+}
+
 
 function isInsideQuotes(text, pos) {
   if (!text || pos <= 0) return false;
@@ -361,7 +412,7 @@ jQuery(async () => {
         console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
         return false;
     }
-}
+  }
 
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
@@ -698,141 +749,122 @@ jQuery(async () => {
 
       // heavy scanning
       try {
-        // 1) speakerRegex last non-quoted occurrence
-        if (speakerRegex) {
-          const lastSpeaker = lastNonQuotedMatch(combined, speakerRegex, quoteRanges);
-          if (lastSpeaker) {
-            matchedName = lastSpeaker.groups && lastSpeaker.groups[0] ? lastSpeaker.groups[0].trim() : null;
-            matchKind = 'speaker';
-            matchIndex = lastSpeaker.index || 0;
-            if (matchedName) {
-              state.currentSpeaker = matchedName;
-              state.lastSpeakerIndex = matchIndex;
-              perMessageStates.set(bufKey, state);
-            }
-          }
-        }
+          const latestMatch = findLatestStrongMatch(combined, { speakerRegex, attributionRegex, actionRegex }, quoteRanges);
 
-        // 2) attribution
-        if (!matchedName && attributionRegex) {
-          const lastA = lastNonQuotedMatch(combined, attributionRegex, quoteRanges);
-          if (lastA) {
-            if (lastA.groups && lastA.groups.length) {
-              for (const g of lastA.groups) {
-                if (g) { matchedName = g.trim(); matchKind = 'attribution'; matchIndex = lastA.index || 0; break; }
+          if (latestMatch) {
+              matchedName = latestMatch.name;
+              matchKind = latestMatch.matchKind;
+              matchIndex = latestMatch.matchIndex;
+              
+              if (matchKind === 'speaker' && matchedName) {
+                  state.currentSpeaker = matchedName;
+                  state.lastSpeakerIndex = matchIndex;
+                  perMessageStates.set(bufKey, state);
               }
-            }
           }
-        }
 
-        // 3) action
-        if (!matchedName && actionRegex) {
-          const lastAct = lastNonQuotedMatch(combined, actionRegex, quoteRanges);
-          if (lastAct && lastAct.groups && lastAct.groups.length) {
-            matchedName = lastAct.groups[0].trim();
-            matchKind = 'action';
-            matchIndex = lastAct.index || 0;
-          }
-        }
-
-        // 4) vocative
-        if (!matchedName && vocativeRegex) {
-          const lastV = lastNonQuotedMatch(combined, vocativeRegex, quoteRanges);
-          if (lastV && lastV.groups && lastV.groups.length) {
-            matchedName = lastV.groups[0].trim();
-            matchKind = 'vocative';
-            matchIndex = lastV.index || 0;
-          }
-        }
-
-        // 5a) possessive
-        if (!matchedName && settings.patterns && settings.patterns.length) {
-          const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-          if (names_poss.length) {
-            const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
-            const lastP = lastNonQuotedMatch(combined, possRe, quoteRanges);
-            if (lastP && lastP.groups && lastP.groups.length) {
-              matchedName = lastP.groups[0].trim();
-              matchKind = 'possessive';
-              matchIndex = lastP.index || 0;
-            }
-          }
-        }
-
-        // 5b) pronoun inference
-        if (!matchedName && settings.patterns && settings.patterns.length) {
-          const pronARe = /["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\s*,?\s*(?:he|she|they)\s+(?:said|murmured|whispered|replied|asked|noted|added|sighed|laughed|exclaimed)/i;
-          const pM = pronARe.exec(combined);
-          if (pM) {
-            const chosenFromStack = getMostRecentSpeakerBefore();
-            if (chosenFromStack) {
-              matchedName = chosenFromStack;
-              matchKind = 'pronoun-infer';
-              matchIndex = pM.index || 0;
-            } else {
-              const cutIndex = pM.index || 0;
-              const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
-              const sub = (combined || '').slice(lookback, cutIndex);
-              const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-              if (names_pron.length) {
-                const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
-                const lastMatch = lastNonQuotedMatch(sub, anyNameRe, getQuoteRanges(sub));
-                if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
-                  matchedName = lastMatch.groups[0].trim();
-                  matchKind = 'pronoun-infer';
-                  matchIndex = lookback + (lastMatch.index || 0);
+          // Fallback to weaker regexes ONLY if no strong match was found
+          if (!matchedName) {
+              // vocative
+              if (vocativeRegex) {
+                const lastV = lastNonQuotedMatch(combined, vocativeRegex, quoteRanges);
+                if (lastV && lastV.groups && lastV.groups.length) {
+                  matchedName = lastV.groups[0].trim();
+                  matchKind = 'vocative';
+                  matchIndex = lastV.index || 0;
                 }
               }
-            }
-          }
-        }
 
-        // 5c) narration fallback
-        if (!matchedName && nameRegex && settings.narrationSwitch) {
-          const actionsOrPossessive = "(?:'s|’s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
-          const narrationRe = new RegExp(nameRegex.source + '\\b\\s+' + actionsOrPossessive + '\\b', 'gi');
-          const lastMatch = lastNonQuotedMatch(combined, narrationRe, quoteRanges);
-          if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
-            matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
-            matchKind = 'narration';
-            matchIndex = lastMatch.index || 0;
-          }
-        }
+              // possessive
+              if (!matchedName && settings.patterns && settings.patterns.length) {
+                const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+                if (names_poss.length) {
+                  const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
+                  const lastP = lastNonQuotedMatch(combined, possRe, quoteRanges);
+                  if (lastP && lastP.groups && lastP.groups.length) {
+                    matchedName = lastP.groups[0].trim();
+                    matchKind = 'possessive';
+                    matchIndex = lastP.index || 0;
+                  }
+                }
+              }
 
-        // 6) last-resort name
-        if (!matchedName && settings.patterns && settings.patterns.length) {
-          const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-          if (names.length) {
-            const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'gi');
-            const lastMatch = lastNonQuotedMatch(combined, anyNameRe, quoteRanges);
-            if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
-              matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
-              matchKind = 'name';
-              matchIndex = lastMatch.index || 0;
-            }
-          }
-        }
+              // pronoun inference
+              if (!matchedName && settings.patterns && settings.patterns.length) {
+                const pronARe = /["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\s*,?\s*(?:he|she|they)\s+(?:said|murmured|whispered|replied|asked|noted|added|sighed|laughed|exclaimed)/i;
+                const pM = pronARe.exec(combined);
+                if (pM) {
+                  const chosenFromStack = getMostRecentSpeakerBefore();
+                  if (chosenFromStack) {
+                    matchedName = chosenFromStack;
+                    matchKind = 'pronoun-infer';
+                    matchIndex = pM.index || 0;
+                  } else {
+                    const cutIndex = pM.index || 0;
+                    const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
+                    const sub = (combined || '').slice(lookback, cutIndex);
+                    const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+                    if (names_pron.length) {
+                      const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
+                      const lastMatch = lastNonQuotedMatch(sub, anyNameRe, getQuoteRanges(sub));
+                      if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
+                        matchedName = lastMatch.groups[0].trim();
+                        matchKind = 'pronoun-infer';
+                        matchIndex = lookback + (lastMatch.index || 0);
+                      }
+                    }
+                  }
+                }
+              }
 
-        // heuristic last-resort recent mention
-        if (!matchedName && settings.patterns && settings.patterns.length) {
-          const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-          let chosen = null; let chosenIdx = -1;
-          for (const nm of names) {
-            const low = nm.toLowerCase();
-            const idx = (combined || '').toLowerCase().lastIndexOf(low);
-            if (idx > chosenIdx) { chosen = nm; chosenIdx = idx; }
+              // narration fallback
+              if (!matchedName && nameRegex && settings.narrationSwitch) {
+                const actionsOrPossessive = "(?:'s|’s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
+                const narrationRe = new RegExp(nameRegex.source + '\\b\\s+' + actionsOrPossessive + '\\b', 'gi');
+                const lastMatch = lastNonQuotedMatch(combined, narrationRe, quoteRanges);
+                if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
+                  matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
+                  matchKind = 'narration';
+                  matchIndex = lastMatch.index || 0;
+                }
+              }
+
+              // last-resort name
+              if (!matchedName && settings.patterns && settings.patterns.length) {
+                const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+                if (names.length) {
+                  const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'gi');
+                  const lastMatch = lastNonQuotedMatch(combined, anyNameRe, quoteRanges);
+                  if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
+                    matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
+                    matchKind = 'name';
+                    matchIndex = lastMatch.index || 0;
+                  }
+                }
+              }
+
+              // heuristic last-resort recent mention
+              if (!matchedName && settings.patterns && settings.patterns.length) {
+                const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+                let chosen = null; let chosenIdx = -1;
+                for (const nm of names) {
+                  const low = nm.toLowerCase();
+                  const idx = (combined || '').toLowerCase().lastIndexOf(low);
+                  if (idx > chosenIdx) { chosen = nm; chosenIdx = idx; }
+                }
+                const RECENT_WINDOW = 700;
+                if (chosen && chosenIdx >= (combined.length - RECENT_WINDOW)) {
+                  matchedName = chosen;
+                  matchKind = 'heuristic';
+                  matchIndex = chosenIdx;
+                  perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
+                }
+              }
           }
-          const RECENT_WINDOW = 700;
-          if (chosen && chosenIdx >= (combined.length - RECENT_WINDOW)) {
-            matchedName = chosen;
-            matchKind = 'heuristic';
-            matchIndex = chosenIdx;
-            perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
-          }
-        }
       } catch (e) {
-        if (settings.debug) console.error("Heavy scan error:", e);
+          if (settings.debug) console.error("Heavy scan error:", e);
       }
+
 
       // heavy-scan suppression checks
       if (matchedName) {
@@ -917,7 +949,7 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.4 — repeat-suppression + speaker-index guards) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.5 — chronological matching) loaded.");
 });
 
 // getSettingsObj - unchanged pattern
