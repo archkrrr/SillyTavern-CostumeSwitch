@@ -40,28 +40,32 @@
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-          <small>Enable or disable specific detection methods. Disabling methods can improve accuracy if you only want to switch on specific cues (like speaker tags).</small>
+          <small>Enable or disable specific detection methods. Disabling methods can improve accuracy if you only want to switch on specific cues (like speaker tags). Speaker tags (e.g., `Name:`) are always enabled.</small>
           
           <div class="tracker-block">
             <input id="cs-detect-attribution" type="checkbox" />
-            <label for="cs-detect-attribution">Detect Attribution ("...", said Name)</label>
+            <label for="cs-detect-attribution">Detect Attribution</label>
+            <small>Looks for phrases where a character is credited with speaking, like <em>"I agree," Tohka said.</em> This is a high-priority, accurate method.</small>
           </div>
           <div class="tracker-block">
             <input id="cs-detect-action" type="checkbox" />
-            <label for="cs-detect-action">Detect Action (Name nodded)</label>
+            <label for="cs-detect-action">Detect Action</label>
+            <small>Looks for a character's name followed by an action verb, like <em>Kotori leaned forward.</em> This is useful for identifying the character performing an action.</small>
           </div>
           <div class="tracker-block">
             <input id="cs-detect-vocative" type="checkbox" />
-            <label for="cs-detect-vocative">Detect Vocative (Hello, Name)</label>
+            <label for="cs-detect-vocative">Detect Vocative</label>
+            <small>Looks for instances where a character is being directly addressed, like <em>"What do you think, Shido?"</em> This is useful for scenes with direct dialogue.</small>
           </div>
           <div class="tracker-block">
             <input id="cs-detect-possessive" type="checkbox" />
-            <label for="cs-detect-possessive">Detect Possessive (Name's book)</label>
+            <label for="cs-detect-possessive">Detect Possessive</label>
+            <small>Looks for a character's name showing ownership, like <em>Tohka's sword glowed.</em> This is a lower-priority match.</small>
           </div>
           <div class="tracker-block">
             <input id="cs-detect-general" type="checkbox" />
             <label for="cs-detect-general">Detect General Name Mentions</label>
-            <small>This is the lowest priority match and can be inaccurate. It will detect a character's name anywhere in the text.</small>
+            <small>The least accurate method. It will trigger on any mention of a character's name that doesn't fit the other categories. <b>Warning:</b> This can cause incorrect switches if a character is mentioned by someone else.</small>
           </div>
         </div>
       </div>
