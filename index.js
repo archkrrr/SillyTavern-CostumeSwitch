@@ -3,6 +3,8 @@ import { saveSettingsDebounced } from "../../../../script.js";
 
 const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+const { triggerQuickReply } = window.quickReplyExtension || {};
+
 
 const DEFAULTS = {
   enabled: true,
