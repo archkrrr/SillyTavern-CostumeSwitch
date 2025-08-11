@@ -18,7 +18,7 @@ const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const DEFAULTS = {
   enabled: true,
   resetTimeoutMs: 3000,
-  patterns: ["Tohka", "Shido", "Kotori", "Reine"],
+  patterns: ["Char A", "Char B", "Char C", "Char D"],
   defaultCostume: "",
   narrationSwitch: false,
   debug: false,
@@ -27,7 +27,7 @@ const DEFAULTS = {
   failedTriggerCooldownMs: 10000,
   maxBufferChars: 2000,
   repeatSuppressMs: 800,
-  mappings: [] // { name: "Shido", folder: "Shido/CostumeFolder" }
+  mappings: []
 };
 
 /* --- helpers for pattern parsing --- */
