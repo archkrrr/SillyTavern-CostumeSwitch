@@ -259,6 +259,18 @@ function ensureBufferLimit() {
   }
 }
 
+// ADDED BACK: This function was accidentally removed.
+function waitForSelector(selector, timeout = 3000, interval = 120) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const iv = setInterval(() => {
+      const el = document.querySelector(selector);
+      if (el) { clearInterval(iv); resolve(true); return; }
+      if (Date.now() - start > timeout) { clearInterval(iv); resolve(false); }
+    }, interval);
+  });
+}
+
 jQuery(async () => {
   const { store, save, ctx } = getSettingsObj();
   const settings = store[extensionName];
@@ -584,7 +596,7 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.8 — state reset fix) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.9 — reference error fix) loaded.");
 });
 
 // getSettingsObj - unchanged pattern
