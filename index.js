@@ -106,6 +106,46 @@ function isIndexInsideQuotesRanges(ranges, idx) {
   return false;
 }
 
+// New quote-aware helpers
+function posIsInsideQuotes(pos, combined, quoteRanges) {
+  if (pos == null || !combined) return false;
+  if (quoteRanges && quoteRanges.length) {
+    if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
+  }
+  // parity fallback for streaming/unclosed quotes
+  return isInsideQuotes(combined, pos);
+}
+
+// Iterate and collect non-quoted matches for a regex (returns array of {match, groups, index})
+function findNonQuotedMatches(combined, regex, quoteRanges) {
+  if (!combined || !regex) return [];
+  const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
+  const re = new RegExp(regex.source, flags);
+  const results = [];
+  let m;
+  while ((m = re.exec(combined)) !== null) {
+    const idx = m.index || 0;
+    if (!posIsInsideQuotes(idx, combined, quoteRanges)) {
+      results.push({ match: m[0], groups: m.slice(1), index: idx });
+    }
+    // avoid infinite loop for zero-length matches
+    if (re.lastIndex === m.index) re.lastIndex++;
+  }
+  return results;
+}
+function lastNonQuotedMatch(combined, regex, quoteRanges) {
+  const ms = findNonQuotedMatches(combined, regex, quoteRanges);
+  return ms.length ? ms[ms.length - 1] : null;
+}
+
+function isInsideQuotes(text, pos) {
+  // keep fallback (counts double quotes) but prefer range-based checks in main code
+  if (!text || pos <= 0) return false;
+  const before = text.slice(0, pos);
+  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
+  return (quoteCount % 2) === 1;
+}
+
 /* Text normalization for incoming tokens */
 function normalizeStreamText(s) {
   if (!s) return '';
@@ -119,14 +159,6 @@ function normalizeStreamText(s) {
   // NBSP -> space
   s = s.replace(/\u00A0/g, ' ');
   return s;
-}
-
-function isInsideQuotes(text, pos) {
-  // keep fallback (counts double quotes) but prefer range-based checks in main code
-  if (!text || pos <= 0) return false;
-  const before = text.slice(0, pos);
-  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
-  return (quoteCount % 2) === 1;
 }
 
 // runtime state
@@ -367,49 +399,49 @@ jQuery(async () => {
   }
 
   function issueCostumeForName(name) {
-  if (!name) return;
-  name = normalizeCostumeName(name);
-  const now = Date.now();
+    if (!name) return;
+    name = normalizeCostumeName(name);
+    const now = Date.now();
 
-  // --- EARLY: check if we're already using this costume (avoid needless re-switching) ---
-  // lastIssuedCostume is typically stored as "Name/Name" or similar; normalize it
-  const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
-  if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
-    if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
-    // keep the idle-reset timer alive so auto-reset still happens after timeout
-    scheduleResetIfIdle();
-    return;
-  }
+    // --- EARLY: check if we're already using this costume (avoid needless re-switching) ---
+    // lastIssuedCostume is typically stored as "Name/Name" or similar; normalize it
+    const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
+    if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
+      if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
+      // keep the idle-reset timer alive so auto-reset still happens after timeout
+      scheduleResetIfIdle();
+      return;
+    }
 
-  // --- global cooldown (only after confirming name differs from current) ---
-  if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
-    if (settings.debug) console.debug("CS debug: global cooldown active, skipping switch to", name, {
-      lastSwitchTimestamp, cooldownMs: settings.globalCooldownMs || DEFAULTS.globalCooldownMs
-    });
-    return;
-  }
+    // --- global cooldown (only after confirming name differs from current) ---
+    if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
+      if (settings.debug) console.debug("CS debug: global cooldown active, skipping switch to", name, {
+        lastSwitchTimestamp, cooldownMs: settings.globalCooldownMs || DEFAULTS.globalCooldownMs
+      });
+      return;
+    }
 
-  const argFolder = `${name}/${name}`;
-  const last = lastTriggerTimes.get(argFolder) || 0;
-  if (now - last < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) {
-    if (settings.debug) console.debug("CS debug: per-trigger cooldown active, skipping", argFolder);
-    return;
-  }
+    const argFolder = `${name}/${name}`;
+    const last = lastTriggerTimes.get(argFolder) || 0;
+    if (now - last < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) {
+      if (settings.debug) console.debug("CS debug: per-trigger cooldown active, skipping", argFolder);
+      return;
+    }
 
-  if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder);
-  const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
-  if (ok) {
-    lastTriggerTimes.set(argFolder, now);
-    lastIssuedCostume = argFolder;
-    lastSwitchTimestamp = now;
-    if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
-    setTimeout(()=>$("#cs-status").text(""), 1000);
-  } else {
-    failedTriggerTimes.set(argFolder.toLowerCase(), Date.now());
-    if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
-    setTimeout(()=>$("#cs-status").text(""), 1000);
+    if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder);
+    const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
+    if (ok) {
+      lastTriggerTimes.set(argFolder, now);
+      lastIssuedCostume = argFolder;
+      lastSwitchTimestamp = now;
+      if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
+      setTimeout(()=>$("#cs-status").text(""), 1000);
+    } else {
+      failedTriggerTimes.set(argFolder.toLowerCase(), Date.now());
+      if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
+      setTimeout(()=>$("#cs-status").text(""), 1000);
+    }
   }
-}
 
 
   function scheduleResetIfIdle() {
@@ -459,7 +491,6 @@ jQuery(async () => {
           if (!short) return;
 
           // QUICK heuristic: skip tokens that look like internal logs / UI text
-          // (these strings came from your logs; extend if you see other repeats)
           const systemNoiseRe = /Event emitted:|Added\/edited expression override|Expression set|force redrawing character|Streaming in progress:|Timeout waiting for is_send_press|Invalid URI|Empty string passed to getElementById/i;
           if (systemNoiseRe.test(short)) {
             if (settings.debug) console.debug("CS debug: skipping system-noise token:", short.slice(0,120));
@@ -476,48 +507,54 @@ jQuery(async () => {
           const prevLength = (prev || '').length;
 
           // helper: accept match only if it overlaps into the new token (not fully inside prev)
-          function matchOverlapsNewToken(matchIndex, matchText) {
+          function matchOverlapsNewToken(matchIndex, matchTextLen) {
             const startInCombined = windowOffset + matchIndex;
-            const endInCombined = startInCombined + (String(matchText || '').length);
+            const endInCombined = startInCombined + (matchTextLen || 0);
             // require that match end is greater than prevLength (i.e., some of it is in the new token)
             return endInCombined > prevLength;
           }
 
+          // Prepare quote ranges for the window (parity fallback still ok)
+          const windowQuoteRanges = getQuoteRanges(window);
+
           // 1) speakerRegexNoG on window (helps capture "Kotori:" or "Kotori Yatogami:" when split)
           if (speakerRegexNoG) {
-            const m = speakerRegexNoG.exec(window);
-            if (m && m[1]) {
-              if (matchOverlapsNewToken(m.index || 0, m[0] || m[1])) {
-                const posInCombined = windowOffset + (m.index || 0);
-                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+            const matches = findNonQuotedMatches(window, speakerRegexNoG, windowQuoteRanges);
+            if (matches.length) {
+              const m = matches[0]; // short window should have earliest match
+              if (matchOverlapsNewToken(m.index, m.match.length)) {
+                const posInCombined = windowOffset + m.index;
+                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) { matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null; return; }
               } else {
-                if (settings.debug) console.debug("CS debug: speakerRegex match ignored (entirely in prev buffer).");
+                if (settings.debug) console.debug("CS debug: speakerRegex window match ignored (entirely in prev buffer).");
               }
             }
           }
 
           // 2) vocativeRegexNoG on window
           if (!matchedName && vocativeRegexNoG) {
-            const m = vocativeRegexNoG.exec(window);
-            if (m && m[1]) {
-              if (matchOverlapsNewToken(m.index || 0, m[0] || m[1])) {
-                const posInCombined = windowOffset + (m.index || 0);
-                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+            const matches = findNonQuotedMatches(window, vocativeRegexNoG, windowQuoteRanges);
+            if (matches.length) {
+              const m = matches[0];
+              if (matchOverlapsNewToken(m.index, m.match.length)) {
+                const posInCombined = windowOffset + m.index;
+                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) { matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null; return; }
               } else {
-                if (settings.debug) console.debug("CS debug: vocativeRegex match ignored (entirely in prev buffer).");
+                if (settings.debug) console.debug("CS debug: vocativeRegex window match ignored (entirely in prev buffer).");
               }
             }
           }
 
           // 3) actionRegexNoG on window (catches "Kotori Itsuka leaned..." where "Kotori" might have been token-boundary-split)
           if (!matchedName && actionRegexNoG) {
-            const m = actionRegexNoG.exec(window);
-            if (m && m[1]) {
-              if (matchOverlapsNewToken(m.index || 0, m[0] || m[1])) {
-                const posInCombined = windowOffset + (m.index || 0);
-                if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) { matchedName = m[1].trim(); return; }
+            const matches = findNonQuotedMatches(window, actionRegexNoG, windowQuoteRanges);
+            if (matches.length) {
+              const m = matches[0];
+              if (matchOverlapsNewToken(m.index, m.match.length)) {
+                const posInCombined = windowOffset + m.index;
+                if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) { matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null; return; }
               } else {
-                if (settings.debug) console.debug("CS debug: actionRegex match ignored (entirely in prev buffer).");
+                if (settings.debug) console.debug("CS debug: actionRegex window match ignored (entirely in prev buffer).");
               }
             }
           }
@@ -529,9 +566,10 @@ jQuery(async () => {
               const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'i');
               const mm = anyNameRe.exec(window);
               if (mm && mm[1]) {
-                if (matchOverlapsNewToken(mm.index || 0, mm[0] || mm[1])) {
-                  const posInCombined = windowOffset + (mm.index || 0);
-                  if (!isIndexInsideQuotesRanges(quoteRanges, posInCombined)) matchedName = mm[1].trim();
+                const mmIdx = mm.index || 0;
+                if (matchOverlapsNewToken(mmIdx, mm[0].length)) {
+                  const posInCombined = windowOffset + mmIdx;
+                  if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) matchedName = mm[1].trim();
                 } else {
                   if (settings.debug) console.debug("CS debug: name-in-window match ignored (entirely in prev buffer).");
                 }
@@ -553,62 +591,45 @@ jQuery(async () => {
         return;
       }
 
-      // HEAVY scanning on the whole combined buffer
+      // HEAVY scanning on the whole combined buffer (quote-aware)
       try {
-        // 1) speakerRegex last occurrence
+        // 1) speakerRegex last non-quoted occurrence
         if (!matchedName && speakerRegex) {
-          let lastSpeakerMatch = null;
-          const sr = new RegExp(speakerRegex.source, speakerRegex.flags.includes('g') ? speakerRegex.flags : speakerRegex.flags + 'g');
-          let m;
-          while ((m = sr.exec(combined)) !== null) lastSpeakerMatch = m;
-          if (lastSpeakerMatch) {
-            const pos = lastSpeakerMatch.index || 0;
-            if (!isIndexInsideQuotesRanges(quoteRanges, pos)) matchedName = lastSpeakerMatch[1]?.trim();
-          }
+          const lastSpeaker = lastNonQuotedMatch(combined, speakerRegex, quoteRanges);
+          if (lastSpeaker) matchedName = lastSpeaker.groups && lastSpeaker.groups[0] ? lastSpeaker.groups[0].trim() : null;
         }
 
-        // 2) attribution (last)
+        // 2) attribution (last non-quoted)
         if (!matchedName && attributionRegex) {
-          let lastA = null;
-          const ar = new RegExp(attributionRegex.source, attributionRegex.flags.includes('g') ? attributionRegex.flags : attributionRegex.flags + 'g');
-          let am;
-          while ((am = ar.exec(combined)) !== null) lastA = am;
+          const lastA = lastNonQuotedMatch(combined, attributionRegex, quoteRanges);
           if (lastA) {
-            for (let i = 1; i < lastA.length; i++) {
-              if (lastA[i]) { matchedName = lastA[i].trim(); break; }
+            if (lastA.groups && lastA.groups.length) {
+              for (const g of lastA.groups) {
+                if (g) { matchedName = g.trim(); break; }
+              }
             }
           }
         }
 
-        // 3) action regex last occurrence
+        // 3) action regex last non-quoted occurrence
         if (!matchedName && actionRegex) {
-          let lastAct = null;
-          const ac = new RegExp(actionRegex.source, actionRegex.flags.includes('g') ? actionRegex.flags : actionRegex.flags + 'g');
-          let am;
-          while ((am = ac.exec(combined)) !== null) lastAct = am;
-          if (lastAct) { for (let i = 1; i < lastAct.length; i++) if (lastAct[i]) { matchedName = lastAct[i].trim(); break; } }
+          const lastAct = lastNonQuotedMatch(combined, actionRegex, quoteRanges);
+          if (lastAct && lastAct.groups && lastAct.groups.length) matchedName = lastAct.groups[0].trim();
         }
 
-        // 4) vocative last occurrence
+        // 4) vocative last non-quoted occurrence
         if (!matchedName && vocativeRegex) {
-          let lastV = null;
-          const vr = new RegExp(vocativeRegex.source, vocativeRegex.flags.includes('g') ? vocativeRegex.flags : vocativeRegex.flags + 'g');
-          let vm;
-          while ((vm = vr.exec(combined)) !== null) lastV = vm;
-          if (lastV) matchedName = lastV[1]?.trim();
+          const lastV = lastNonQuotedMatch(combined, vocativeRegex, quoteRanges);
+          if (lastV && lastV.groups && lastV.groups.length) matchedName = lastV.groups[0].trim();
         }
 
-        // 5a) possessive detection including curly/grave apostrophes (e.g., Kotori’s)
+        // 5a) possessive detection (non-quoted)
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           if (names_poss.length) {
             const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
-            let lastP = null; let pm;
-            while ((pm = possRe.exec(combined)) !== null) {
-              if (isIndexInsideQuotesRanges(quoteRanges, pm.index)) continue;
-              lastP = pm;
-            }
-            if (lastP) { matchedName = lastP[1].trim(); }
+            const lastP = lastNonQuotedMatch(combined, possRe, quoteRanges);
+            if (lastP && lastP.groups && lastP.groups.length) matchedName = lastP.groups[0].trim();
           }
         }
 
@@ -623,45 +644,35 @@ jQuery(async () => {
             const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names_pron.length) {
               const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
-              let lastMatch = null; let mm;
-              while ((mm = anyNameRe.exec(sub)) !== null) {
-                const globalIdx = lookback + mm.index;
-                if (isIndexInsideQuotesRanges(quoteRanges, globalIdx)) continue;
-                lastMatch = mm;
-              }
-              if (lastMatch) { matchedName = lastMatch[1].trim(); }
+              const lastMatch = lastNonQuotedMatch(sub, anyNameRe, getQuoteRanges(sub));
+              if (lastMatch && lastMatch.groups && lastMatch.groups.length) matchedName = lastMatch.groups[0].trim();
             }
           }
         }
 
-        // 5c) narration fallback
+        // 5c) narration fallback (only if user enabled narrationSwitch)
         if (!matchedName && nameRegex && settings.narrationSwitch) {
           const actionsOrPossessive = "(?:'s|’s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
           const narrationRe = new RegExp(nameRegex.source + '\\b\\s+' + actionsOrPossessive + '\\b', 'gi');
-          let lastMatch = null; let mm;
-          while ((mm = narrationRe.exec(combined)) !== null) {
-            if (isIndexInsideQuotesRanges(quoteRanges, mm.index)) continue;
-            for (let i = 1; i < mm.length; i++) if (mm[i]) { lastMatch = { name: mm[i], idx: mm.index }; break; }
+          const lastMatch = lastNonQuotedMatch(combined, narrationRe, quoteRanges);
+          if (lastMatch && lastMatch.groups && lastMatch.groups.length) {
+            matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
           }
-          if (lastMatch) { matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim(); }
         }
 
-        // 6) last-resort: last occurrence of any known name not in quotes
+        // 6) last-resort: last non-quoted occurrence of any known name
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           if (names.length) {
             const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'gi');
-            let lastMatch = null; let m;
-            while ((m = anyNameRe.exec(combined)) !== null) {
-              if (isIndexInsideQuotesRanges(quoteRanges, m.index)) continue;
-              lastMatch = { name: m[1], idx: m.index };
-            }
-            if (lastMatch) { matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim(); }
+            const lastMatch = lastNonQuotedMatch(combined, anyNameRe, quoteRanges);
+            if (lastMatch && lastMatch.groups && lastMatch.groups.length) matchedName = String(lastMatch.groups[0] || lastMatch.match).replace(/-(?:sama|san)$/i, '').trim();
           }
         }
 
         // Heuristic: prefer the most recent mention among known names
-        if (settings.patterns && settings.patterns.length) {
+        // Only accept chosen if it is recent enough
+        if (!matchedName && settings.patterns && settings.patterns.length) {
           const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           let chosen = null; let chosenIdx = -1;
           for (const nm of names) {
@@ -670,11 +681,9 @@ jQuery(async () => {
             if (idx > chosenIdx) { chosen = nm; chosenIdx = idx; }
           }
           const RECENT_WINDOW = 700;
-          if (chosen) {
-            if (!matchedName || chosenIdx >= (combined.length - RECENT_WINDOW)) {
-              matchedName = chosen;
-              perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
-            }
+          if (chosen && chosenIdx >= (combined.length - RECENT_WINDOW)) {
+            matchedName = chosen;
+            perMessageBuffers.set(bufKey, (combined || '').slice(chosenIdx + chosen.length));
           }
         }
       } catch (e) {
@@ -701,7 +710,7 @@ jQuery(async () => {
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
   eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
 
-  console.log("SillyTavern-CostumeSwitch (patched v3.2) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.0 — quote-aware) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
