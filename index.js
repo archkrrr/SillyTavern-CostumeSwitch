@@ -4,7 +4,7 @@ import { extension_settings, getContext, loadExtensionSettings } from "../../../
 import { saveSettingsDebounced } from "../../../../script.js";
 
 const extensionName = "SillyTavern-CostumeSwitch";
-const extensionFolderPath = scripts/extensions/third-party/${extensionName};
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 // default settings
 const DEFAULTS = {
@@ -51,16 +51,16 @@ function buildNameRegex(patternList) {
     if (!trimmed) return null;
     // allow literal /.../flags entries to be used directly (we insert the body)
     const m = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
-    if (m) return (${m[1]});
+    if (m) return `(${m[1]})`;
     // for plain names, allow optional "-sama" or "-san" suffix
-    return (${escapeRegex(trimmed)}(?:-(?:sama|san))?);
+    return `(${escapeRegex(trimmed)}(?:-(?:sama|san))?)`;
   }).filter(Boolean);
 
   if (escaped.length === 0) return null;
 
   // Wrap with non-word boundary anchors so names are found anywhere but not inside other words.
   // Final regex example: (?:^|\W)(?:(Name(?:-sama)?)|(Name2(?:-san)?)))(?:\W|$)
-  return new RegExp((?:^|\\W)(?:${escaped.join('|')})(?:\\W|$), 'i');
+  return new RegExp(`(?:^|\\W)(?:${escaped.join('|')})(?:\\W|$)`, 'i');
 }
 
 // runtime state
@@ -78,12 +78,12 @@ jQuery(async () => {
 
   // load settings UI HTML
   try {
-    const settingsHtml = await $.get(${extensionFolderPath}/settings.html);
+    const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
     $("#extensions_settings").append(settingsHtml);
   } catch (e) {
     console.warn("Failed to load settings.html:", e);
     // If load fails, create a minimal UI container
-    $("#extensions_settings").append(<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>);
+    $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
   }
 
   // initialize UI values
@@ -96,7 +96,7 @@ jQuery(async () => {
   // helper to persist
   function persistSettings() {
     if (save) save();
-    $("#cs-status").text(Saved ${new Date().toLocaleTimeString()});
+    $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
     setTimeout(()=>$("#cs-status").text(""), 1500);
   }
 
@@ -159,14 +159,14 @@ jQuery(async () => {
       const name = parts[0];
       candidates.push(costumeArg); // label: "Name/Folder" or title
       candidates.push(name);       // label: "Name"
-      candidates.push(/costume ${costumeArg}); // message title
-      candidates.push(/costume ${name});       // message title (no folder)
+      candidates.push(`/costume ${costumeArg}`); // message title
+      candidates.push(`/costume ${name}`);       // message title (no folder)
     } else {
       const name = costumeArg;
       candidates.push(name);                     // label "Name"
-      candidates.push(${name}/${name});        // label "Name/Name"
-      candidates.push(/costume ${name});       // title
-      candidates.push(/costume ${name}/${name}); // title with folder
+      candidates.push(`${name}/${name}`);        // label "Name/Name"
+      candidates.push(`/costume ${name}`);       // title
+      candidates.push(`/costume ${name}/${name}`); // title with folder
     }
 
     for (const c of candidates) {
@@ -182,7 +182,7 @@ jQuery(async () => {
     if (!costumeArg) {
       // use current character name as both folder and name (typical)
       const ch = realCtx.characters?.[realCtx.characterId];
-      if (ch && ch.name) costumeArg = ${ch.name}/${ch.name};
+      if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
     }
     if (!costumeArg) {
       $("#cs-status").text("No default costume defined.");
@@ -192,10 +192,10 @@ jQuery(async () => {
     const ok = triggerQuickReplyVariants(costumeArg);
     if (ok) {
       lastIssuedCostume = costumeArg;
-      $("#cs-status").text(Reset -> ${costumeArg});
+      $("#cs-status").text(`Reset -> ${costumeArg}`);
       setTimeout(()=>$("#cs-status").text(""), 1500);
     } else {
-      $("#cs-status").text(Quick Reply not found for ${costumeArg});
+      $("#cs-status").text(`Quick Reply not found for ${costumeArg}`);
       setTimeout(()=>$("#cs-status").text(""), 1500);
     }
   }
@@ -203,7 +203,7 @@ jQuery(async () => {
   // issue costume switch (with small per-costume cooldown)
   async function issueCostumeForName(name) {
     if (!name) return;
-    const argFolder = ${name}/${name};
+    const argFolder = `${name}/${name}`;
     const now = Date.now();
     const last = lastTriggerTimes.get(argFolder) || 0;
     if (now - last < TRIGGER_COOLDOWN_MS) {
@@ -215,10 +215,10 @@ jQuery(async () => {
     if (ok) {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
-      $("#cs-status").text(Switched -> ${argFolder});
+      $("#cs-status").text(`Switched -> ${argFolder}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
-      $("#cs-status").text(Quick Reply not found for ${name});
+      $("#cs-status").text(`Quick Reply not found for ${name}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     }
   }
@@ -231,13 +231,13 @@ jQuery(async () => {
         let costumeArg = settings.defaultCostume || "";
         if (!costumeArg) {
           const ch = realCtx.characters?.[realCtx.characterId];
-          if (ch && ch.name) costumeArg = ${ch.name}/${ch.name};
+          if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
         }
         if (costumeArg) {
           const ok = triggerQuickReplyVariants(costumeArg);
           if (ok) {
             lastIssuedCostume = costumeArg;
-            $("#cs-status").text(Auto-reset -> ${costumeArg});
+            $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
             setTimeout(()=>$("#cs-status").text(""), 1200);
           } else {
             console.debug("Auto-reset quick reply not found for", costumeArg);
@@ -274,7 +274,7 @@ jQuery(async () => {
       if (!tokenText) return;
 
       // decide a key for buffer; prefer messageId if known, else use 'live'
-      const bufKey = messageId != null ? m${messageId} : 'live';
+      const bufKey = messageId != null ? `m${messageId}` : 'live';
       const prev = perMessageBuffers.get(bufKey) || "";
       const combined = prev + tokenText;
       perMessageBuffers.set(bufKey, combined);
@@ -319,12 +319,12 @@ jQuery(async () => {
 
   // Also listen for GENERATION_ENDED and MESSAGE_RECEIVED to clear buffers for finished message ids
   eventSource.on(event_types.GENERATION_ENDED, (messageId) => {
-    if (messageId != null) perMessageBuffers.delete(m${messageId});
+    if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
     scheduleResetIfIdle();
   });
 
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
-    if (messageId != null) perMessageBuffers.delete(m${messageId});
+    if (messageId != null) perMessageBuffers.delete(`m${messageId}`);
   });
 
   // When chat/character changes, clear state
