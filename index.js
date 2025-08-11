@@ -1,9 +1,3 @@
-/* Full patched index.js — v4.3
-   Change: issueCostumeForName now accepts opts {matchKind, matchIndex, bufKey}
-   and strong match kinds bypass the global cooldown.
-   Keep previous fixes (cleanup, caps, click guard, recent speaker stack, speaker-aware guards).
-*/
-
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
@@ -24,7 +18,8 @@ const DEFAULTS = {
 
   // NEW tunables (safe defaults)
   tokenBoundarySize: 80,        // chars of prev buffer to include when quick-scanning tokens
-  pronounLookbackChars: 1400   // how far back to search for names when resolving pronouns
+  pronounLookbackChars: 1400,   // how far back to search for names when resolving pronouns
+  repeatSuppressMs: 800         // suppress repeated accepted matches/logs for this many ms
 };
 
 function escapeRegex(s) {
@@ -112,17 +107,14 @@ function isIndexInsideQuotesRanges(ranges, idx) {
   return false;
 }
 
-// New quote-aware helpers
 function posIsInsideQuotes(pos, combined, quoteRanges) {
   if (pos == null || !combined) return false;
   if (quoteRanges && quoteRanges.length) {
     if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
   }
-  // parity fallback for streaming/unclosed quotes
   return isInsideQuotes(combined, pos);
 }
 
-// Iterate and collect non-quoted matches for a regex (returns array of {match, groups, index})
 function findNonQuotedMatches(combined, regex, quoteRanges) {
   if (!combined || !regex) return [];
   const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
@@ -134,7 +126,6 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
     if (!posIsInsideQuotes(idx, combined, quoteRanges)) {
       results.push({ match: m[0], groups: m.slice(1), index: idx });
     }
-    // avoid infinite loop for zero-length matches
     if (re.lastIndex === m.index) re.lastIndex++;
   }
   return results;
@@ -145,61 +136,47 @@ function lastNonQuotedMatch(combined, regex, quoteRanges) {
 }
 
 function isInsideQuotes(text, pos) {
-  // keep fallback (counts double quotes) but prefer range-based checks in main code
   if (!text || pos <= 0) return false;
   const before = text.slice(0, pos);
   const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
   return (quoteCount % 2) === 1;
 }
 
-/* Text normalization for incoming tokens */
 function normalizeStreamText(s) {
   if (!s) return '';
   s = String(s);
-  // strip zero-width / BOM
   s = s.replace(/[\uFEFF\u200B\u200C\u200D]/g, '');
-  // convert smart quotes to straight quotes
   s = s.replace(/[\u2018\u2019\u201A\u201B]/g, "'").replace(/[\u201C\u201D\u201E\u201F]/g, '"');
-  // remove common markdown wrappers that often surround text
   s = s.replace(/(\*\*|__|~~|`{1,3})/g, '');
-  // NBSP -> space
   s = s.replace(/\u00A0/g, ' ');
   return s;
 }
 
-// normalizeCostumeName (top-level)
 function normalizeCostumeName(n) {
   if (!n) return "";
   let s = String(n).trim();
-  // remove leading slash if present
   if (s.startsWith("/")) s = s.slice(1).trim();
-  // if it's a folder-like "name/name" or "/name/name", use the first segment
-  // split on forward slash or whitespace and take first meaningful token
   const first = s.split(/[\/\s]+/).filter(Boolean)[0] || s;
-  // strip common honorifics appended with - or _ (keep simpler)
   return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
 }
 
 // runtime state
 const perMessageBuffers = new Map();
-const perMessageStates = new Map(); // map bufKey -> { currentSpeaker, lastSpeakerIndex }
+const perMessageStates = new Map(); // bufKey -> { currentSpeaker, lastSpeakerIndex, lastAcceptedName, lastAcceptedIndex, lastAcceptedTs, lastAlreadyUsingLogTs }
 let lastIssuedCostume = null;
 let resetTimer = null;
 let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
 const failedTriggerTimes = new Map();
 
-// stable handler refs for cleanup
 let _streamHandler = null;
 let _genEndHandler = null;
 let _msgRecvHandler = null;
 let _chatChangedHandler = null;
 
-// click guard set
 let _clickInProgress = new Set();
 
-// buffer cap helpers
-const MAX_MESSAGE_BUFFERS = 60; // tuneable
+const MAX_MESSAGE_BUFFERS = 60;
 function ensureBufferLimit() {
   if (perMessageBuffers.size <= MAX_MESSAGE_BUFFERS) return;
   while (perMessageBuffers.size > MAX_MESSAGE_BUFFERS) {
@@ -209,16 +186,14 @@ function ensureBufferLimit() {
   }
 }
 
-// recent speaker stack for pronoun resolution
-const recentSpeakers = []; // {name, ts}
+const recentSpeakers = [];
 const RECENT_SPEAKER_MAX = 8;
 function pushRecentSpeaker(name) {
   name = normalizeCostumeName(name || '');
   if (!name) return;
   const ts = Date.now();
   if (recentSpeakers.length && recentSpeakers[recentSpeakers.length-1].name.toLowerCase() === name.toLowerCase()) {
-    recentSpeakers[recentSpeakers.length-1].ts = ts;
-    return;
+    recentSpeakers[recentSpeakers.length-1].ts = ts; return;
   }
   recentSpeakers.push({ name, ts });
   if (recentSpeakers.length > RECENT_SPEAKER_MAX) recentSpeakers.shift();
@@ -241,13 +216,11 @@ function waitForSelector(selector, timeout = 3000, interval = 120) {
   });
 }
 
-/* flags helper */
 function flagsWithoutG(regex) {
   if (!regex) return '';
   return (regex.flags || '').replace(/g/g, '');
 }
 
-/* precomputed non-global regex slots (filled when building regexes) */
 let speakerRegexNoG = null;
 let vocativeRegexNoG = null;
 let actionRegexNoG = null;
@@ -277,9 +250,9 @@ jQuery(async () => {
   if ($("#cs-per-cooldown").length) $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
   if ($("#cs-failed-cooldown").length) $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
   if ($("#cs-max-buffer").length) $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
-  // new inputs (if you added them to settings.html) should be wired similarly:
   if ($("#cs-token-boundary").length) $("#cs-token-boundary").val(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize);
   if ($("#cs-pronoun-lookback").length) $("#cs-pronoun-lookback").val(settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars);
+  if ($("#cs-repeat-suppress").length) $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
 
   $("#cs-status").text("Ready");
 
@@ -319,11 +292,13 @@ jQuery(async () => {
         const mb = parseInt($("#cs-max-buffer").val() || DEFAULTS.maxBufferChars, 10);
         settings.maxBufferChars = isFinite(mb) && mb > 0 ? mb : DEFAULTS.maxBufferChars;
 
-        // wire new tunables if present in UI
         const tbs = parseInt($("#cs-token-boundary").val() || DEFAULTS.tokenBoundarySize, 10);
         settings.tokenBoundarySize = isFinite(tbs) && tbs > 0 ? tbs : DEFAULTS.tokenBoundarySize;
         const pl = parseInt($("#cs-pronoun-lookback").val() || DEFAULTS.pronounLookbackChars, 10);
         settings.pronounLookbackChars = isFinite(pl) && pl > 0 ? pl : DEFAULTS.pronounLookbackChars;
+
+        const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
+        settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
 
         // rebuild regexes & noG variants
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
@@ -339,8 +314,6 @@ jQuery(async () => {
   }
   tryWireUI(); setTimeout(tryWireUI, 500); setTimeout(tryWireUI, 1500);
 
-  /* Simulate a real quick-reply click on SillyTavern's QR buttons.
-     Uses .qr--button (visible button) and falls back to title (message). */
   function triggerQuickReply(labelOrMessage) {
     try {
       const label = String(labelOrMessage || '').trim();
@@ -348,7 +321,6 @@ jQuery(async () => {
 
       const candidates = Array.from(document.querySelectorAll('.qr--button'));
 
-      // 1) match by visible label text inside .qr--button-label
       for (const el of candidates) {
         try {
           const lbl = el.querySelector('.qr--button-label');
@@ -360,7 +332,6 @@ jQuery(async () => {
         } catch (e) { /* continue */ }
       }
 
-      // 2) match by title attribute (underlying quick-reply message text, e.g. "/costume Shido")
       for (const el of candidates) {
         try {
           const title = (el.getAttribute && el.getAttribute('title')) || '';
@@ -372,7 +343,6 @@ jQuery(async () => {
         } catch (e) { /* continue */ }
       }
 
-      // 3) try matching trimmed/normalized variations (some installs may store label slightly differently)
       for (const el of candidates) {
         try {
           const lbl = el.querySelector('.qr--button-label');
@@ -394,13 +364,11 @@ jQuery(async () => {
     }
   }
 
-  /* Quick-reply trigger that attempts multiple candidate message forms and respects failed cooldowns */
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
     const name = normalizeCostumeName(String(costumeArg));
     if (!name) return false;
 
-    // candidate order (prefer simplest)
     const rawCandidates = [
       `${name}`,
       `${name}/${name}`,
@@ -456,7 +424,6 @@ jQuery(async () => {
     else { if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`); setTimeout(()=>$("#cs-status").text(""), 1500); }
   }
 
-  /* UPDATED: now accepts opts = { matchKind, matchIndex, bufKey } */
   function issueCostumeForName(name, opts = {}) {
     if (!name) return;
     name = normalizeCostumeName(name);
@@ -466,11 +433,19 @@ jQuery(async () => {
     // strong kinds that should bypass global cooldown
     const strongKinds = new Set(['speaker','action','attribution','vocative','narration','pronoun-infer']);
 
-    // --- EARLY: check if we're already using this costume (avoid needless re-switching) ---
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
     if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
-      if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
-      // keep the idle-reset timer alive so auto-reset still happens after timeout
+      try {
+        const stateForBuf = perMessageStates.get(opts?.bufKey) || {};
+        const lastLog = stateForBuf.lastAlreadyUsingLogTs || 0;
+        const now2 = Date.now();
+        const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs) || DEFAULTS.repeatSuppressMs;
+        if (now2 - lastLog > suppressMs) {
+          if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
+          stateForBuf.lastAlreadyUsingLogTs = now2;
+          perMessageStates.set(opts?.bufKey || 'live', stateForBuf);
+        }
+      } catch (e) { if (settings.debug) console.debug("CS debug: already using costume (log suppressed on error)"); }
       scheduleResetIfIdle();
       return;
     }
@@ -499,8 +474,8 @@ jQuery(async () => {
     if (ok) {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
-      lastSwitchTimestamp = now; // update last switch time even if we bypassed
-      pushRecentSpeaker(name); // record successful switch as a confident speaker detection
+      lastSwitchTimestamp = now;
+      pushRecentSpeaker(name);
       if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
@@ -509,7 +484,6 @@ jQuery(async () => {
       setTimeout(()=>$("#cs-status").text(""), 1000);
     }
   }
-
 
   function scheduleResetIfIdle() {
     if (resetTimer) clearTimeout(resetTimer);
@@ -529,9 +503,7 @@ jQuery(async () => {
 
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-  // -------------------------
-  // STREAM HANDLER (main)
-  // -------------------------
+  // stream handler
   _streamHandler = (...args) => {
     try {
       if (!settings.enabled) return;
@@ -542,71 +514,66 @@ jQuery(async () => {
       else tokenText = String(args.join(' ') || "");
       if (!tokenText) return;
 
-      // normalize the streamed token
       tokenText = normalizeStreamText(tokenText);
 
       const bufKey = messageId != null ? `m${messageId}` : 'live';
       const prev = perMessageBuffers.get(bufKey) || "";
-      const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars)); // cap buffer
+      const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars));
       perMessageBuffers.set(bufKey, combined);
       ensureBufferLimit();
 
-      // ensure a state object
-      if (!perMessageStates.has(bufKey)) perMessageStates.set(bufKey, { currentSpeaker: null, lastSpeakerIndex: -1 });
-
+      if (!perMessageStates.has(bufKey)) perMessageStates.set(bufKey, {
+        currentSpeaker: null,
+        lastSpeakerIndex: -1,
+        lastAcceptedName: null,
+        lastAcceptedIndex: -1,
+        lastAcceptedTs: 0,
+        lastAlreadyUsingLogTs: 0
+      });
       const state = perMessageStates.get(bufKey);
+
       let matchedName = null;
       let matchKind = null;
       let matchIndex = -1;
 
-      // build quote ranges once for this buffer
       const quoteRanges = getQuoteRanges(combined);
 
-      // QUICK token-level scan (low-latency) using precomputed noG regexes
       (function quickTokenScan() {
         try {
           const short = String(tokenText || '').trim();
           if (!short) return;
 
-          // QUICK heuristic: skip tokens that look like internal logs / UI text
           const systemNoiseRe = /Event emitted:|Added\/edited expression override|Expression set|force redrawing character|Streaming in progress:|Timeout waiting for is_send_press|Invalid URI|Empty string passed to getElementById/i;
           if (systemNoiseRe.test(short)) {
             if (settings.debug) console.debug("CS debug: skipping system-noise token:", short.slice(0,120));
             return;
           }
 
-          // Build a small "boundary window" which includes the tail of the previous buffer
-          // so we can detect names/actions split across token boundaries.
           const boundarySize = Number(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize) || DEFAULTS.tokenBoundarySize;
           const prevTailStart = Math.max(0, (prev || '').length - boundarySize);
           const prevTail = (prev || '').slice(prevTailStart);
           const window = prevTail + short;
-          const windowOffset = prevTailStart; // index of window[0] inside combined
+          const windowOffset = prevTailStart;
           const prevLength = (prev || '').length;
 
-          // helper: accept match only if it overlaps into the new token (not fully inside prev)
           function matchOverlapsNewToken(matchIndexLocal, matchTextLen) {
             const startInCombined = windowOffset + matchIndexLocal;
             const endInCombined = startInCombined + (matchTextLen || 0);
-            // require that match end is greater than prevLength (i.e., some of it is in the new token)
             return endInCombined > prevLength;
           }
 
-          // Prepare quote ranges for the window (parity fallback still ok)
           const windowQuoteRanges = getQuoteRanges(window);
 
-          // 1) speakerRegexNoG on window (helps capture "Kotori:" or "Kotori Yatogami:" when split)
           if (speakerRegexNoG) {
             const matches = findNonQuotedMatches(window, speakerRegexNoG, windowQuoteRanges);
             if (matches.length) {
-              const m = matches[0]; // short window should have earliest match
+              const m = matches[0];
               if (matchOverlapsNewToken(m.index, m.match.length)) {
                 const posInCombined = windowOffset + m.index;
                 if (!posIsInsideQuotes(posInCombined, combined, quoteRanges)) {
                   matchedName = m.groups && m.groups[0] ? m.groups[0].trim() : null;
                   matchKind = 'speaker';
                   matchIndex = posInCombined;
-                  // update per-message speaker state immediately
                   state.currentSpeaker = matchedName;
                   state.lastSpeakerIndex = matchIndex;
                   return;
@@ -617,7 +584,6 @@ jQuery(async () => {
             }
           }
 
-          // 2) vocativeRegexNoG on window
           if (!matchedName && vocativeRegexNoG) {
             const matches = findNonQuotedMatches(window, vocativeRegexNoG, windowQuoteRanges);
             if (matches.length) {
@@ -636,7 +602,6 @@ jQuery(async () => {
             }
           }
 
-          // 3) actionRegexNoG on window (catches "Kotori Itsuka leaned..." where "Kotori" might have been token-boundary-split)
           if (!matchedName && actionRegexNoG) {
             const matches = findNonQuotedMatches(window, actionRegexNoG, windowQuoteRanges);
             if (matches.length) {
@@ -655,7 +620,6 @@ jQuery(async () => {
             }
           }
 
-          // 4) simple name-in-token scan on window (case-insensitive)
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names.length) {
@@ -683,24 +647,46 @@ jQuery(async () => {
         } catch (e) { if (settings.debug) console.warn("quickTokenScan error", e); }
       })();
 
-      // Decide whether to accept quick-scan match
+      // Suppression checks (avoid repeated acceptance)
       if (matchedName) {
-        if (settings.debug) console.debug("CS debug: quickTokenScan matchedName =", matchedName, "kind=", matchKind, "bufKey:", bufKey);
-        // Guard: if the buffer currently has a different currentSpeaker, then only accept strong kinds
-        const stateNow = perMessageStates.get(bufKey) || { currentSpeaker: null };
-        const curSpeaker = stateNow.currentSpeaker;
-        const nameLower = (matchedName || '').toLowerCase();
-        if (curSpeaker && curSpeaker.toLowerCase() !== nameLower) {
-          // allow only these kinds when a different speaker is active
-          if (!(matchKind === 'action' || matchKind === 'speaker' || matchKind === 'attribution' || matchKind === 'vocative')) {
-            if (settings.debug) console.debug("CS debug: suppressed quick-scan match because different currentSpeaker present", { curSpeaker, matchedName, matchKind });
+        const now = Date.now();
+        const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs) || DEFAULTS.repeatSuppressMs;
+        // skip if same or older occurrence already accepted
+        if (typeof matchIndex === 'number' && matchIndex <= (state.lastAcceptedIndex || -1)) {
+          if (settings.debug) console.debug('CS debug: skipping matched occurrence because matchIndex <= lastAcceptedIndex', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
+          matchedName = null;
+        }
+        // skip if same name accepted recently
+        if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - (state.lastAcceptedTs || 0) < suppressMs)) {
+          if (settings.debug) console.debug('CS debug: suppressing repeat accepted match for same name (repeatSuppressMs)', { matchedName, sinceMs: now - (state.lastAcceptedTs || 0) });
+          matchedName = null;
+        }
+        // if a different current speaker exists, only accept strong kinds and require matchIndex > lastSpeakerIndex
+        if (matchedName && state.currentSpeaker && state.currentSpeaker.toLowerCase() !== matchedName.toLowerCase()) {
+          const strongKinds = new Set(['action','speaker','attribution','vocative','narration','pronoun-infer']);
+          if (!strongKinds.has(matchKind)) {
+            if (settings.debug) console.debug("CS debug: suppressed quick-scan match because different currentSpeaker present", { curSpeaker: state.currentSpeaker, matchedName, matchKind });
             matchedName = null;
+          } else {
+            // require that this occurrence is after the last speaker token; prevents switching to older mentions
+            if (typeof matchIndex === 'number' && typeof state.lastSpeakerIndex === 'number') {
+              if (matchIndex <= state.lastSpeakerIndex) {
+                if (settings.debug) console.debug("CS debug: suppressed strong quick-scan match because matchIndex <= lastSpeakerIndex", { matchedName, matchIndex, lastSpeakerIndex: state.lastSpeakerIndex });
+                matchedName = null;
+              }
+            }
           }
         }
       }
 
       if (matchedName) {
-        // PASS match context to issueCostumeForName
+        // record acceptance
+        const now2 = Date.now();
+        state.lastAcceptedName = matchedName;
+        state.lastAcceptedIndex = (typeof matchIndex === 'number') ? matchIndex : (state.lastAcceptedIndex || -1);
+        state.lastAcceptedTs = now2;
+        perMessageStates.set(bufKey, state);
+
         issueCostumeForName(matchedName, { matchKind, matchIndex, bufKey });
         scheduleResetIfIdle();
         try {
@@ -711,7 +697,7 @@ jQuery(async () => {
         return;
       }
 
-      // HEAVY scanning on the whole combined buffer (quote-aware)
+      // heavy scanning
       try {
         // 1) speakerRegex last non-quoted occurrence
         if (speakerRegex) {
@@ -720,17 +706,15 @@ jQuery(async () => {
             matchedName = lastSpeaker.groups && lastSpeaker.groups[0] ? lastSpeaker.groups[0].trim() : null;
             matchKind = 'speaker';
             matchIndex = lastSpeaker.index || 0;
-            // update per-message speaker state
             if (matchedName) {
-              const st = perMessageStates.get(bufKey) || { currentSpeaker: null, lastSpeakerIndex: -1 };
-              st.currentSpeaker = matchedName;
-              st.lastSpeakerIndex = matchIndex;
-              perMessageStates.set(bufKey, st);
+              state.currentSpeaker = matchedName;
+              state.lastSpeakerIndex = matchIndex;
+              perMessageStates.set(bufKey, state);
             }
           }
         }
 
-        // 2) attribution (last non-quoted)
+        // 2) attribution
         if (!matchedName && attributionRegex) {
           const lastA = lastNonQuotedMatch(combined, attributionRegex, quoteRanges);
           if (lastA) {
@@ -742,7 +726,7 @@ jQuery(async () => {
           }
         }
 
-        // 3) action regex last non-quoted occurrence
+        // 3) action
         if (!matchedName && actionRegex) {
           const lastAct = lastNonQuotedMatch(combined, actionRegex, quoteRanges);
           if (lastAct && lastAct.groups && lastAct.groups.length) {
@@ -752,7 +736,7 @@ jQuery(async () => {
           }
         }
 
-        // 4) vocative last non-quoted occurrence
+        // 4) vocative
         if (!matchedName && vocativeRegex) {
           const lastV = lastNonQuotedMatch(combined, vocativeRegex, quoteRanges);
           if (lastV && lastV.groups && lastV.groups.length) {
@@ -762,7 +746,7 @@ jQuery(async () => {
           }
         }
 
-        // 5a) possessive detection (non-quoted)
+        // 5a) possessive
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           if (names_poss.length) {
@@ -776,12 +760,11 @@ jQuery(async () => {
           }
         }
 
-        // 5b) pronoun attribution inference (prefer recent-speaker stack first)
+        // 5b) pronoun inference
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const pronARe = /["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\s*,?\s*(?:he|she|they)\s+(?:said|murmured|whispered|replied|asked|noted|added|sighed|laughed|exclaimed)/i;
           const pM = pronARe.exec(combined);
           if (pM) {
-            // try recentSpeakers stack first
             const chosenFromStack = getMostRecentSpeakerBefore();
             if (chosenFromStack) {
               matchedName = chosenFromStack;
@@ -805,7 +788,7 @@ jQuery(async () => {
           }
         }
 
-        // 5c) narration fallback (only if user enabled narrationSwitch)
+        // 5c) narration fallback
         if (!matchedName && nameRegex && settings.narrationSwitch) {
           const actionsOrPossessive = "(?:'s|’s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|sighed|remarked|added)";
           const narrationRe = new RegExp(nameRegex.source + '\\b\\s+' + actionsOrPossessive + '\\b', 'gi');
@@ -817,7 +800,7 @@ jQuery(async () => {
           }
         }
 
-        // 6) last-resort: last non-quoted occurrence of any known name
+        // 6) last-resort name
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           if (names.length) {
@@ -831,7 +814,7 @@ jQuery(async () => {
           }
         }
 
-        // Heuristic: prefer the most recent mention among known names (if still none)
+        // heuristic last-resort recent mention
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
           let chosen = null; let chosenIdx = -1;
@@ -852,23 +835,41 @@ jQuery(async () => {
         if (settings.debug) console.error("Heavy scan error:", e);
       }
 
-      // Decision guard: if there's a different currentSpeaker present, block weak matches
+      // heavy-scan suppression checks
       if (matchedName) {
-        const stateNow = perMessageStates.get(bufKey) || { currentSpeaker: null };
-        const curSpeaker = stateNow.currentSpeaker;
-        const nameLower = (matchedName || '').toLowerCase();
-        if (curSpeaker && curSpeaker.toLowerCase() !== nameLower) {
-          // allow only these stronger kinds when a different speaker is active
+        const now = Date.now();
+        const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs) || DEFAULTS.repeatSuppressMs;
+        if (typeof matchIndex === 'number' && matchIndex <= (state.lastAcceptedIndex || -1)) {
+          if (settings.debug) console.debug('CS debug: skipping matched occurrence because matchIndex <= lastAcceptedIndex', { matchedName, matchIndex, lastAcceptedIndex: state.lastAcceptedIndex });
+          matchedName = null;
+        }
+        if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - (state.lastAcceptedTs || 0) < suppressMs)) {
+          if (settings.debug) console.debug('CS debug: suppressing repeat accepted match for same name (repeatSuppressMs)', { matchedName, sinceMs: now - (state.lastAcceptedTs || 0) });
+          matchedName = null;
+        }
+        if (matchedName && state.currentSpeaker && state.currentSpeaker.toLowerCase() !== matchedName.toLowerCase()) {
           const strongKinds = new Set(['action','speaker','attribution','vocative','narration','pronoun-infer']);
           if (!strongKinds.has(matchKind)) {
-            if (settings.debug) console.debug("CS debug: suppressed heavy-scan match because different currentSpeaker present", { curSpeaker, matchedName, matchKind });
+            if (settings.debug) console.debug("CS debug: suppressed heavy-scan match because different currentSpeaker present", { curSpeaker: state.currentSpeaker, matchedName, matchKind });
             matchedName = null;
+          } else {
+            if (typeof matchIndex === 'number' && typeof state.lastSpeakerIndex === 'number') {
+              if (matchIndex <= state.lastSpeakerIndex) {
+                if (settings.debug) console.debug("CS debug: suppressed strong heavy-scan match because matchIndex <= lastSpeakerIndex", { matchedName, matchIndex, lastSpeakerIndex: state.lastSpeakerIndex });
+                matchedName = null;
+              }
+            }
           }
         }
       }
 
       if (matchedName) {
-        // PASS match context to issueCostumeForName
+        const now2 = Date.now();
+        state.lastAcceptedName = matchedName;
+        state.lastAcceptedIndex = (typeof matchIndex === 'number') ? matchIndex : (state.lastAcceptedIndex || -1);
+        state.lastAcceptedTs = now2;
+        perMessageStates.set(bufKey, state);
+
         issueCostumeForName(matchedName, { matchKind, matchIndex, bufKey });
         scheduleResetIfIdle();
         try {
@@ -883,21 +884,17 @@ jQuery(async () => {
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
   };
 
-  // -------------------------
-  // OTHER EVENT HANDLERS
-  // -------------------------
   _genEndHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } scheduleResetIfIdle(); };
   _msgRecvHandler = (messageId) => { if (messageId != null) { perMessageBuffers.delete(`m${messageId}`); perMessageStates.delete(`m${messageId}`); } };
   _chatChangedHandler = () => { perMessageBuffers.clear(); perMessageStates.clear(); lastIssuedCostume = null; recentSpeakers.length = 0; };
 
-  // Ensure previous handlers (if any) are cleared first to avoid duplication
   function unload() {
     try {
       if (eventSource && _streamHandler) eventSource.off?.(streamEventName, _streamHandler);
       if (eventSource && _genEndHandler) eventSource.off?.(event_types.GENERATION_ENDED, _genEndHandler);
       if (eventSource && _msgRecvHandler) eventSource.off?.(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
       if (eventSource && _chatChangedHandler) eventSource.off?.(event_types.CHAT_CHANGED, _chatChangedHandler);
-    } catch (e) { /* hosts may not expose off(); ignore */ }
+    } catch (e) { /* ignore */ }
     if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
     perMessageBuffers.clear();
     perMessageStates.clear();
@@ -908,10 +905,8 @@ jQuery(async () => {
     _clickInProgress.clear();
   }
 
-  // call unload proactively in case of hot-reload
   try { unload(); } catch(e) {}
 
-  // attach handlers
   try {
     eventSource.on(streamEventName, _streamHandler);
     eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
@@ -921,16 +916,12 @@ jQuery(async () => {
     console.error("CostumeSwitch: failed to attach event handlers:", e);
   }
 
-  // Expose a manual unload for dev convenience (optional)
-  try {
-    const globalKey = `__${extensionName}_unload`;
-    window[globalKey] = unload;
-  } catch (e) { /* ignore */ }
+  try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.3 — cooldown-bypass for strong signals) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.4 — repeat-suppression + speaker-index guards) loaded.");
 });
 
-/* Helper: getSettingsObj copied from original but preserved for context storage lookup */
+// getSettingsObj - unchanged pattern
 function getSettingsObj() {
   const ctx = typeof getContext === 'function' ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (ctx && ctx.extensionSettings) {
@@ -943,7 +934,7 @@ function getSettingsObj() {
   if (typeof extension_settings !== 'undefined') {
     extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
     for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extension_settings[extensionName]] = DEFAULTS[k];
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][extensionName] = DEFAULTS[k];
     }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
