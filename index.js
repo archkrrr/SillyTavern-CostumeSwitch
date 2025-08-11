@@ -169,6 +169,46 @@ let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
 const failedTriggerTimes = new Map();
 
+// NEW: stable handler refs for cleanup
+let _streamHandler = null;
+let _genEndHandler = null;
+let _msgRecvHandler = null;
+let _chatChangedHandler = null;
+
+// NEW: click guard set
+let _clickInProgress = new Set();
+
+// NEW: buffer cap helpers
+const MAX_MESSAGE_BUFFERS = 60; // tuneable
+function ensureBufferLimit() {
+  if (perMessageBuffers.size <= MAX_MESSAGE_BUFFERS) return;
+  while (perMessageBuffers.size > MAX_MESSAGE_BUFFERS) {
+    const firstKey = perMessageBuffers.keys().next().value;
+    perMessageBuffers.delete(firstKey);
+  }
+}
+
+// NEW: recent speaker stack for pronoun resolution
+const recentSpeakers = []; // {name, ts}
+const RECENT_SPEAKER_MAX = 8;
+function pushRecentSpeaker(name) {
+  name = normalizeCostumeName(name || '');
+  if (!name) return;
+  const ts = Date.now();
+  if (recentSpeakers.length && recentSpeakers[recentSpeakers.length-1].name.toLowerCase() === name.toLowerCase()) {
+    recentSpeakers[recentSpeakers.length-1].ts = ts;
+    return;
+  }
+  recentSpeakers.push({ name, ts });
+  if (recentSpeakers.length > RECENT_SPEAKER_MAX) recentSpeakers.shift();
+}
+function getMostRecentSpeakerBefore(cutoffTs = Date.now()) {
+  for (let i = recentSpeakers.length - 1; i >= 0; --i) {
+    if (recentSpeakers[i].ts <= cutoffTs) return recentSpeakers[i].name;
+  }
+  return null;
+}
+
 function waitForSelector(selector, timeout = 3000, interval = 120) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -375,13 +415,22 @@ jQuery(async () => {
         if (settings.debug) console.debug("CS debug: skipping candidate due to failed-cooldown", { candidate: c, lastFailed, cooldown });
         continue;
       }
-      if (triggerQuickReply(c)) {
-        failedTriggerTimes.delete(key);
-        if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants succeeded for", c);
-        return true;
-      } else {
-        failedTriggerTimes.set(key, Date.now());
-        if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants failed for", c);
+      if (_clickInProgress.has(key)) {
+        if (settings.debug) console.debug("CS debug: click in progress, skipping candidate", key);
+        continue;
+      }
+      try {
+        _clickInProgress.add(key);
+        if (triggerQuickReply(c)) {
+          failedTriggerTimes.delete(key);
+          if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants succeeded for", c);
+          return true;
+        } else {
+          failedTriggerTimes.set(key, Date.now());
+          if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants failed for", c);
+        }
+      } finally {
+        _clickInProgress.delete(key);
       }
     }
     return false;
@@ -404,7 +453,6 @@ jQuery(async () => {
     const now = Date.now();
 
     // --- EARLY: check if we're already using this costume (avoid needless re-switching) ---
-    // lastIssuedCostume is typically stored as "Name/Name" or similar; normalize it
     const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
     if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
       if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
@@ -434,6 +482,7 @@ jQuery(async () => {
       lastTriggerTimes.set(argFolder, now);
       lastIssuedCostume = argFolder;
       lastSwitchTimestamp = now;
+      pushRecentSpeaker(name); // record successful switch as a confident speaker detection
       if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
@@ -462,7 +511,10 @@ jQuery(async () => {
 
   const streamEventName = event_types?.STREAM_TOKEN_RECEIVED || event_types?.SMOOTH_STREAM_TOKEN_RECEIVED || 'stream_token_received';
 
-  eventSource.on(streamEventName, (...args) => {
+  // -------------------------
+  // STREAM HANDLER (main)
+  // -------------------------
+  _streamHandler = (...args) => {
     try {
       if (!settings.enabled) return;
       let tokenText = ""; let messageId = null;
@@ -479,6 +531,7 @@ jQuery(async () => {
       const prev = perMessageBuffers.get(bufKey) || "";
       const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars)); // cap buffer
       perMessageBuffers.set(bufKey, combined);
+      ensureBufferLimit();
       let matchedName = null;
 
       // build quote ranges once for this buffer
@@ -560,14 +613,12 @@ jQuery(async () => {
           }
 
           // 4) simple name-in-token scan on window (case-insensitive)
-          // FIX: use findNonQuotedMatches on the small window so matches inside quotes are excluded reliably
           if (!matchedName && settings.patterns && settings.patterns.length) {
             const names = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
             if (names.length) {
               const anyNameRe = new RegExp('\\b(' + names.map(escapeRegex).join('|') + ')\\b', 'i');
               const matches = findNonQuotedMatches(window, anyNameRe, windowQuoteRanges);
               if (matches.length) {
-                // choose first match in window that overlaps into new token
                 for (const mm of matches) {
                   if (!matchOverlapsNewToken(mm.index, mm.match.length)) {
                     if (settings.debug) console.debug("CS debug: name-in-window match ignored (entirely in prev buffer).", mm);
@@ -641,19 +692,25 @@ jQuery(async () => {
           }
         }
 
-        // 5b) pronoun attribution inference
+        // 5b) pronoun attribution inference (prefer recent-speaker stack first)
         if (!matchedName && settings.patterns && settings.patterns.length) {
           const pronARe = /["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\s*,?\s*(?:he|she|they)\s+(?:said|murmured|whispered|replied|asked|noted|added|sighed|laughed|exclaimed)/i;
           const pM = pronARe.exec(combined);
           if (pM) {
-            const cutIndex = pM.index || 0;
-            const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
-            const sub = (combined || '').slice(lookback, cutIndex);
-            const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
-            if (names_pron.length) {
-              const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
-              const lastMatch = lastNonQuotedMatch(sub, anyNameRe, getQuoteRanges(sub));
-              if (lastMatch && lastMatch.groups && lastMatch.groups.length) matchedName = lastMatch.groups[0].trim();
+            // try recentSpeakers stack first
+            const chosenFromStack = getMostRecentSpeakerBefore();
+            if (chosenFromStack) {
+              matchedName = chosenFromStack;
+            } else {
+              const cutIndex = pM.index || 0;
+              const lookback = Math.max(0, cutIndex - (settings.pronounLookbackChars || DEFAULTS.pronounLookbackChars));
+              const sub = (combined || '').slice(lookback, cutIndex);
+              const names_pron = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
+              if (names_pron.length) {
+                const anyNameRe = new RegExp('\\b(' + names_pron.map(escapeRegex).join('|') + ')\\b', 'gi');
+                const lastMatch = lastNonQuotedMatch(sub, anyNameRe, getQuoteRanges(sub));
+                if (lastMatch && lastMatch.groups && lastMatch.groups.length) matchedName = lastMatch.groups[0].trim();
+              }
             }
           }
         }
@@ -712,13 +769,52 @@ jQuery(async () => {
       if (settings.debug) console.debug("CS debug: ", { bufKey, recent: combined.slice(-400), matchedName });
 
     } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
-  });
+  };
 
-  eventSource.on(event_types.GENERATION_ENDED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); scheduleResetIfIdle(); });
-  eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
-  eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
+  // -------------------------
+  // OTHER EVENT HANDLERS
+  // -------------------------
+  _genEndHandler = (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); scheduleResetIfIdle(); };
+  _msgRecvHandler = (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); };
+  _chatChangedHandler = () => { perMessageBuffers.clear(); lastIssuedCostume = null; recentSpeakers.length = 0; };
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.1 — quick-window quote fix) loaded.");
+  // Ensure previous handlers (if any) are cleared first to avoid duplication
+  function unload() {
+    try {
+      if (eventSource && _streamHandler) eventSource.off?.(streamEventName, _streamHandler);
+      if (eventSource && _genEndHandler) eventSource.off?.(event_types.GENERATION_ENDED, _genEndHandler);
+      if (eventSource && _msgRecvHandler) eventSource.off?.(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
+      if (eventSource && _chatChangedHandler) eventSource.off?.(event_types.CHAT_CHANGED, _chatChangedHandler);
+    } catch (e) { /* hosts may not expose off(); ignore */ }
+    if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+    perMessageBuffers.clear();
+    lastIssuedCostume = null;
+    lastTriggerTimes.clear();
+    failedTriggerTimes.clear();
+    recentSpeakers.length = 0;
+    _clickInProgress.clear();
+  }
+
+  // call unload proactively in case of hot-reload
+  try { unload(); } catch(e) {}
+
+  // attach handlers
+  try {
+    eventSource.on(streamEventName, _streamHandler);
+    eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
+    eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
+    eventSource.on(event_types.CHAT_CHANGED, _chatChangedHandler);
+  } catch (e) {
+    console.error("CostumeSwitch: failed to attach event handlers:", e);
+  }
+
+  // Expose a manual unload for dev convenience (optional)
+  try {
+    const globalKey = `__${extensionName}_unload`;
+    window[globalKey] = unload;
+  } catch (e) { /* ignore */ }
+
+  console.log("SillyTavern-CostumeSwitch (patched v4.1 — quick-window quote fix + cleanup) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
