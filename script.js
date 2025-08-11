@@ -1,67 +1,72 @@
-// Immediately-invoked function expression (IIFE) to encapsulate the extension's logic and avoid polluting the global scope.
+// IIFE to encapsulate logic and prevent global scope pollution
 (function () {
-    // --- Extension State and Configuration ---
+    // --- State and Configuration ---
     const extensionName = "SillyTavern-CostumeSwitch";
     const extensionFolderPath = `extensions/${extensionName}`;
-    const defaultSettings = {
-        enabled: false,
-    };
-    let settings = {...defaultSettings };
-    let context; // To hold the SillyTavern context object
-    let observer; // To hold the MutationObserver instance
-    let currentSpeaker = null; // Tracks the currently active character costume
-    let resetTimer = null; // Timer for resetting to the default costume
+    let settings = { enabled: false };
+    let context;
+    let observer;
+    let currentSpeaker = null;
+    let resetTimer = null;
 
-    // Configuration for character costumes.
-    // In a future version, this could be made configurable in the UI.
+    // --- User Configuration ---
+    // This section defines the characters and paths.
+    // In a future version, this could be moved to the UI.
     const costumeConfig = {
+        // IMPORTANT: Assumes your character folders are in 'public/characters/Date a Live/'
         basePath: 'characters/Date a Live/',
-        defaultFolder: 'Date a Live', // The folder for the default/group sprite
-        characters: // List of characters to detect
+        // The folder containing the default group portrait.
+        defaultFolder: 'Date a Live',
+        // List of character names the extension should detect.
+        characters: ["Shido", "Kotori", "Tohka", "Origami", "Yoshino", "Kurumi"]
     };
-
-    // --- Core Functions ---
 
     /**
      * Applies a costume by setting the character's avatar.
-     * This function interacts with an UNDOCUMENTED SillyTavern internal API.
+     * WARNING: This interacts with an UNDOCUMENTED SillyTavern internal function.
      * It may break with future SillyTavern updates.
-     * @param {string} characterName - The name of the character to switch to. If null, resets to default.
+     * @param {string | null} speakerName - The name of the speaker. Resets to default if null.
      */
-    function applyCostume(characterName) {
+    function applyCostume(speakerName) {
         if (!context) return;
 
         const character = context.characters[context.characterId];
         if (!character) return;
 
         let avatarPath;
-        if (characterName && costumeConfig.characters.includes(characterName)) {
-            console.log(` Switching to ${characterName}`);
-            avatarPath = `${costumeConfig.basePath}${characterName}/avatar.png`;
-            currentSpeaker = characterName;
+        if (speakerName && costumeConfig.characters.includes(speakerName)) {
+            // A specific speaker was detected
+            if (currentSpeaker === speakerName) return; // Already showing this costume
+            console.log(`[CostumeSwitch] Switching to ${speakerName}`);
+            avatarPath = `${costumeConfig.basePath}${speakerName}/${character.avatar}`;
+            currentSpeaker = speakerName;
         } else {
-            console.log(' Resetting to default costume.');
-            avatarPath = `${costumeConfig.basePath}${costumeConfig.defaultFolder}/avatar.png`;
+            // Reset to default
+            if (currentSpeaker === null) return; // Already showing default
+            console.log('[CostumeSwitch] Resetting to default costume.');
+            avatarPath = `${costumeConfig.basePath}${costumeConfig.defaultFolder}/${character.avatar}`;
             currentSpeaker = null;
         }
 
-        // The undocumented call to change the avatar.
-        context.setAvatar('char', avatarPath);
+        // The undocumented call to change the avatar for the current character.
+        context.characters.setAvatar(context.characterId, avatarPath);
+        // Force an immediate UI update for the character persona.
+        context.ui.updateCharacterPersona();
     }
 
     /**
-     * Processes a chunk of text from the streaming response.
-     * @param {string} text - The text content to scan for character names.
+     * Processes text from the streaming response to find speaker cues.
+     * @param {string} text - The text content to scan.
      */
     function handleStreamChunk(text) {
-        // Regex to find a name like "Shido:" at the start of a line.
-        const match = text.match(/^(?:<p>)?(\w+):/);
-        if (match && match) {
-            const detectedSpeaker = match;
+        // Regex to find a name like "Shido:" at the start of a string.
+        const match = text.match(/^\s*(\w+):/);
+        
+        if (match && match[1]) {
+            const detectedSpeaker = match[1];
 
-            // Check if this is a configured character and not already the active speaker.
-            if (costumeConfig.characters.includes(detectedSpeaker) && detectedSpeaker!== currentSpeaker) {
-                // Clear any pending reset timer
+            if (costumeConfig.characters.includes(detectedSpeaker)) {
+                // A valid character was detected. Cancel any pending reset.
                 if (resetTimer) {
                     clearTimeout(resetTimer);
                     resetTimer = null;
@@ -78,34 +83,25 @@
     }
 
     /**
-     * Initializes the MutationObserver to watch for chat changes.
+     * Sets up the MutationObserver to watch for chat changes.
      */
     function initializeObserver() {
-        const targetNode = document.getElementById('chat');
-        if (!targetNode) {
-            console.error(' Chat container not found.');
-            return;
-        }
-
         const observerOptions = {
             childList: true,
             subtree: true,
-            characterData: false, // We only care about new nodes being added
+            characterData: false,
         };
 
-        // The callback function to execute when mutations are observed
-        const callback = (mutationList, obs) => {
-            if (!settings.enabled) return; // Do nothing if the extension is disabled
+        const callback = (mutationList) => {
+            if (!settings.enabled) return;
 
             for (const mutation of mutationList) {
                 if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                     mutation.addedNodes.forEach(node => {
-                        // We are interested in the text content of the message element.
-                        if (node.classList && node.classList.contains('mes')) {
-                           const mesText = node.querySelector('.mes_text');
-                           if(mesText && mesText.textContent) {
-                               handleStreamChunk(mesText.innerHTML); // Use innerHTML to catch the raw text before formatting
-                           }
+                        // Check if the added node is part of the streaming message text.
+                        if (node.nodeType === Node.ELEMENT_NODE && node.closest('.mes_text')) {
+                            const textContent = node.closest('.mes_text').textContent;
+                            handleStreamChunk(textContent);
                         }
                     });
                 }
@@ -114,21 +110,18 @@
 
         observer = new MutationObserver(callback);
 
-        // Start observing when generation starts
-        context.eventSource.on(context.event_types.GENERATION_AFTER_COMMANDS, () => {
-            if (settings.enabled && observer) {
-                console.log(' Starting observer.');
-                const lastMessage = document.querySelector('#chat.last_mes');
-                if(lastMessage) {
-                    observer.observe(lastMessage, observerOptions);
-                }
-            }
+        // Start observing when a new message bubble is created for generation.
+        context.eventSource.on(context.event_types.MESSAGE_SWIPED, () => {
+             const streamingMessage = document.querySelector('#chat .mes_text:not([data-observed])');
+             if(streamingMessage && observer) {
+                 observer.observe(streamingMessage.parentElement, observerOptions);
+                 streamingMessage.setAttribute('data-observed', 'true');
+             }
         });
 
-        // Stop observing when generation ends
+        // Stop observing when generation ends to save resources.
         const stopObserver = () => {
             if (observer) {
-                console.log(' Stopping observer.');
                 observer.disconnect();
             }
         };
@@ -136,20 +129,11 @@
         context.eventSource.on(context.event_types.GENERATION_ENDED, stopObserver);
     }
 
-    // --- UI and Settings Functions ---
 
     /**
-     * Saves the current settings to SillyTavern's persistent storage.
+     * Loads settings and binds event listeners to the UI controls.
      */
-    function saveSettings() {
-        context.extensionSettings[extensionName] = settings;
-        context.saveSettingsDebounced();
-    }
-
-    /**
-     * Binds event listeners to the UI elements in the settings panel.
-     */
-    function bindUIEvents() {
+    function setupUI() {
         const enabledToggle = document.getElementById('costume-switcher-enabled');
         const resetButton = document.getElementById('costume-switcher-reset');
 
@@ -157,64 +141,60 @@
             enabledToggle.checked = settings.enabled;
             enabledToggle.addEventListener('change', () => {
                 settings.enabled = enabledToggle.checked;
-                saveSettings();
+                context.extensionSettings[extensionName] = settings;
+                context.saveSettingsDebounced();
             });
         }
 
         if (resetButton) {
             resetButton.addEventListener('click', () => {
-                // Clear any pending timer and reset immediately.
                 if (resetTimer) clearTimeout(resetTimer);
-                applyCostume(null);
+                applyCostume(null); // Force reset to default
             });
         }
     }
 
     /**
-     * Asynchronously loads the HTML for the settings panel and injects it into the DOM.
+     * Loads the settings panel HTML and injects it into the DOM.
      */
-    async function loadSettingsUI() {
+    async function loadSettingsPanel() {
         try {
             const response = await fetch(`${extensionFolderPath}/settings.html`);
-            if (!response.ok) {
-                throw new Error('Failed to load settings HTML');
-            }
+            if (!response.ok) throw new Error('Failed to load settings panel HTML');
+            
             const html = await response.text();
-            const container = document.querySelector('#extensions_settings >.container');
+            const container = document.querySelector('#extensions_settings > .container');
+            
             if (container) {
                 container.insertAdjacentHTML('beforeend', html);
-                bindUIEvents();
+                setupUI();
             } else {
-                console.error(' Settings container not found.');
+                console.error('[CostumeSwitch] Settings container not found.');
             }
         } catch (error) {
-            console.error(` Error loading settings UI: ${error}`);
+            console.error(`[CostumeSwitch] Error loading UI: ${error}`);
         }
     }
 
-    /**
-     * The main entry point for the extension, called when the app is ready.
-     */
-    function onAppReady() {
+    // Main entry point for the extension.
+    function main() {
         context = SillyTavern.getContext();
-        // Load settings or use defaults
-        settings = {...defaultSettings,...context.extensionSettings[extensionName] };
-        
-        loadSettingsUI();
+        // Load saved settings or use defaults.
+        settings = { ...settings, ...context.extensionSettings[extensionName] };
+
+        loadSettingsPanel();
         initializeObserver();
         
-        console.log(' Extension loaded successfully.');
+        console.log('[CostumeSwitch] Extension loaded successfully.');
     }
 
-    // Wait for SillyTavern to be fully loaded before running the extension
+    // Wait for SillyTavern's APP_READY event before initializing the extension.
     document.addEventListener('DOMContentLoaded', () => {
         const interval = setInterval(() => {
             if (window.SillyTavern && SillyTavern.getContext) {
                 clearInterval(interval);
-                // The APP_READY event ensures all other components are loaded
-                SillyTavern.getContext().eventSource.on(SillyTavern.getContext().event_types.APP_READY, onAppReady);
+                SillyTavern.getContext().eventSource.on(SillyTavern.getContext().event_types.APP_READY, main);
             }
         }, 100);
     });
-
 })();
