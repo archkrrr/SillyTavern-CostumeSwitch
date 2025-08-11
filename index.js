@@ -10,7 +10,7 @@ const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$|^Back
 const DEFAULTS = {
   enabled: true,
   resetTimeoutMs: 3000,
-  patterns: ["Tohka", "Shido", "Kotori"],
+  patterns: ["Tohka", "Shido", "Kotori", "Reine"],
   defaultCostume: "",
   narrationSwitch: false,
   debug: false,
