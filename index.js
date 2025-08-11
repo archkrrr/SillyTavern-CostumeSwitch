@@ -244,103 +244,99 @@ jQuery(async () => {
     return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
   }
 
-  /* Local quick-reply click simulator */
-function triggerQuickReply(label) {
-  try {
-    // Grab all quick reply buttons (visible in DOM)
-    const btns = [...document.querySelectorAll('.quick-reply-button')];
-    const btn = btns.find(el => el.textContent.trim() === label);
+  /* Simulate a real quick-reply click on SillyTavern's QR buttons.
+     Uses .qr--button (visible button) and falls back to title (message). */
+  function triggerQuickReply(labelOrMessage) {
+    try {
+      const label = String(labelOrMessage || '').trim();
+      if (!label) return false;
 
-    if (btn) {
-      console.log(`[CostumeSwitch] Clicking Quick Reply: "${label}"`);
-      btn.click();
-      return true;
-    } else {
+      const candidates = Array.from(document.querySelectorAll('.qr--button'));
+
+      // 1) match by visible label text inside .qr--button-label
+      for (const el of candidates) {
+        try {
+          const lbl = el.querySelector('.qr--button-label');
+          if (lbl && String(lbl.innerText || lbl.textContent || '').trim() === label) {
+            if (window.console && console.debug) console.debug(`[CostumeSwitch] Clicking Quick Reply (label): "${label}"`);
+            el.click();
+            return true;
+          }
+        } catch (e) { /* continue */ }
+      }
+
+      // 2) match by title attribute (underlying quick-reply message text, e.g. "/costume Shido")
+      for (const el of candidates) {
+        try {
+          const title = (el.getAttribute && el.getAttribute('title')) || '';
+          if (String(title || '').trim() === label) {
+            if (window.console && console.debug) console.debug(`[CostumeSwitch] Clicking Quick Reply (title): "${label}"`);
+            el.click();
+            return true;
+          }
+        } catch (e) { /* continue */ }
+      }
+
+      // 3) try matching trimmed/normalized variations (some installs may store label slightly differently)
+      for (const el of candidates) {
+        try {
+          const lbl = el.querySelector('.qr--button-label');
+          const content = String(lbl?.innerText || lbl?.textContent || el.getAttribute('title') || '').trim();
+          if (!content) continue;
+          if (content.toLowerCase() === label.toLowerCase()) {
+            el.click();
+            if (window.console && console.debug) console.debug(`[CostumeSwitch] Clicking Quick Reply (case-insensitive match): "${content}"`);
+            return true;
+          }
+        } catch (e) { /* continue */ }
+      }
+
       console.warn(`[CostumeSwitch] Quick Reply not found: "${label}"`);
       return false;
+    } catch (err) {
+      console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
+      return false;
     }
-  } catch (err) {
-    console.error(`[CostumeSwitch] Error triggering Quick Reply "${label}":`, err);
-    return false;
-  }
-}
-
-/* Quick-reply trigger with debugging output */
-function triggerQuickReplyVariants(costumeArg) {
-  if (!costumeArg) return false;
-
-  // base name cleaned (Kotori)
-  const base = normalizeCostumeName(String(costumeArg));
-  if (!base) return false;
-
-  // candidate ordering: prefer the simplest forms first
-  const rawCandidates = [
-    `${base}`,                   // "Kotori"
-    `${base}/${base}`,           // "Kotori/Kotori"
-    `/costume ${base}`,          // "/costume Kotori"
-    `/costume ${base}/${base}`,  // "/costume Kotori/Kotori"
-    `/${base}`,                  // "/Kotori"
-    String(costumeArg)           // fallback
-  ];
-
-  // dedupe + normalize candidates for the failedTriggerTimes key check
-  const now = Date.now();
-  const unique = [];
-  const seen = new Set();
-  for (const c of rawCandidates) {
-    if (!c) continue;
-    const norm = String(c).trim();
-    if (!norm) continue;
-    const low = norm.toLowerCase();
-    if (seen.has(low)) continue;
-    seen.add(low);
-    unique.push(norm);
   }
 
-  // attempt candidates in order, but skip ones in failed-trigger cooldown
-  for (const c of unique) {
-    const key = c.toLowerCase();
-    const lastFailed = failedTriggerTimes.get(key) || 0;
-    const cooldown = (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
-
-    if (now - lastFailed < cooldown) {
-      if (settings.debug) console.debug("CS debug: skipping candidate due to failed-cooldown", { candidate: c, lastFailed, cooldown });
-      continue;
-    }
-
-    if (settings.debug) console.debug("CS debug: trying candidate", c);
-    if (triggerQuickReply(c)) {
-      failedTriggerTimes.delete(key); // success
-      return true;
-    }
-
-    failedTriggerTimes.set(key, Date.now()); // failure
-    if (settings.debug) console.debug("CS debug: candidate failed, cached failedTriggerTimes key", key);
-  }
-
-  return false;
-}
-
-
+  /* Quick-reply trigger that attempts multiple candidate message forms and respects failed cooldowns */
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
     const name = normalizeCostumeName(String(costumeArg));
-    const candidates = new Set([`${name}/${name}`, `${name}`, `/costume ${name}`, `/costume ${name}/${name}`, `${name} / ${name}`, `/${name}`, String(costumeArg)]);
+    if (!name) return false;
+
+    // candidate order (prefer simplest)
+    const rawCandidates = [
+      `${name}`,
+      `${name}/${name}`,
+      `/costume ${name}`,
+      `/costume ${name}/${name}`,
+      `/${name}`,
+      `${name} / ${name}`,
+      String(costumeArg)
+    ];
+
     const now = Date.now();
-    if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants candidates:", Array.from(candidates));
-    for (const c of Array.from(candidates)) {
+    if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants candidates:", rawCandidates);
+
+    for (let c of rawCandidates) {
       if (!c) continue;
-      const lastFailed = failedTriggerTimes.get(c) || 0;
-      if (now - lastFailed < (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs)) {
-        if (settings.debug) console.debug("CS debug: skipping candidate (cooldown):", c);
+      c = String(c).trim();
+      const key = c.toLowerCase();
+      const lastFailed = failedTriggerTimes.get(key) || 0;
+      const cooldown = (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
+      if (now - lastFailed < cooldown) {
+        if (settings.debug) console.debug("CS debug: skipping candidate due to failed-cooldown", { candidate: c, lastFailed, cooldown });
         continue;
       }
       if (triggerQuickReply(c)) {
+        failedTriggerTimes.delete(key);
         if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants succeeded for", c);
         return true;
+      } else {
+        failedTriggerTimes.set(key, Date.now());
+        if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants failed for", c);
       }
-      failedTriggerTimes.set(c, Date.now());
-      if (settings.debug) console.debug("CS debug: triggerQuickReplyVariants failed for", c);
     }
     return false;
   }
@@ -367,7 +363,7 @@ function triggerQuickReplyVariants(costumeArg) {
     if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder);
     const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
     if (ok) { lastTriggerTimes.set(argFolder, now); lastIssuedCostume = argFolder; lastSwitchTimestamp = now; if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
-    else { failedTriggerTimes.set(argFolder, Date.now()); if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
+    else { failedTriggerTimes.set(argFolder.toLowerCase(), Date.now()); if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
   }
 
   function scheduleResetIfIdle() {
@@ -630,10 +626,9 @@ function getSettingsObj() {
   if (typeof extension_settings !== 'undefined') {
     extension_settings[extensionName] = extension_settings[extensionName] || structuredClone(DEFAULTS);
     for (const k of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][extensionName] = DEFAULTS[k];
+      if (!Object.hasOwn(extension_settings[extensionName], k)) extension_settings[extensionName][k] = DEFAULTS[k];
     }
     return { store: extension_settings, save: saveSettingsDebounced, ctx: null };
   }
   throw new Error("Can't find SillyTavern extension settings storage.");
 }
-
