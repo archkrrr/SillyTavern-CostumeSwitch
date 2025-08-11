@@ -61,8 +61,10 @@ Here are a few visual examples to help guide you through the configuration:
 #### Quick Replies Setup in SillyTavern
 
 <img width="689" height="481" alt="image" src="https://github.com/user-attachments/assets/a5f9ab40-af5b-4ea1-aa0b-1bdf085eb943" />
+
 ---
 <img width="684" height="108" alt="image" src="https://github.com/user-attachments/assets/d0e1099d-93f2-4abc-875c-ddce47bf9c6d" />
+
 ---
 <img width="2278" height="1221" alt="image" src="https://github.com/user-attachments/assets/e4886d5e-c653-4d4f-8d4a-8b3bffdcbbad" />
 
