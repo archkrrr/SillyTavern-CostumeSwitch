@@ -1,4 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (patched with aggressive manual-reset diagnostics)
+// index.js - SillyTavern-CostumeSwitch (aggressive command runner + diagnostics)
 // Drop into: data/default-user/extensions/SillyTavern-CostumeSwitch/index.js
 
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
@@ -8,8 +8,8 @@ const EXT_NAME = "SillyTavern-CostumeSwitch";
 
 const DEFAULTS = {
   enabled: true,
-  patterns: ["Shido", "Kotori"], // one per line in UI
-  defaultCostume: "Date a Live",  // exact arg used for manual reset
+  patterns: ["Shido", "Kotori"],
+  defaultCostume: "Date a Live",
   resetTimeoutMs: 3000
 };
 
@@ -23,42 +23,36 @@ let resetTimer = null;
 let queuedCommand = null;
 const buffers = { currentText: "" };
 
-// ---------- Helpers ----------
-function safeLog(...args) { try { console.log("[CostumeSwitch]", ...args); } catch(e){} }
-function safeWarn(...args) { try { console.warn("[CostumeSwitch]", ...args); } catch(e){} }
-function safeError(...args) { try { console.error("[CostumeSwitch]", ...args); } catch(e){}; }
+function safeLog(...a){ try{ console.log("[CostumeSwitch]", ...a); }catch{} }
+function safeWarn(...a){ try{ console.warn("[CostumeSwitch]", ...a); }catch{} }
+function safeError(...a){ try{ console.error("[CostumeSwitch]", ...a); }catch{} }
 
-function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-/**
- * Build a regex from patterns: plain strings or /regex/ literals.
- * Matches anywhere; optional colon/dash after a name.
- */
-function buildRegexFromPatterns(patterns) {
-  const arr = (patterns || []).map(p => (p||'').trim()).filter(Boolean);
-  if (!arr.length) return null;
-  const pieces = arr.map(p => {
+function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+function buildRegexFromPatterns(patterns){
+  const arr = (patterns||[]).map(p=> (p||'').trim()).filter(Boolean);
+  if(!arr.length) return null;
+  const pieces = arr.map(p=>{
     const m = p.match(/^\/(.+)\/([gimsuy]*)$/);
     return m ? `(${m[1]})` : `(${escapeRegex(p)})`;
   });
-  return new RegExp(`(?:${pieces.join('|')})(?:\\s*[:—-])?`, 'i');
+  return new RegExp(`(?:${pieces.join('|')})(?:\\s*[:—-])?`,'i');
 }
 
-function getContextSafe() {
-  try { if (typeof getContext === 'function') return getContext(); } catch(e) {}
-  try { if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') return SillyTavern.getContext(); } catch(e) {}
+function getContextSafe(){
+  try{ if(typeof getContext==='function') return getContext(); }catch(e){}
+  try{ if(typeof SillyTavern!=='undefined' && typeof SillyTavern.getContext==='function') return SillyTavern.getContext(); }catch(e){}
   return null;
 }
 
-function ensureSettings() {
+function ensureSettings(){
   ctx = getContextSafe();
-  if (ctx && ctx.extensionSettings) {
+  if (ctx && ctx.extensionSettings){
     ctx.extensionSettings[EXT_NAME] = ctx.extensionSettings[EXT_NAME] || structuredClone(DEFAULTS);
     settingsStorage = ctx.extensionSettings;
     saveSettingsFn = ctx.saveSettingsDebounced || saveSettingsDebounced;
     return;
   }
-  if (typeof extension_settings !== 'undefined') {
+  if (typeof extension_settings !== 'undefined'){
     extension_settings[EXT_NAME] = extension_settings[EXT_NAME] || structuredClone(DEFAULTS);
     settingsStorage = extension_settings;
     saveSettingsFn = saveSettingsDebounced;
@@ -68,178 +62,205 @@ function ensureSettings() {
   throw new Error("CostumeSwitch: cannot find extension settings storage.");
 }
 
-function getSettings() {
-  return (settingsStorage && settingsStorage[EXT_NAME]) || DEFAULTS;
+function getSettings(){ return (settingsStorage && settingsStorage[EXT_NAME]) || DEFAULTS; }
+
+/* ========== AGGRESSIVE COMMAND RUNNER ========== */
+
+/**
+ * discoverPotentialRunners - returns array of {name, fn} found on window, window.SillyTavern, ctx
+ * but does NOT call them.
+ */
+function discoverPotentialRunners(){
+  const results = [];
+  try {
+    const scanObj = (obj, label) => {
+      if (!obj || typeof obj !== 'object') return;
+      Object.keys(obj).forEach(k=>{
+        try {
+          const v = obj[k];
+          if (typeof v === 'function' && /send|message|process|command|slash/i.test(k)){
+            results.push({ name: `${label}.${k}`, fn: v });
+          }
+        } catch(e){}
+      });
+    };
+    scanObj(window, 'window');
+    scanObj(window.SillyTavern, 'window.SillyTavern');
+    scanObj(ctx, 'ctx');
+  } catch(e){
+    safeWarn("discoverPotentialRunners error", e);
+  }
+  return results;
 }
 
-// ---------- Command Execution ----------
-async function executeSlashCommand(command) {
+/**
+ * tryFunctionSafely - call fn(command) with try/catch, await if Promise, return true/false
+ */
+async function tryFunctionSafely(fn, command){
   try {
-    // 1) newest global helper
-    if (typeof window.sendMessage === 'function') {
-      safeLog("executeSlashCommand -> using window.sendMessage:", command);
-      try { window.sendMessage(command); return true; } catch(e){ safeWarn("window.sendMessage threw", e); }
+    const r = fn(command);
+    if (r && typeof r.then === 'function') await r;
+    return true;
+  } catch(e){
+    safeWarn("runner threw:", e);
+    return false;
+  }
+}
+
+/**
+ * sendViaKeyboardEnter - fallback that focuses the input, sets value, and fires Enter keydown/keyup.
+ * Returns true if input element was found and events dispatched.
+ */
+function sendViaKeyboardEnter(command){
+  try {
+    const selectors = ['#prompt', '#prompt_input', '#send_textarea', '#send_input', '#chat_input', 'textarea#prompt', 'textarea#chat_input', 'textarea', 'input[type="text"]'];
+    let inputEl = null;
+    for (const s of selectors){
+      const el = document.querySelector(s);
+      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)){
+        inputEl = el; break;
+      }
+    }
+    if (!inputEl) return false;
+
+    // set value
+    if (inputEl.tagName === 'TEXTAREA' || inputEl.tagName === 'INPUT'){
+      inputEl.focus();
+      inputEl.value = command;
+      inputEl.dispatchEvent(new Event('input', {bubbles:true}));
+    } else if (inputEl.isContentEditable){
+      inputEl.focus();
+      inputEl.innerText = command;
+      inputEl.dispatchEvent(new InputEvent('input', {bubbles:true}));
+    }
+
+    // attempt Enter key simulation
+    const down = new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true, cancelable:true});
+    const up = new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true, cancelable:true});
+    inputEl.dispatchEvent(down);
+    inputEl.dispatchEvent(up);
+
+    return true;
+  } catch(e){
+    safeWarn("sendViaKeyboardEnter failed", e);
+    return false;
+  }
+}
+
+/**
+ * executeSlashCommand - tries multiple avenues and logs which path worked.
+ * returns true if any path executed successfully, false otherwise.
+ */
+async function executeSlashCommand(command){
+  try {
+    safeLog("executeSlashCommand -> trying command:", command);
+
+    // 1) window.sendMessage (fast path)
+    if (typeof window.sendMessage === 'function'){
+      safeLog("attempting window.sendMessage");
+      try { window.sendMessage(command); safeLog("window.sendMessage invoked"); return true; } catch(e){ safeWarn("window.sendMessage threw", e); }
     }
 
     // 2) ctx.slashCommands.execute
-    if (ctx && ctx.slashCommands && typeof ctx.slashCommands.execute === 'function') {
-      safeLog("executeSlashCommand -> using ctx.slashCommands.execute:", command);
+    if (ctx && ctx.slashCommands && typeof ctx.slashCommands.execute === 'function'){
+      safeLog("attempting ctx.slashCommands.execute");
+      try { const res = ctx.slashCommands.execute(command); if (res && typeof res.then === 'function') await res; safeLog("ctx.slashCommands.execute succeeded"); return true; } catch(e){ safeWarn("ctx.slashCommands.execute threw", e); }
+    }
+
+    // 3) scan discovered plausible functions and attempt them (in order)
+    const candidates = discoverPotentialRunners();
+    safeLog("discovered runner candidates:", candidates.map(c=>c.name));
+    for (const c of candidates){
       try {
-        const res = ctx.slashCommands.execute(command);
-        if (res && typeof res.then === 'function') await res;
-        return true;
-      } catch(e){ safeWarn("ctx.slashCommands.execute threw", e); }
+        safeLog("attempting", c.name);
+        const ok = await tryFunctionSafely(c.fn, command);
+        if (ok) { safeLog(`${c.name} succeeded`); return true; }
+      } catch(e){ safeWarn("candidate attempt error", e); }
     }
 
-    // 3) legacy global names
-    const globalCandidates = [
-      window.processSlashCommand,
-      window.processCommand,
-      window.handleSlashCommand,
-      window.process_input_command,
-      (window.SillyTavern && window.SillyTavern.processCommand) ? window.SillyTavern.processCommand : null,
-      (window.SillyTavern && window.SillyTavern.handleCommand) ? window.SillyTavern.handleCommand : null,
-    ];
-    for (const fn of globalCandidates) {
-      if (typeof fn === 'function') {
-        safeLog("executeSlashCommand -> using global function:", fn.name || fn);
-        try {
-          const r = fn(command);
-          if (r && typeof r.then === 'function') await r;
-          return true;
-        } catch(e) { safeWarn("legacy global runner threw", e); }
-      }
-    }
-
-    // 4) event emit fallback
-    if (ctx && ctx.eventSource && ctx.event_types && typeof ctx.eventSource.emit === 'function') {
-      safeLog("executeSlashCommand -> emitting MESSAGE_SENT (fallback):", command);
+    // 4) attempt to emit an event (legacy fallback)
+    if (ctx && ctx.eventSource && ctx.event_types && typeof ctx.eventSource.emit === 'function'){
+      const ev = ctx.event_types.MESSAGE_SENT || ctx.event_types.MESSAGE || 'message_sent';
+      safeLog("attempting eventSource.emit fallback ->", ev);
       try {
-        await ctx.eventSource.emit(ctx.event_types.MESSAGE_SENT || 'message_sent', { message: command, name: ctx.characters?.[ctx.characterId]?.name || '' });
+        await ctx.eventSource.emit(ev, { message: command, name: ctx.characters?.[ctx.characterId]?.name || '' });
+        safeLog("eventSource.emit returned");
+        // don't assume success, but return true to indicate we tried
         return true;
-      } catch(e){ safeWarn("eventSource.emit fallback threw", e); }
+      } catch(e){ safeWarn("eventSource.emit threw", e); }
     }
 
-    safeWarn("executeSlashCommand: no command runner found to execute:", command);
+    // 5) try keyboard/input fallback
+    safeLog("attempting keyboard/input fallback");
+    const inputOk = sendViaKeyboardEnter(command);
+    if (inputOk){ safeLog("keyboard/input fallback dispatched"); return true; }
+
+    safeWarn("executeSlashCommand -> no viable send method found");
     return false;
-  } catch (err) {
-    safeError("executeSlashCommand error:", err);
+  } catch(e){
+    safeError("executeSlashCommand outer error", e);
     return false;
   }
 }
 
-function inputSendFallback(command) {
-  try {
-    safeLog("inputSendFallback -> attempting to send via chat input:", command);
-    const selectors = [
-      '#prompt', '#prompt_input', '#send_textarea', '#send_input', '#chat_input', 'textarea#prompt', 'textarea#chat_input', 'textarea', 'input[type="text"]'
-    ];
-    let inputEl = null;
-    for (const s of selectors) {
-      const el = document.querySelector(s);
-      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) { inputEl = el; break; }
-    }
-    if (!inputEl) { safeWarn("inputSendFallback: input element not found"); return false; }
+/* ========== remaining code largely unchanged (observer, ui, etc.) ========== */
 
-    const sendBtnSelectors = ['button[data-action="send"]', 'button.send', 'button#send', 'button[type="submit"]', 'button[title="Send"]'];
-    let sendBtn = null;
-    for (const s of sendBtnSelectors) {
-      const b = document.querySelector(s);
-      if (b) { sendBtn = b; break; }
-    }
+function inputSendFallback(command){ return sendViaKeyboardEnter(command); }
 
-    if (inputEl.tagName === 'TEXTAREA' || inputEl.tagName === 'INPUT') {
-      inputEl.focus();
-      inputEl.value = command;
-      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-    } else if (inputEl.isContentEditable) {
-      inputEl.focus();
-      inputEl.innerText = command;
-      inputEl.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    } else {
-      safeWarn("inputSendFallback: unsupported input element");
-      return false;
-    }
-
-    if (sendBtn && !sendBtn.disabled) {
-      sendBtn.click();
-      safeLog("inputSendFallback: clicked send button");
-      return true;
-    } else if (sendBtn && sendBtn.disabled) {
-      safeWarn("inputSendFallback: send button is disabled (likely streaming in progress)");
-      return false;
-    } else {
-      const form = inputEl.closest('form');
-      if (form) {
-        try { form.requestSubmit ? form.requestSubmit() : form.submit(); safeLog("inputSendFallback: submitted enclosing form"); return true; } catch(e){ safeWarn("inputSendFallback form submit failed", e); return false; }
-      }
-    }
-    return false;
-  } catch (e) {
-    safeError("inputSendFallback error:", e);
-    return false;
-  }
-}
-
-async function runCostumeCommand(rawArg) {
+async function runCostumeCommand(rawArg){
   if (!rawArg) return false;
   const command = `/costume ${rawArg}`;
   safeLog("runCostumeCommand -> attempting:", command);
 
-  const didDirect = await executeSlashCommand(command);
-  if (didDirect) { safeLog("runCostumeCommand -> executed via direct runner"); return true; }
+  // try direct runner
+  const did = await executeSlashCommand(command);
+  if (did) { safeLog("runCostumeCommand -> executeSlashCommand returned true"); return true; }
 
-  const didInput = inputSendFallback(command);
-  if (didInput) { safeLog("runCostumeCommand -> executed via input-send fallback"); return true; }
-
+  // fallback: queue if possible
   if (ctx && ctx.eventSource && ctx.event_types) {
     safeLog("runCostumeCommand -> queuing command until generation ends:", command);
     pendingQueueCommand(command);
     return true;
   }
 
-  safeWarn("runCostumeCommand -> could not execute command by any method.");
+  safeWarn("runCostumeCommand -> could not dispatch command");
   return false;
 }
 
-function pendingQueueCommand(command) {
+function pendingQueueCommand(command){
   queuedCommand = command;
   try {
     const et = ctx.event_types || {};
-    const evName = et.GENERATION_ENDED || 'GENERATION_ENDED';
-    if (typeof ctx.eventSource.once === 'function') {
-      ctx.eventSource.once(evName, async () => {
+    const ev = et.GENERATION_ENDED || 'GENERATION_ENDED';
+    if (typeof ctx.eventSource.once === 'function'){
+      ctx.eventSource.once(ev, async () => {
         safeLog("pendingQueueCommand -> generation ended, trying queued command:", queuedCommand);
         if (queuedCommand) {
-          const ok = await executeSlashCommand(queuedCommand) || inputSendFallback(queuedCommand);
-          safeLog("pendingQueueCommand -> attempted queued command, success:", !!ok);
+          await executeSlashCommand(queuedCommand) || inputSendFallback(queuedCommand);
           queuedCommand = null;
         }
       });
-    } else if (typeof ctx.eventSource.on === 'function') {
+    } else if (typeof ctx.eventSource.on === 'function'){
       const handler = async () => {
-        safeLog("pendingQueueCommand -> generation ended (on), trying queued command:", queuedCommand);
+        safeLog("pendingQueueCommand (on) -> generation ended, trying queued command:", queuedCommand);
         if (queuedCommand) {
-          const ok = await executeSlashCommand(queuedCommand) || inputSendFallback(queuedCommand);
-          safeLog("pendingQueueCommand -> attempted queued command, success:", !!ok);
+          await executeSlashCommand(queuedCommand) || inputSendFallback(queuedCommand);
           queuedCommand = null;
         }
-        try { ctx.eventSource.off && ctx.eventSource.off(evName, handler); } catch(e) {}
+        try { ctx.eventSource.off && ctx.eventSource.off(ev, handler); } catch(e){}
       };
-      ctx.eventSource.on(evName, handler);
+      ctx.eventSource.on(ev, handler);
     } else {
-      safeWarn("pendingQueueCommand: eventSource has no on/once; cannot queue reliably");
+      safeWarn("pendingQueueCommand: cannot attach listener");
     }
-  } catch (e) {
-    safeError("pendingQueueCommand error:", e);
-  }
+  } catch(e) { safeError("pendingQueueCommand error", e); }
 }
 
-// ---------- MutationObserver logic ----------
-function handleMutations(mutationsList) {
+/* MutationObserver logic (unchanged except using nameRegex variable) */
+function handleMutations(mutationsList){
   try {
     let newText = "";
-    for (const mut of mutationsList) {
+    for (const mut of mutationsList){
       if (mut.type === "characterData") {
         const added = (mut.target && mut.target.textContent) || "";
         newText += added;
@@ -250,87 +271,66 @@ function handleMutations(mutationsList) {
       }
     }
     if (!newText) return;
-
     buffers.currentText += newText;
-
     if (!nameRegex) return;
     const m = buffers.currentText.match(nameRegex);
-    if (m) {
+    if (m){
       let matched = null;
-      if (m.length > 1) {
-        for (let i = 1; i < m.length; i++) {
+      if (m.length > 1){
+        for (let i=1;i<m.length;i++){
           if (m[i]) { matched = m[i].replace(/\s*[:—-]\s*$/,'').trim(); break; }
         }
       }
-      if (!matched) matched = (m[0] || "").replace(/\s*[:—-]\s*$/,'').trim();
-
-      if (matched && matched !== lastDetectedCharacter) {
+      if (!matched) matched = (m[0]||'').replace(/\s*[:—-]\s*$/,'').trim();
+      if (matched && matched !== lastDetectedCharacter){
         lastDetectedCharacter = matched;
         safeLog("handleMutations -> detected speaker:", matched);
         const candidateArg = `${matched}/${matched}`;
-        runCostumeCommand(candidateArg).then(() => {
+        runCostumeCommand(candidateArg).then(()=> {
           clearTimeout(resetTimer);
-          resetTimer = setTimeout(() => {
+          resetTimer = setTimeout(()=> {
             const s = getSettings();
-            if (s && s.defaultCostume) {
-              runCostumeCommand(s.defaultCostume);
-            }
+            if (s && s.defaultCostume) runCostumeCommand(s.defaultCostume);
             lastDetectedCharacter = null;
           }, (getSettings().resetTimeoutMs || DEFAULTS.resetTimeoutMs));
-        }).catch(e => safeWarn("runCostumeCommand promise rejected", e));
+        });
       }
     }
-  } catch (err) {
-    safeError("handleMutations error:", err);
-  }
+  } catch(e){ safeError("handleMutations error", e); }
 }
 
-function startObservingLastMessage() {
+function startObservingLastMessage(){
   try {
     if (!getSettings().enabled) { safeLog("startObservingLastMessage -> disabled by settings"); return; }
     const lastMsg = document.querySelector('#chat .mes:last-child .mes_text') || document.querySelector('#chat .mes:last-child');
     if (!lastMsg) { safeWarn("startObservingLastMessage -> no last message node found"); return; }
     buffers.currentText = "";
     lastDetectedCharacter = null;
-    if (!observer) {
-      observer = new MutationObserver(handleMutations);
-    } else {
-      observer.disconnect();
-    }
+    if (!observer) observer = new MutationObserver(handleMutations);
+    else observer.disconnect();
     observer.observe(lastMsg, { childList: true, subtree: true, characterData: true });
     safeLog("startObservingLastMessage -> observing node:", lastMsg);
-  } catch (e) {
-    safeError("startObservingLastMessage error:", e);
-  }
+  } catch(e){ safeError("startObservingLastMessage error", e); }
 }
 
-function stopObserving() {
+function stopObserving(){
   try {
     if (observer) observer.disconnect();
-    if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+    if (resetTimer){ clearTimeout(resetTimer); resetTimer = null; }
     const s = getSettings();
-    if (s && s.defaultCostume && lastDetectedCharacter !== null) {
-      runCostumeCommand(s.defaultCostume);
-    }
+    if (s && s.defaultCostume && lastDetectedCharacter !== null) runCostumeCommand(s.defaultCostume);
     lastDetectedCharacter = null;
     buffers.currentText = "";
-    safeLog("stopObserving -> observer stopped and cleaned up");
-  } catch (e) {
-    safeError("stopObserving error:", e);
-  }
+    safeLog("stopObserving -> stopped");
+  } catch(e){ safeError("stopObserving error", e); }
 }
 
-// ---------- UI injection ----------
-function buildSettingsUI() {
+/* UI */
+function buildSettingsUI(){
   try {
     const settingsDiv = document.querySelector('#extensions_settings > .container') || document.querySelector('#extensions_settings');
-    if (!settingsDiv) {
-      safeWarn("buildSettingsUI -> extension settings container not found");
-      return;
-    }
-
+    if (!settingsDiv) { safeWarn("buildSettingsUI -> container not found"); return; }
     if (document.querySelector('.st-costume-switcher-card')) return;
-
     const wrapper = document.createElement('div');
     wrapper.className = 'st-costume-switcher-card';
     wrapper.style.padding = '8px';
@@ -380,25 +380,14 @@ function buildSettingsUI() {
 
     document.getElementById('cs-reset').addEventListener('click', async () => {
       const s = getSettings();
-      if (!s.defaultCostume) {
-        safeWarn("Manual reset: no default costume configured");
-        return;
-      }
-      // Provide immediate UI feedback
+      if (!s.defaultCostume) { safeWarn("Manual reset: no default costume configured"); return; }
       const statusEl = document.getElementById('cs-status');
       if (statusEl) statusEl.textContent = "Sending...";
       safeLog("Manual reset clicked - attempting runCostumeCommand for:", s.defaultCostume);
-
       const ok = await runCostumeCommand(s.defaultCostume);
-      safeLog("Manual reset result (runCostumeCommand):", ok);
-
-      if (ok) {
-        if (statusEl) statusEl.textContent = "Sent";
-        setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 1500);
-        return;
-      }
-
-      // If runCostumeCommand returned false, try raw window.sendMessage as last effort
+      safeLog("Manual reset result:", ok);
+      if (ok) { if (statusEl) { statusEl.textContent = "Sent"; setTimeout(()=>statusEl.textContent='',1200); } return; }
+      // Try direct call if available
       let directOk = false;
       try {
         if (typeof window.sendMessage === 'function') {
@@ -406,27 +395,16 @@ function buildSettingsUI() {
           directOk = true;
           safeLog("Manual reset: window.sendMessage direct attempt done");
         }
-      } catch(e) { safeWarn("Manual reset: window.sendMessage direct attempt threw", e); }
-
-      if (directOk) {
-        if (statusEl) statusEl.textContent = "Sent (direct)";
-        setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 1500);
-        return;
-      }
-
-      // If still not ok but ctx exists, queue the command
+      } catch(e){ safeWarn("Manual reset direct send threw", e); }
+      if (directOk) { if (statusEl) { statusEl.textContent = "Sent (direct)"; setTimeout(()=>statusEl.textContent='',1200); } return; }
       if (ctx && ctx.eventSource && ctx.event_types) {
         pendingQueueCommand(`/costume ${s.defaultCostume}`);
-        if (statusEl) statusEl.textContent = "Queued until generation end";
-        setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 3000);
+        if (statusEl) { statusEl.textContent = "Queued until generation end"; setTimeout(()=>statusEl.textContent='',3000); }
         return;
       }
-
-      if (statusEl) statusEl.textContent = "Failed";
-      setTimeout(()=>{ if (statusEl) statusEl.textContent = ""; }, 2000);
+      if (statusEl) { statusEl.textContent = "Failed"; setTimeout(()=>statusEl.textContent='',1500); }
     });
 
-    // Test direct send button: calls window.sendMessage directly (useful for debugging)
     document.getElementById('cs-test-direct').addEventListener('click', () => {
       const s = getSettings();
       const statusEl = document.getElementById('cs-status');
@@ -434,72 +412,52 @@ function buildSettingsUI() {
         if (typeof window.sendMessage === 'function') {
           window.sendMessage(`/costume ${s.defaultCostume}`);
           safeLog("Test Direct Send: Called window.sendMessage");
-          if (statusEl) { statusEl.textContent = "Direct send called"; setTimeout(()=>statusEl.textContent="",1200); }
+          if (statusEl) { statusEl.textContent = "Direct send called"; setTimeout(()=>statusEl.textContent='',1200); }
         } else {
           safeWarn("Test Direct Send: window.sendMessage not found");
-          if (statusEl) { statusEl.textContent = "window.sendMessage missing"; setTimeout(()=>statusEl.textContent="",1500); }
+          if (statusEl) { statusEl.textContent = "window.sendMessage missing"; setTimeout(()=>statusEl.textContent='',1500); }
         }
       } catch(e) {
         safeError("Test Direct Send threw:", e);
-        if (statusEl) { statusEl.textContent = "Direct send error"; setTimeout(()=>statusEl.textContent="",2000); }
+        if (statusEl) { statusEl.textContent = "Direct send error"; setTimeout(()=>statusEl.textContent='',2000); }
       }
     });
-  } catch (e) {
-    safeError("buildSettingsUI error:", e);
-  }
+
+  } catch(e){ safeError("buildSettingsUI error", e); }
 }
 
-// ---------- Startup: wire into ST events ----------
+/* Startup */
 jQuery(async () => {
   try {
-    safeLog("Initializing CostumeSwitch extension...");
+    safeLog("Initializing CostumeSwitch...");
     ensureSettings();
     const s = getSettings();
     nameRegex = buildRegexFromPatterns(s.patterns || DEFAULTS.patterns);
-
-    try { buildSettingsUI(); } catch(e) { safeWarn("UI build failed:", e); }
-
+    try { buildSettingsUI(); } catch(e) { safeWarn("UI build failed", e); }
     ctx = ctx || getContextSafe();
     if (!ctx) {
-      safeWarn("SillyTavern context not found; extension will remain inactive until context available.");
+      safeWarn("Context not found; extension will idle until available.");
       document.addEventListener('DOMContentLoaded', () => { buildSettingsUI(); ctx = getContextSafe(); });
       return;
     }
-
     const es = ctx.eventSource;
     const et = ctx.event_types || {};
     const genStart = et.GENERATION_STARTED || et.GENERATION_AFTER_COMMANDS || 'GENERATION_STARTED';
     const genEnd = et.GENERATION_ENDED || 'GENERATION_ENDED';
     const genStop = et.GENERATION_STOPPED || 'GENERATION_STOPPED';
-
     try {
-      es.on(genStart, () => {
-        safeLog("Generation started - starting observer");
-        setTimeout(startObservingLastMessage, 200);
-      });
-      es.on(genEnd, () => {
-        safeLog("Generation ended - stopping observer");
-        stopObserving();
-      });
-      es.on(genStop, () => {
-        safeLog("Generation stopped - stopping observer");
-        stopObserving();
-      });
-    } catch (e) {
-      safeWarn("Failed to attach to eventSource generation events:", e);
-    }
-
+      es.on(genStart, () => { safeLog("Generation started"); setTimeout(startObservingLastMessage, 200); });
+      es.on(genEnd, () => { safeLog("Generation ended"); stopObserving(); });
+      es.on(genStop, () => { safeLog("Generation stopped"); stopObserving(); });
+    } catch(e){ safeWarn("Failed to attach generation events", e); }
     if (ctx && ctx.eventSource && ctx.event_types) {
       try {
         ctx.eventSource.on(ctx.event_types.SETTINGS_UPDATED || 'settings_updated', () => {
           const s2 = getSettings();
           nameRegex = buildRegexFromPatterns(s2.patterns || DEFAULTS.patterns);
         });
-      } catch(e){ /* ignore */ }
+      } catch(e){}
     }
-
     safeLog("CostumeSwitch initialized. Patterns regex:", nameRegex);
-  } catch (err) {
-    safeError("CostumeSwitch init error:", err);
-  }
+  } catch(e){ safeError("init error", e); }
 });
