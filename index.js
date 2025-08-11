@@ -2,9 +2,10 @@
    - tighter flicker suppression / cooldowns
    - debugLog helper
    - failed-trigger cooldown handling
-   - mapping table support (name -> costumeFolder)
+   - mapping support (name -> costumeFolder)
    - safer regex validation & UI feedback
    - deterministic LRU trimming
+   - LIVE pattern recompile on UI input (fixes "must edit index.js to add Reine")
 */
 
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
@@ -29,7 +30,7 @@ const DEFAULTS = {
   mappings: [] // { name: "Shido", folder: "Shido/CostumeFolder" }
 };
 
-/* --- helpers for pattern parsing (unchanged mostly) --- */
+/* --- helpers for pattern parsing --- */
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -54,7 +55,7 @@ function buildNameRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
-  // Make a capturing group so we can reliably extract the name
+  // capturing group to reliably extract detected name
   const body = `(?:^|\\n|[\\(\\[\\-—–])(?:(${parts.join('|')}))(?:\\W|$)`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildNameRegex compile failed:", e); return null; }
@@ -98,7 +99,7 @@ function buildActionRegex(patternList) {
 
 /* Quote helpers */
 function getQuoteRanges(s) {
-  const q = /["\u201C\u201D]/g;
+  const q = /["\\u201C\\u201D]/g;
   const pos = [];
   let m;
   while ((m = q.exec(s)) !== null) pos.push(m.index);
@@ -116,7 +117,7 @@ function posIsInsideQuotes(pos, combined, quoteRanges) {
     if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
   }
   const before = combined.slice(0, pos);
-  const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
+  const quoteCount = (before.match(/["\\u201C\\u201D]/g) || []).length;
   return (quoteCount % 2) === 1;
 }
 function findNonQuotedMatches(combined, regex, quoteRanges) {
@@ -135,7 +136,7 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
   return results;
 }
 
-/* findBestMatch unchanged logic but returns matchKind + name */
+/* findBestMatch */
 function findBestMatch(combined, regexes, settings, quoteRanges) {
     if (!combined) return null;
 
@@ -182,7 +183,7 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
     if (settings.patterns && settings.patterns.length) {
         const names_poss = settings.patterns.map(s => (s||'').trim()).filter(Boolean);
         if (names_poss.length) {
-            const possRe = new RegExp('\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
+            const possRe = new RegExp('\\\b(' + names_poss.map(escapeRegex).join('|') + ")[’'`]s\\b", 'gi');
             findNonQuotedMatches(combined, possRe, quoteRanges).forEach(m => {
                 const name = m.groups?.[0]?.trim();
                 if (name) allMatches.push({ name, matchKind: 'possessive', matchIndex: m.index, priority: priorities.possessive });
@@ -203,7 +204,7 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
         if (b.priority !== a.priority) {
             return b.priority - a.priority;
         }
-        // prefer *later* match when same priority (keeps switching to recently-introduced speaker)
+        // prefer *later* match when same priority
         return b.matchIndex - a.matchIndex;
     });
 
@@ -229,12 +230,12 @@ function normalizeCostumeName(n) {
 }
 
 /* Storage for buffers and state */
-const perMessageBuffers = new Map(); // messageKey -> combined text (Map keeps insertion order)
+const perMessageBuffers = new Map();
 const perMessageStates = new Map();
 let lastIssuedCostume = null;
 let lastSwitchTimestamp = 0;
-const lastTriggerTimes = new Map(); // successes
-const failedTriggerTimes = new Map(); // failed attempts
+const lastTriggerTimes = new Map();
+const failedTriggerTimes = new Map();
 const _clickInProgress = new Set();
 
 let _streamHandler = null;
@@ -246,7 +247,6 @@ let _chatChangedHandler = null;
 const MAX_MESSAGE_BUFFERS = 60;
 function ensureBufferLimit() {
   if (perMessageBuffers.size <= MAX_MESSAGE_BUFFERS) return;
-  // deterministic LRU-like: delete oldest inserted keys until under limit
   while (perMessageBuffers.size > MAX_MESSAGE_BUFFERS) {
     const firstKey = perMessageBuffers.keys().next().value;
     perMessageBuffers.delete(firstKey);
@@ -254,7 +254,6 @@ function ensureBufferLimit() {
   }
 }
 
-/* Basic DOM helper to wait for settings UI load */
 function waitForSelector(selector, timeout = 3000, interval = 120) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -327,7 +326,7 @@ jQuery(async () => {
   function persistSettings() {
     if (save) save();
     if (jQuery("#cs-status").length) $("#cs-status").text(`Saved ${new Date().toLocaleTimeString()}`);
-    setTimeout(()=>jQuery("#cs-status").text(""), 1500);
+    setTimeout(()=>$("#cs-status").text(""), 1500);
   }
 
   const realCtx = ctx || (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
@@ -335,7 +334,7 @@ jQuery(async () => {
 
   const { eventSource, event_types } = realCtx;
 
-  /* initial regex build */
+  /* initial regex build from stored settings */
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
   let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
@@ -417,10 +416,28 @@ jQuery(async () => {
       }
     });
 
+    // LIVE recompile on pattern input changes so adding a name like "Reine" takes effect immediately
+    $(document).off('input.cs_patterns', '#cs-patterns').on('input.cs_patterns', '#cs-patterns', function() {
+      const val = $(this).val();
+      const arr = String(val || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      settings.patterns = arr;
+      try {
+        nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
+        speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
+        attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
+        actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
+        vocativeRegex = buildVocativeRegex(settings.patterns || DEFAULTS.patterns);
+        $("#cs-status").text('Patterns updated (live)');
+        setTimeout(()=>$("#cs-status").text(''), 900);
+      } catch (e) {
+        $("#cs-error").text('Pattern compile error').show();
+      }
+    });
+
   }
   tryWireUI(); setTimeout(tryWireUI, 500);
 
-  /* Quick-Reply clicking helpers (unchanged but robustified) */
+  /* Quick-Reply clicking helpers */
   function triggerQuickReply(labelOrMessage) {
     try {
         const label = String(labelOrMessage || '').trim();
@@ -478,7 +495,6 @@ jQuery(async () => {
     const name = normalizeCostumeName(String(costumeArg));
     if (!name) return false;
 
-    // Common candidate labels we'll try (in order)
     const rawCandidates = [ `${name}`, `${name}/${name}`, `/costume ${name}`, `/costume ${name}/${name}`, `/${name}`, `${name} ${name}` ];
 
     for (let c of rawCandidates) {
@@ -511,8 +527,7 @@ jQuery(async () => {
     setTimeout(()=>$("#cs-status").text(""), 1500);
   }
 
-  /* mapping lookup helper:
-     returns either explicit mapping folder (string) or null */
+  /* mapping lookup helper */
   function getMappedCostume(name) {
     if (!name) return null;
     const arr = settings.mappings || [];
@@ -525,7 +540,7 @@ jQuery(async () => {
     return null;
   }
 
-  /* issue costume based on detected name, with robust cooldown/failure handling */
+  /* issue costume based on detected name */
   function issueCostumeForName(name, opts = {}) {
     if (!name) return;
     const now = Date.now();
@@ -547,14 +562,12 @@ jQuery(async () => {
     let argFolder = getMappedCostume(name);
     if (!argFolder) argFolder = `${name}/${name}`;
 
-    // per-trigger cooldown (success)
     const lastSuccess = lastTriggerTimes.get(argFolder) || 0;
     if (now - lastSuccess < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) {
       debugLog(settings, "per-trigger cooldown active, skipping", argFolder);
       return;
     }
 
-    // failed-trigger cooldown: avoid rapid re-attempts for a name with no quick-reply present
     const lastFailed = failedTriggerTimes.get(argFolder) || 0;
     if (now - lastFailed < (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs)) {
       debugLog(settings, "failed-trigger cooldown active, skipping", argFolder);
@@ -571,7 +584,6 @@ jQuery(async () => {
       if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
     } else {
-      // record failed attempt to avoid repeated useless clicks
       failedTriggerTimes.set(argFolder, now);
       if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
       setTimeout(()=>$("#cs-status").text(""), 1000);
@@ -602,7 +614,6 @@ jQuery(async () => {
 
       const bufKey = messageId != null ? `m${messageId}` : 'live';
 
-      // scene change handling (kept from original)
       const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$|^Back in Central Park,$/i;
       if (sceneChangeRegex.test(tokenText.trim())) {
           debugLog(settings, `[CostumeSwitch] Scene change detected. Resetting context for: ${bufKey}`);
@@ -613,10 +624,8 @@ jQuery(async () => {
 
       tokenText = normalizeStreamText(tokenText);
 
-      // append to per-message buffer with max length
       const prev = perMessageBuffers.get(bufKey) || "";
       const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars));
-      // move key to end to reflect recent usage (Map insertion order)
       if (perMessageBuffers.has(bufKey)) perMessageBuffers.delete(bufKey);
       perMessageBuffers.set(bufKey, combined);
       ensureBufferLimit();
@@ -700,10 +709,10 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched, live patterns) loaded.");
 });
 
-/* Settings storage helper (unchanged, robust) */
+/* Settings storage helper */
 function getSettingsObj() {
   const ctx = typeof getContext === 'function' ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (ctx && ctx.extensionSettings) {
