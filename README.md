@@ -83,6 +83,10 @@ Here are a few visual examples to help guide you through the configuration:
 
 
 
+
+
+
+
 ## Support and Contributions
 
 - **Support**: If you encounter any issues or need help using this extension, feel free to reach out via [GitHub Issues](https://github.com/your-repo/issues) or join the **SillyTavern community** on Discord.
