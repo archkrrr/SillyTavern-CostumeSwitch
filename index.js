@@ -106,7 +106,20 @@ function isIndexInsideQuotesRanges(ranges, idx) {
   return false;
 }
 
-// New quote-aware helpers
+// New helpers to detect "thinking" / reasoning blocks
+function isInsideThinkBlock(combined) {
+  if (!combined) return false;
+  const low = combined.toLowerCase();
+  const lastOpen = low.lastIndexOf('<think');
+  const lastClose = low.lastIndexOf('</think>');
+  if (lastOpen > lastClose) return true;
+  // common UI "Thought for X seconds" header check near buffer tail
+  if (/\bthought\s+for\s+\d+\s+seconds\b/i.test(combined)) return true;
+  // some UIs may include "Reasoning Formatting" / "DeepSeek" etc — skip if those headers present
+  if (/reasoning formatting/i.test(combined)) return true;
+  return false;
+}
+
 function posIsInsideQuotes(pos, combined, quoteRanges) {
   if (pos == null || !combined) return false;
   if (quoteRanges && quoteRanges.length) {
@@ -128,7 +141,6 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
     if (!posIsInsideQuotes(idx, combined, quoteRanges)) {
       results.push({ match: m[0], groups: m.slice(1), index: idx });
     }
-    // avoid infinite loop for zero-length matches
     if (re.lastIndex === m.index) re.lastIndex++;
   }
   return results;
@@ -139,7 +151,6 @@ function lastNonQuotedMatch(combined, regex, quoteRanges) {
 }
 
 function isInsideQuotes(text, pos) {
-  // keep fallback (counts double quotes) but prefer range-based checks in main code
   if (!text || pos <= 0) return false;
   const before = text.slice(0, pos);
   const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
@@ -497,6 +508,12 @@ jQuery(async () => {
             return;
           }
 
+          // If we are inside a <think> ... </think> block (or similar reasoning header) skip scanning entirely.
+          if (isInsideThinkBlock(combined)) {
+            if (settings.debug) console.debug("CS debug: inside a reasoning/think block — skipping token scan.");
+            return;
+          }
+
           // Build a small "boundary window" which includes the tail of the previous buffer
           // so we can detect names/actions split across token boundaries.
           const boundarySize = Number(settings.tokenBoundarySize || DEFAULTS.tokenBoundarySize) || DEFAULTS.tokenBoundarySize;
@@ -596,6 +613,12 @@ jQuery(async () => {
           if (idx >= 0) perMessageBuffers.set(bufKey, (combined || '').slice(idx + matchedName.length));
           else perMessageBuffers.set(bufKey, '');
         } catch (e) { perMessageBuffers.set(bufKey, ''); }
+        return;
+      }
+
+      // If we're inside a reasoning/think block, skip heavy scanning too
+      if (isInsideThinkBlock(combined)) {
+        if (settings.debug) console.debug("CS debug: skipping heavy scan because inside reasoning/think block.");
         return;
       }
 
@@ -718,7 +741,7 @@ jQuery(async () => {
   eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => { if (messageId != null) perMessageBuffers.delete(`m${messageId}`); });
   eventSource.on(event_types.CHAT_CHANGED, () => { perMessageBuffers.clear(); lastIssuedCostume = null; });
 
-  console.log("SillyTavern-CostumeSwitch (patched v4.1 — quick-window quote fix) loaded.");
+  console.log("SillyTavern-CostumeSwitch (patched v4.2 — think-block & improved filtering) loaded.");
 });
 
 /* Helper: getSettingsObj copied from original but preserved for context storage lookup */
