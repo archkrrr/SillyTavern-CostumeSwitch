@@ -401,18 +401,18 @@ jQuery(async () => {
                 }
             }
 
-            // Priority 4: Optional fallback - detect narration subjects outside quotes
+                // Priority 4: Optional fallback - match Name + verb/possessive anywhere in narration
 if (!matchedName && nameRegex && settings.narrationSwitch) {
-    // Match name either near sentence start OR followed by possessive/action
-    const narrationRe = new RegExp(
-        `(?:^|[.!?]\\s+|\\*\\*[^*]+\\*\\*\\s*)(?:.{0,12})?${nameRegex.source}(?=\\b(?:'s|\\s+(?:is|was|stood|sat|nodded|smiled|leaned|stepped|walked|turned|looked|moved|approached)\\b))`,
-        'gi'
-    );
+    // Large set of common narration verbs/adjectives/possessives
+    const actionsOrPossessive = "(?:'s|held|shifted|stood|sat|nodded|smiled|laughed|leaned|stepped|walked|turned|looked|moved|approached|said|asked|replied|observed|gazed|watched|beamed|frowned|grimaced|sighed|grinned|shrugged|gestured|patted|pointed|winked|cried|shouted|called|whispered|muttered|murmured|exclaimed|yelled|hissed|growled|tilted|lowered|raised|offered|placed|rested|crossed|uncrossed|adjusted|brushed|tapped|drummed|pulled|pushed|hugged|embraced|kissed|blushed|flinched|winced|smirked|glared|narrowed|widened|opened|closed|folded|unfolded|readjusted|touched|stroked|caressed|examined|inspected|studied|surveyed|scanned|noted|remarked|added|continued|explained|clarified|responded|countered|retorted|offered)";
+    
+    // Allow the name anywhere in narration, followed by our markers
+    const narrationRe = new RegExp(`${nameRegex.source}\\b\\s+${actionsOrPossessive}\\b`, 'gi');
 
     let lastMatch = null;
     let mm;
     while ((mm = narrationRe.exec(combined)) !== null) {
-        if (isInsideQuotes(combined, mm.index)) continue; // skip inside dialogue
+        if (isInsideQuotes(combined, mm.index)) continue; // skip if inside dialogue
         for (let i = 1; i < mm.length; i++) {
             if (mm[i]) {
                 lastMatch = { name: mm[i], idx: mm.index };
@@ -424,6 +424,7 @@ if (!matchedName && nameRegex && settings.narrationSwitch) {
         matchedName = String(lastMatch.name).replace(/-(?:sama|san)$/i, '').trim();
     }
 }
+
 
 
 
