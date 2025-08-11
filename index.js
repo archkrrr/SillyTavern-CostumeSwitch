@@ -1,5 +1,4 @@
-// index.js - SillyTavern-CostumeSwitch (patched: context-aware attribution + narration opt-in)
-// Keep relative imports like the official examples
+// index.js - SillyTavern-CostumeSwitch (patched: robust UI init / waits for settings DOM)
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
@@ -81,9 +80,9 @@ function buildAttributionRegex(patternList) {
 
     // verbs that typically mark speech attribution
     const verbs = "(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)";
-    // Pattern A: closing quote then optional comma then Name + verb, e.g. "..." , Name said
+    // Pattern A: closing quote then optional comma then Name + verb
     const patA = `["\u201C\u201D][^"\u201C\u201D]{0,400}["\u201C\u201D]\\s*,?\\s*(?:${escaped.join('|')})\\s+${verbs}`;
-    // Pattern B: start-of-line Name + verb + optional colon/comma + opening quote, e.g. Name said, "..."
+    // Pattern B: start-of-line Name + verb + optional colon/comma + opening quote
     const patB = `(?:^|\\n)\\s*(?:${escaped.join('|')})\\s+${verbs}\\s*[:,]?\\s*["\u201C\u201D]`;
     return new RegExp(`(?:${patA})|(?:${patB})`, 'i');
 }
@@ -99,7 +98,6 @@ function buildActionRegex(patternList) {
     }).filter(Boolean);
     if (escaped.length === 0) return null;
 
-    // conservative set of action verbs (non-exhaustive)
     const actions = "(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|reached|walked|turned|glanced|popped|moved|stepped|entered|approached)";
     return new RegExp(`(?:^|\\n)\\s*(?:${escaped.join('|')})\\b\\s+${actions}\\b`, 'i');
 }
@@ -107,10 +105,8 @@ function buildActionRegex(patternList) {
 // quick helper: detect whether a position in the text is inside an open quote region
 function isInsideQuotes(text, pos) {
     if (!text || pos <= 0) return false;
-    // count occurrences of quote characters before pos
     const before = text.slice(0, pos);
     const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
-    // odd => inside a quoted region (approximate but effective)
     return (quoteCount % 2) === 1;
 }
 
@@ -125,6 +121,25 @@ const lastTriggerTimes = new Map();
 const TRIGGER_COOLDOWN_MS = 250;
 const GLOBAL_SWITCH_COOLDOWN_MS = 1200; // ms between ANY switch (tunable)
 
+// small helper to wait for a DOM selector to appear (polling)
+function waitForSelector(selector, timeout = 3000, interval = 120) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        const iv = setInterval(() => {
+            const el = document.querySelector(selector);
+            if (el) {
+                clearInterval(iv);
+                resolve(true);
+                return;
+            }
+            if (Date.now() - start > timeout) {
+                clearInterval(iv);
+                resolve(false);
+            }
+        }, interval);
+    });
+}
+
 jQuery(async () => {
     const { store, save, ctx } = getSettingsObj();
     const settings = store[extensionName];
@@ -134,19 +149,22 @@ jQuery(async () => {
         $("#extensions_settings").append(settingsHtml);
     } catch (e) {
         console.warn("Failed to load settings.html:", e);
-        // keep going; we will try to read/write the settings elements if they exist
         $("#extensions_settings").append(`<div><h3>Costume Switch</h3><div>Failed to load UI (see console)</div></div>`);
     }
 
-    // set UI inputs if present
-    $("#cs-enable").prop("checked", !!settings.enabled);
-    $("#cs-patterns").val((settings.patterns || []).join("\n"));
-    $("#cs-default").val(settings.defaultCostume || "");
-    $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
-    // optional narration checkbox (may not exist in your settings.html) - handled gracefully
-    if ($("#cs-narration").length) {
-        $("#cs-narration").prop("checked", !!settings.narrationSwitch);
+    // Wait for the settings elements to actually exist in the DOM (the settings.html script may
+    // clone/move nodes asynchronously). If they appear slowly, we'll wait up to 3s.
+    const ok = await waitForSelector("#cs-save", 3000, 100);
+    if (!ok) {
+        console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
     }
+
+    // Now safe to query and wire UI — jQuery calls on missing elements will be no-ops, so protect by checking presence
+    if ($("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
+    if ($("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
+    if ($("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
+    if ($("#cs-timeout").length) $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
+    if ($("#cs-narration").length) $("#cs-narration").prop("checked", !!settings.narrationSwitch);
     $("#cs-status").text("Ready");
 
     function persistSettings() {
@@ -168,26 +186,38 @@ jQuery(async () => {
     let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
     let actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
 
-    $("#cs-save").on("click", () => {
-        settings.enabled = !!$("#cs-enable").prop("checked");
-        settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-        settings.defaultCostume = $("#cs-default").val().trim();
-        settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
-        // narrationSwitch UI may or may not be present; if not present keep current value
-        if ($("#cs-narration").length) settings.narrationSwitch = !!$("#cs-narration").prop("checked");
+    // Wiring: only attach handlers if the elements exist — if they later appear, we re-run binding once
+    function tryWireUI() {
+        if ($("#cs-save").length) {
+            $("#cs-save").off('click.cs').on("click.cs", () => {
+                settings.enabled = !!$("#cs-enable").prop("checked");
+                settings.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                settings.defaultCostume = $("#cs-default").val().trim();
+                settings.resetTimeoutMs = parseInt($("#cs-timeout").val()||DEFAULTS.resetTimeoutMs, 10);
+                if ($("#cs-narration").length) settings.narrationSwitch = !!$("#cs-narration").prop("checked");
 
-        // rebuild all regexes after saving patterns
-        nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
-        speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
-        attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
-        actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
+                // rebuild regexes after saving patterns
+                nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
+                speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
+                attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
+                actionRegex = buildActionRegex(settings.patterns || DEFAULTS.patterns);
 
-        persistSettings();
-    });
+                persistSettings();
+            });
+        }
 
-    $("#cs-reset").on("click", async () => {
-        await manualReset();
-    });
+        if ($("#cs-reset").length) {
+            $("#cs-reset").off('click.cs').on("click.cs", async () => {
+                await manualReset();
+            });
+        }
+    }
+
+    // initial wire attempt (may be no-op if elements aren't present)
+    tryWireUI();
+    // if the elements were missing, attempt again after a short delay (in case settings.html's cloning script is still running)
+    setTimeout(tryWireUI, 500);
+    setTimeout(tryWireUI, 1500);
 
     function triggerQuickReply(labelOrMsg) {
         try {
@@ -233,21 +263,20 @@ jQuery(async () => {
             if (ch && ch.name) costumeArg = `${ch.name}/${ch.name}`;
         }
         if (!costumeArg) {
-            $("#cs-status").text("No default costume defined.");
+            if ($("#cs-status").length) $("#cs-status").text("No default costume defined.");
             return;
         }
         const ok = triggerQuickReplyVariants(costumeArg);
         if (ok) {
             lastIssuedCostume = costumeArg;
-            $("#cs-status").text(`Reset -> ${costumeArg}`);
+            if ($("#cs-status").length) $("#cs-status").text(`Reset -> ${costumeArg}`);
             setTimeout(()=>$("#cs-status").text(""), 1500);
         } else {
-            $("#cs-status").text(`Quick Reply not found for ${costumeArg}`);
+            if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${costumeArg}`);
             setTimeout(()=>$("#cs-status").text(""), 1500);
         }
     }
 
-    // issueCostumeForName with global cooldown
     async function issueCostumeForName(name) {
         if (!name) return;
         const now = Date.now();
@@ -268,10 +297,10 @@ jQuery(async () => {
             lastTriggerTimes.set(argFolder, now);
             lastIssuedCostume = argFolder;
             lastSwitchTimestamp = now; // update the global timestamp on success
-            $("#cs-status").text(`Switched -> ${argFolder}`);
+            if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
         } else {
-            $("#cs-status").text(`Quick Reply not found for ${name}`);
+            if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
             setTimeout(()=>$("#cs-status").text(""), 1000);
         }
     }
@@ -287,7 +316,7 @@ jQuery(async () => {
                 }
                 if (costumeArg && triggerQuickReplyVariants(costumeArg)) {
                     lastIssuedCostume = costumeArg;
-                    $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
+                    if ($("#cs-status").length) $("#cs-status").text(`Auto-reset -> ${costumeArg}`);
                     setTimeout(()=>$("#cs-status").text(""), 1200);
                 }
             })();
@@ -378,9 +407,7 @@ jQuery(async () => {
                 let lastMatch = null;
                 let mm;
                 while ((mm = searchRe.exec(combined)) !== null) {
-                    // mm.index is the start position; skip it if inside quotes
                     if (isInsideQuotes(combined, mm.index)) continue;
-                    // find the actual capture group that matched
                     for (let i = 1; i < mm.length; i++) {
                         if (mm[i]) {
                             lastMatch = { name: mm[i], idx: mm.index };
@@ -398,7 +425,6 @@ jQuery(async () => {
             if (matchedName) {
                 issueCostumeForName(matchedName);
                 scheduleResetIfIdle();
-                // Clear the buffer after a successful match to prevent re-triggering on the same text
                 perMessageBuffers.set(bufKey, "");
             }
         } catch (err) {
