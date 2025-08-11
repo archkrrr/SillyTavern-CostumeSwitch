@@ -1,43 +1,43 @@
-<div class="st-ext-card" style="padding:8px;">
-  <h3>Costume Switch</h3>
-
-  <label>
-    <input id="cs-enable" type="checkbox" />
-    Enable real-time switching
-  </label>
-
-  <div style="margin-top:8px;">
-    <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
-    <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
-  </div>
-
-  <div style="margin-top:8px;">
-    <label>Default costume folder (optional):</label><br/>
-    <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
-    <small>Leave blank to use current character's own folder.</small>
-  </div>
-
-  <div style="margin-top:8px;">
-    <label>Reset timeout (ms):</label>
-    <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
-  </div>
-
-  <!-- NEW: Narration fallback toggle -->
-  <div style="margin-top:8px;">
+<details class="st-ext-card" open>
+  <summary>Costume Switch</summary>
+  <div class="st-ext-content">
     <label>
-      <input id="cs-narration" type="checkbox" />
-      Enable loose narration fallback
+      <input id="cs-enable" type="checkbox" />
+      Enable real-time switching
     </label>
-    <div style="font-size:90%; color:#666; margin-top:4px;">
-      If enabled, the extension will try to auto-switch on loose name mentions **outside** quotes
-      (useful for narrative-style AI output). Disabled by default to avoid false switches.
+
+    <div style="margin-top:8px;">
+      <label>Character name patterns (one per line, plain text or JS regex body):</label><br/>
+      <textarea id="cs-patterns" rows="6" style="width:100%;"></textarea>
     </div>
-  </div>
 
-  <div style="margin-top:12px;">
-    <button id="cs-reset">Manual Reset Costume</button>
-    <button id="cs-save" style="margin-left:8px;">Save</button>
-  </div>
+    <div style="margin-top:8px;">
+      <label>Default costume folder (optional):</label><br/>
+      <input id="cs-default" type="text" placeholder="e.g. Date a Live" style="width:100%"/>
+      <small>Leave blank to use current character's own folder.</small>
+    </div>
 
-  <div id="cs-status" style="margin-top:8px;color:#777;"></div>
-</div>
+    <div style="margin-top:8px;">
+      <label>Reset timeout (ms):</label>
+      <input id="cs-timeout" type="number" min="500" step="100" style="width:120px" />
+    </div>
+
+    <div style="margin-top:8px;">
+      <label>
+        <input id="cs-narration" type="checkbox" />
+        Enable loose narration fallback
+      </label>
+      <div style="font-size:90%; opacity:0.8; margin-top:4px;">
+        If enabled, the extension will try to auto-switch on loose name mentions <strong>outside</strong> quotes
+        (useful for narrative-style AI output). Disabled by default to avoid false switches.
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button id="cs-reset">Manual Reset Costume</button>
+      <button id="cs-save" style="margin-left:8px;">Save</button>
+    </div>
+
+    <div id="cs-status" style="margin-top:8px; opacity:0.8;"></div>
+  </div>
+</details>
