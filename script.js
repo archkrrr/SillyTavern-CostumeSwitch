@@ -158,21 +158,27 @@
      * Loads the settings panel HTML and injects it into the DOM.
      */
     async function loadSettingsPanel() {
+        console.log('[CostumeSwitch] Attempting to load settings UI...'); // New log
         try {
             const response = await fetch(`${extensionFolderPath}/settings.html`);
-            if (!response.ok) throw new Error('Failed to load settings panel HTML');
+            if (!response.ok) {
+                throw new Error(`Failed to fetch settings.html. Status: ${response.status}`);
+            }
             
             const html = await response.text();
-            const container = document.querySelector('#extensions_settings > .container');
+            
+            // This is the updated, more reliable selector.
+            const container = document.getElementById('extensions_settings'); 
             
             if (container) {
+                console.log('[CostumeSwitch] Found settings container, injecting UI.'); // New log
                 container.insertAdjacentHTML('beforeend', html);
                 setupUI();
             } else {
-                console.error('[CostumeSwitch] Settings container not found.');
+                console.error('[CostumeSwitch] CRITICAL: Could not find #extensions_settings container.');
             }
         } catch (error) {
-            console.error(`[CostumeSwitch] Error loading UI: ${error}`);
+            console.error(`[CostumeSwitch] CRITICAL: Error loading UI: ${error}`);
         }
     }
 
