@@ -4,6 +4,9 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
+// This regex identifies common scene change markers to reset context.
+const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$|^Back in Central Park,$/i;
+
 const DEFAULTS = {
   enabled: true,
   resetTimeoutMs: 3000,
@@ -15,18 +18,13 @@ const DEFAULTS = {
   perTriggerCooldownMs: 250,
   failedTriggerCooldownMs: 10000,
   maxBufferChars: 2000,
-
-  // NEW tunables (safe defaults)
-  tokenBoundarySize: 80,      // chars of prev buffer to include when quick-scanning tokens
-  pronounLookbackChars: 1400,   // how far back to search for names when resolving pronouns
-  repeatSuppressMs: 800         // suppress repeated accepted matches/logs for this many ms
+  repeatSuppressMs: 800
 };
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/* robust pattern parsing (accepts escaped slashes) */
 function parsePatternEntry(raw) {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return null;
@@ -46,7 +44,6 @@ function computeFlagsFromEntries(entries, requireI = true) {
   return Array.from(flagsSet).filter(c => allowed.includes(c)).join('');
 }
 
-/* Build regexes */
 function buildNameRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -55,6 +52,7 @@ function buildNameRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildNameRegex compile failed:", e); return null; }
 }
+
 function buildSpeakerRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -63,6 +61,7 @@ function buildSpeakerRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildSpeakerRegex compile failed:", e); return null; }
 }
+
 function buildVocativeRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -71,6 +70,7 @@ function buildVocativeRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildVocativeRegex compile failed:", e); return null; }
 }
+
 function buildAttributionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -82,6 +82,7 @@ function buildAttributionRegex(patternList) {
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildAttributionRegex compile failed:", e); return null; }
 }
+
 function buildActionRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
@@ -92,7 +93,6 @@ function buildActionRegex(patternList) {
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
 }
 
-/* Quote ranges helpers */
 function getQuoteRanges(s) {
   const q = /["\u201C\u201D]/g;
   const pos = [];
@@ -102,20 +102,18 @@ function getQuoteRanges(s) {
   for (let i = 0; i + 1 < pos.length; i += 2) ranges.push([pos[i], pos[i + 1]]);
   return ranges;
 }
+
 function isIndexInsideQuotesRanges(ranges, idx) {
   for (const [a, b] of ranges) if (idx > a && idx < b) return true;
   return false;
 }
+
 function posIsInsideQuotes(pos, combined, quoteRanges) {
   if (pos == null || !combined) return false;
   if (quoteRanges && quoteRanges.length) {
     if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
   }
-  return isInsideQuotes(combined, pos);
-}
-function isInsideQuotes(text, pos) {
-  if (!text || pos <= 0) return false;
-  const before = text.slice(0, pos);
+  const before = combined.slice(0, pos);
   const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
   return (quoteCount % 2) === 1;
 }
@@ -136,9 +134,6 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
   return results;
 }
 
-/**
- * Scans the text for all match types, prioritizes them, and returns the single best candidate.
- */
 function findBestMatch(combined, regexes, settings, quoteRanges) {
     if (!combined) return null;
 
@@ -230,7 +225,6 @@ function normalizeCostumeName(n) {
   return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
 }
 
-// runtime state
 const perMessageBuffers = new Map();
 const perMessageStates = new Map();
 let lastIssuedCostume = null;
@@ -238,14 +232,13 @@ let resetTimer = null;
 let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
 const failedTriggerTimes = new Map();
+let _clickInProgress = new Set();
 
 let _streamHandler = null;
 let _genStartHandler = null;
 let _genEndHandler = null;
 let _msgRecvHandler = null;
 let _chatChangedHandler = null;
-
-let _clickInProgress = new Set();
 
 const MAX_MESSAGE_BUFFERS = 60;
 function ensureBufferLimit() {
@@ -283,7 +276,6 @@ jQuery(async () => {
   const ok = await waitForSelector("#cs-save", 3000, 100);
   if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
 
-  // Load settings into UI
   if (jQuery("#cs-enable").length) $("#cs-enable").prop("checked", !!settings.enabled);
   if (jQuery("#cs-patterns").length) $("#cs-patterns").val((settings.patterns || []).join("\n"));
   if (jQuery("#cs-default").length) $("#cs-default").val(settings.defaultCostume || "");
@@ -305,7 +297,6 @@ jQuery(async () => {
 
   const { eventSource, event_types } = realCtx;
 
-  // Build initial regexes
   let nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
   let speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
   let attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
@@ -329,7 +320,6 @@ jQuery(async () => {
         const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
         settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
 
-        // rebuild regexes
         nameRegex = buildNameRegex(settings.patterns || DEFAULTS.patterns);
         speakerRegex = buildSpeakerRegex(settings.patterns || DEFAULTS.patterns);
         attributionRegex = buildAttributionRegex(settings.patterns || DEFAULTS.patterns);
@@ -377,7 +367,6 @@ jQuery(async () => {
                 console.debug(`[CostumeSwitch] Clicking Quick Reply (${matchType}): "${label}"`);
             }
             
-            // KEY CHANGE HERE: Defer the click to the next event loop cycle.
             setTimeout(() => {
                 try {
                     buttonToClick.click();
@@ -386,14 +375,14 @@ jQuery(async () => {
                 }
             }, 0);
             
-            return true; // Return true immediately since we've scheduled the click.
+            return true;
         }
         return false;
     } catch (err) {
         console.error(`[CostumeSwitch] Error triggering Quick Reply "${labelOrMessage}":`, err);
         return false;
     }
-}
+  }
 
   function triggerQuickReplyVariants(costumeArg) {
     if (!costumeArg) return false;
@@ -505,9 +494,17 @@ jQuery(async () => {
       else tokenText = String(args.join(' ') || "");
       if (!tokenText) return;
 
+      const bufKey = messageId != null ? `m${messageId}` : 'live';
+
+      if (sceneChangeRegex.test(tokenText.trim())) {
+          if (settings.debug) console.debug(`[CostumeSwitch] Scene change detected. Resetting context for: ${bufKey}`);
+          perMessageBuffers.delete(bufKey);
+          perMessageStates.delete(bufKey);
+          return; 
+      }
+
       tokenText = normalizeStreamText(tokenText);
 
-      const bufKey = messageId != null ? `m${messageId}` : 'live';
       const prev = perMessageBuffers.get(bufKey) || "";
       const combined = (prev + tokenText).slice(- (settings.maxBufferChars || DEFAULTS.maxBufferChars));
       perMessageBuffers.set(bufKey, combined);
@@ -542,11 +539,9 @@ jQuery(async () => {
           }
 
           if (matchedName) {
-              // Update state with the new accepted match
               state.lastAcceptedName = matchedName;
               state.lastAcceptedTs = now;
               perMessageStates.set(bufKey, state);
-
               issueCostumeForName(matchedName, { matchKind, bufKey });
           }
       }
@@ -582,7 +577,7 @@ jQuery(async () => {
   try { unload(); } catch(e) {}
 
   try {
-    eventSource.on(streamEventName, _streamHandler);
+    eventSource.on(streamEventname, _streamHandler);
     eventSource.on(event_types.GENERATION_STARTED, _genStartHandler);
     eventSource.on(event_types.GENERATION_ENDED, _genEndHandler);
     eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler);
@@ -593,10 +588,9 @@ jQuery(async () => {
 
   try { window[`__${extensionName}_unload`] = unload; } catch(e) {}
 
-  console.log("SillyTavern-CostumeSwitch (patched v5.0 — state fix) loaded.");
+  console.log("SillyTavern-CostumeSwitch (fully patched) loaded.");
 });
 
-// getSettingsObj - unchanged pattern
 function getSettingsObj() {
   const ctx = typeof getContext === 'function' ? getContext() : (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null);
   if (ctx && ctx.extensionSettings) {
