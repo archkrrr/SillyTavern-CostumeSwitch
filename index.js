@@ -4,6 +4,113 @@
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
+// --- START: sendMessage shim (add right after imports) ---
+(function defineSendMessageShim(){
+  // don't overwrite if already present
+  if (typeof window !== 'undefined' && typeof window.sendMessage === 'function') {
+    console.info('[CostumeSwitch] sendMessage already defined');
+    return;
+  }
+
+  const POLL_INTERVAL = 200; // ms
+  const MAX_TRIES = 300; // ~60s timeout
+  let tries = 0;
+  let poll = null;
+
+  // small helper that turns a found context into a sendMessage impl
+  function attachForContext(c){
+    if (!c) return false;
+    const hasExec = !!(c.slashCommands && typeof c.slashCommands.execute === 'function');
+    const hasProc = typeof c.processCommand === 'function';
+    if (!hasExec && !hasProc) return false;
+
+    const impl = async function(cmd){
+      try {
+        if (hasExec) {
+          const r = c.slashCommands.execute(cmd);
+          if (r && typeof r.then === 'function') return await r;
+          return r;
+        }
+        if (hasProc) {
+          const r = c.processCommand(cmd);
+          if (r && typeof r.then === 'function') return await r;
+          return r;
+        }
+      } catch (err) {
+        console.error('[CostumeSwitch] sendMessage impl threw:', err);
+        throw err;
+      }
+    };
+
+    try {
+      // define non-enumerable to be polite
+      Object.defineProperty(window, 'sendMessage', {
+        value: impl,
+        writable: false,
+        configurable: false,
+        enumerable: false
+      });
+      console.info('[CostumeSwitch] sendMessage shim defined (attached to context).');
+      return true;
+    } catch(e){
+      console.warn('[CostumeSwitch] failed to define sendMessage on window:', e);
+      return false;
+    }
+  }
+
+  function tryFindAndAttach(){
+    tries++;
+    // 1) use your extension's getContext if available (this fn exists in your file)
+    try {
+      const maybeCtx = (typeof getContext === 'function') ? getContext() : null;
+      if (maybeCtx && attachForContext(maybeCtx)) { clearInterval(poll); return; }
+    } catch(e){ /* ignore */ }
+
+    // 2) common global context holders
+    const candPaths = [
+      window.ctx,
+      window.app,
+      (window.SillyTavern && typeof window.SillyTavern.getContext === 'function' ? window.SillyTavern.getContext() : null),
+      window.__APP_CONTEXT__,
+      window.__SILLY_TAVERN__
+    ];
+    for (const c of candPaths){
+      if (c && attachForContext(c)) { clearInterval(poll); return; }
+    }
+
+    // 3) brute-force scan window for an object exposing the handler (safe try/catch)
+    try {
+      for (const k of Object.keys(window)){
+        if (tries % 5 !== 0 && k.length > 40) continue; // a small perf hack
+        try {
+          const v = window[k];
+          if (!v || typeof v !== 'object') continue;
+          if ((v.slashCommands && typeof v.slashCommands.execute === 'function') || typeof v.processCommand === 'function'){
+            if (attachForContext(v)) { clearInterval(poll); return; }
+          }
+        } catch(e){}
+      }
+    } catch(e){ /* ignore */ }
+
+    if (tries >= MAX_TRIES){
+      clearInterval(poll);
+      console.warn('[CostumeSwitch] sendMessage shim: timed out waiting for app context.');
+    }
+  }
+
+  try {
+    // first immediate attempt (no wait)
+    tryFindAndAttach();
+    // then poll
+    poll = setInterval(tryFindAndAttach, POLL_INTERVAL);
+  } catch(e){
+    console.error('[CostumeSwitch] sendMessage shim outer error', e);
+    if (poll) clearInterval(poll);
+  }
+})();
+// --- END: sendMessage shim ---
+
+
 const EXT_NAME = "SillyTavern-CostumeSwitch";
 
 const DEFAULTS = {
