@@ -367,18 +367,50 @@ jQuery(async () => {
   }
 
   function issueCostumeForName(name) {
-    if (!name) return;
-    name = normalizeCostumeName(name);
-    const now = Date.now();
-    if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) { if (settings.debug) console.debug("CS debug: global cooldown active, skipping", name); return; }
-    const argFolder = `${name}/${name}`;
-    const last = lastTriggerTimes.get(argFolder) || 0;
-    if (now - last < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) { if (settings.debug) console.debug("CS debug: per-trigger cooldown active, skipping", argFolder); return; }
-    if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder);
-    const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
-    if (ok) { lastTriggerTimes.set(argFolder, now); lastIssuedCostume = argFolder; lastSwitchTimestamp = now; if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
-    else { failedTriggerTimes.set(argFolder.toLowerCase(), Date.now()); if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`); setTimeout(()=>$("#cs-status").text(""), 1000); }
+  if (!name) return;
+  name = normalizeCostumeName(name);
+  const now = Date.now();
+
+  // --- EARLY: check if we're already using this costume (avoid needless re-switching) ---
+  // lastIssuedCostume is typically stored as "Name/Name" or similar; normalize it
+  const currentName = normalizeCostumeName(lastIssuedCostume || settings.defaultCostume || (realCtx?.characters?.[realCtx.characterId]?.name) || '');
+  if (currentName && currentName.toLowerCase() === name.toLowerCase()) {
+    if (settings.debug) console.debug("CS debug: already using costume for", name, "- skipping switch.");
+    // keep the idle-reset timer alive so auto-reset still happens after timeout
+    scheduleResetIfIdle();
+    return;
   }
+
+  // --- global cooldown (only after confirming name differs from current) ---
+  if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
+    if (settings.debug) console.debug("CS debug: global cooldown active, skipping switch to", name, {
+      lastSwitchTimestamp, cooldownMs: settings.globalCooldownMs || DEFAULTS.globalCooldownMs
+    });
+    return;
+  }
+
+  const argFolder = `${name}/${name}`;
+  const last = lastTriggerTimes.get(argFolder) || 0;
+  if (now - last < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) {
+    if (settings.debug) console.debug("CS debug: per-trigger cooldown active, skipping", argFolder);
+    return;
+  }
+
+  if (settings.debug) console.debug("CS debug: attempting switch for detected name:", name, "->", argFolder);
+  const ok = triggerQuickReplyVariants(argFolder) || triggerQuickReplyVariants(name);
+  if (ok) {
+    lastTriggerTimes.set(argFolder, now);
+    lastIssuedCostume = argFolder;
+    lastSwitchTimestamp = now;
+    if ($("#cs-status").length) $("#cs-status").text(`Switched -> ${argFolder}`);
+    setTimeout(()=>$("#cs-status").text(""), 1000);
+  } else {
+    failedTriggerTimes.set(argFolder.toLowerCase(), Date.now());
+    if ($("#cs-status").length) $("#cs-status").text(`Quick Reply not found for ${name}`);
+    setTimeout(()=>$("#cs-status").text(""), 1000);
+  }
+}
+
 
   function scheduleResetIfIdle() {
     if (resetTimer) clearTimeout(resetTimer);
