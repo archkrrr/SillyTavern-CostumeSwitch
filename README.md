@@ -1,7 +1,3 @@
-Here's an updated version of the README with the new information on how to detect character names followed by a colon (e.g., "Shido:"):
-
----
-
 # SillyTavern Costume Switcher Extension
 
 The **SillyTavern Costume Switcher** extension was created to solve the problem of **showing multiple character expressions or images within a single character card chat**. This is especially useful for **narrator adventures** where a single character card (e.g., the narrator) needs to display different expressions or costumes without resorting to group chats.
@@ -101,8 +97,4 @@ Here are a few visual examples to help guide you through the configuration:
 
 ## License
 
-This extension is licensed under the **GNU General Public License v3.0**.
-
----
-
-This updated README includes the new **character patterns feature** where you can define names like `Shido:` and `Kotori:` (with a colon) to make the extension detect those specific formats for costume switching.
+This extension is licensed under the **GNU General Public License v3.0**
