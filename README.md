@@ -1,100 +1,43 @@
-# SillyTavern Costume Switcher Extension
-
-The **SillyTavern Costume Switcher** extension was created to solve the problem of **showing multiple character expressions or images within a single character card chat**. This is especially useful for **narrator adventures** where a single character card (e.g., the narrator) needs to display different expressions or costumes without resorting to group chats.
-
-With this extension, you can **drop multiple character expressions** directly into the narrator's chat card, enhancing the storytelling experience without needing to manage multiple character cards.
-
-## Features
-
-* **Real-time Costume Switching**: Automatically switches costumes as the AI generates responses based on detected character names.
-* **Custom Character Patterns**: You can define character names to trigger costume changes, including the option to detect names with a colon (e.g., "Shido:").
-* **Default Costume Reset**: Automatically reverts to a default costume if no character is detected within a specified timeout.
-* **Cooldown Management**: Avoids rapid costume switches by adding global and repeat suppression cooldowns.
-* **Debug Logging**: Enables detailed logging to help troubleshoot any issues with costume switching.
-
-## Installation and Usage
-
-### Installation
-
-1. Open **SillyTavern** and go to the **Extensions** page.
-2. Use **SillyTavern's inbuilt extension installer** to install the extension.
-3. If installing manually, download the extension's files and place them into the `scripts/extensions/` folder of SillyTavern.
-
-### Usage
-
-1. Go to the **SillyTavern Extensions** page and enable the **Costume Switcher** extension.
-2. In the extension settings, define the character names you want the extension to listen for. For example: `Char A:`, `Char B:`, `Char C:`.
-
-   * **Note**: By adding a colon after the character name (e.g., `Char A:`), the extension will only detect those names when followed by a colon, ensuring it doesn’t switch costumes for just "Shido" or "Kotori" without the colon.
-3. Set your **default costume** that will be applied when no character name is detected in the conversation.
-4. Optionally, adjust the **timeout** before the costume resets, the **global cooldown** between costume switches, and **repeat suppression** to avoid rapid costume changes.
-5. When a character name with a colon (like `Char A:`) is detected, the extension will automatically switch to the corresponding costume.
-6. Use the **Manual Reset** button to reset the costume back to default at any time.
-
-## Prerequisites
-
-* **SillyTavern** version: `1.13.2` or higher is required for compatibility with the extension.
-* **Quick Replies** extension is required for **SillyTavern Costume Switcher** to work.
-
-## Quick Replies Setup
-
-The **SillyTavern Costume Switcher** extension **depends on the Quick Replies extension**, which comes pre-installed with SillyTavern. To ensure the Costume Switcher works correctly, you need to configure the Quick Replies extension and its settings properly.
-
-### Enabling Quick Replies
-
-1. Go to **SillyTavern's Extensions** page.
-2. Enable the **Quick Replies** extension.
-
-### Configuring Quick Replies
-
-Quick Replies allows the Costume Switcher extension to interact with predefined replies and execute them when characters or costumes are detected. Here's how to set it up:
-
-1. **Access Quick Replies Settings**: Open the **Quick Replies** settings from the **Extensions** page.
-
-2. **Define Quick Reply Labels**: In Quick Replies, make sure you have a quick reply for each costume or character name you want to trigger.
-
-   * For example, if you have character names like `Char A:`, `Char B:`, `Char C:`, you will need to create quick replies for these in the Quick Replies settings.
-
-3. **Map Character Names to Quick Replies**: In the **SillyTavern Costume Switcher** settings, ensure you have set up mappings where each character name with a colon (e.g., `Char A:`) will correspond to the correct Quick Reply label.
-
-### Example Configuration
-
-Here are a few visual examples to help guide you through the configuration:
-
-### Quick Replies Setup in SillyTavern
-
-<img width="689" height="481" alt="image" src="https://github.com/user-attachments/assets/a5f9ab40-af5b-4ea1-aa0b-1bdf085eb943" />
-
----
-
+SillyTavern Costume Switcher Extension
+The SillyTavern Costume Switcher extension was created to solve the problem of showing multiple character expressions or images within a single character card chat. This is especially useful for narrator adventures where a single character card (e.g., the narrator) needs to display different expressions or costumes without resorting to group chats.
+With this extension, you can drop multiple character expressions directly into the narrator's chat card, enhancing the storytelling experience without needing to manage multiple character cards.
+Features
+* Real-time Costume Switching: Automatically switches costumes as the AI generates responses based on detected character names.
+* Flexible Detection Methods: You can toggle different ways the extension finds names—from precise speaker tags (Name:) to general mentions.
+* Custom Character Patterns: Define the specific character names you want the extension to listen for.
+* Default Costume Reset: Automatically reverts to a default costume if no character is detected within a specified timeout.
+* Cooldown Management: Avoids rapid, flickering costume switches with adjustable cooldowns.
+* Debug Logging: Enables detailed logging to help troubleshoot any issues.
+Installation
+1. Open SillyTavern and go to the Extensions page.
+2. Use SillyTavern's inbuilt extension installer to install the extension.
+3. If installing manually, download the extension's files and place them into the scripts/extensions/third-party/SillyTavern-CostumeSwitch folder.
+Prerequisites
+* SillyTavern version: 1.13.2 or higher.
+* Quick Replies extension must be enabled.
+Setup and Usage
+Step 1: Configure Quick Replies
+This extension relies on Quick Replies to function. You must create a Quick Reply for each character you want to switch to.
+1. Go to the Quick Replies settings in the Extensions panel.
+2. Create a new Quick Reply for each character.
+   * Label: This should be the character's name (e.g., Char A).
+   * Message: This should be the command to change the costume (e.g., /costume Char A/Char A).
 <img width="674" height="106" alt="image" src="https://github.com/user-attachments/assets/ab177c47-ff04-40b2-af22-c3a51dcd4822" />
-
-*I have all my costume folders inside my main character card, so that's why I put Dan Da Dan/Char A*
-
----
-
+I have all my costume folders inside my main character card, so that's why I put Dan Da Dan/Char A.
 <img width="2278" height="1221" alt="image" src="https://github.com/user-attachments/assets/e4886d5e-c653-4d4f-8d4a-8b3bffdcbbad" />
-
-*This is how you want to setup Quick Replies for it to work with the extension*
-
-### Costume Switcher Settings
-
+This is how you want to setup Quick Replies for it to work with the extension.
+Step 2: Configure the Costume Switcher
+Now, go to the Costume Switcher settings.
+1. Enable Costume Switch: Check this box to turn the extension on.
+2. Character Patterns: Enter the names of the characters you want the extension to look for. Each name must be on a new line. These names should match the Labels you set in Quick Replies.
+3. Default Costume: Set a default costume to revert to when no character is detected.
+4. Detection Methods: This is the most important part. You can choose how the extension finds names.
+   * For the highest accuracy (recommended): Uncheck all the boxes in this section. The extension will then only switch when it sees a direct speaker tag, like Char A:.
+   * For more flexibility: You can enable other methods, like detecting when a character performs an action (Char A leaned forward) or when they are mentioned in dialogue. Be aware that enabling more methods, especially "General Mentions," can lead to incorrect switches.
 <img width="694" height="597" alt="image" src="https://github.com/user-attachments/assets/4318ac06-3e60-492c-9ab7-fc87fc86f7e2" />
-
----
-
-*Here, you can see that I've put `Char A`, `Char B`, `Char C`, and `Char D` in the Character patterns. It will search the AI's message for those names. By putting `Char A:` instead, it will search for `Char A:` instead of just `Char A`, if you only want it to detect who's talking this way.*
-
-## Support and Contributions
-
-* **Support**: If you encounter any issues or need help using this extension, feel free to reach out via [GitHub Issues](https://github.com/archkrrr/SillyTavern-CostumeSwitch/issues) or the **SillyTavern community** on Discord.
-
-* **Contributing**: Contributions are always welcome! If you’d like to improve this extension, please fork the repository, create a new branch, and submit a pull request. You can help by:
-
-  * Adding new features.
-  * Improving documentation.
-  * Reporting bugs or suggesting new ideas.
-
-## License
-
-This extension is licensed under the **GNU General Public License v3.0**
+Here, you can see how the Costume Switcher settings match the Quick Reply labels. The character names like Char A, Char B, etc., are mapped to specific costumes.
+Support and Contributions
+* Support: If you encounter any issues, feel free to open an issue on GitHub or ask in the SillyTavern Discord.
+* Contributing: Contributions are welcome! Please fork the repository and submit a pull request.
+License
+This extension is licensed under the GNU General Public License v3.0.
