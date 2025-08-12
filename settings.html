@@ -6,7 +6,6 @@
     </div>
     <div class="inline-drawer-content">
       
-      <!-- Enable Costume Switch -->
       <div class="tracker-block">
         <input id="cs-enable" type="checkbox" />
         <label for="cs-enable">Enable Costume Switch</label>
@@ -15,7 +14,6 @@
         </small>
       </div>
 
-      <!-- Character Patterns -->
       <div class="tracker-block">
         <label for="cs-patterns">Character Patterns</label><br />
         <textarea id="cs-patterns" class="text_pole" rows="2" placeholder="Char A, Char B, Char C, Char D"></textarea>
@@ -24,7 +22,6 @@
         </small>
       </div>
 
-      <!-- Default Costume -->
       <div class="tracker-block">
         <label for="cs-default">Default Costume</label><br />
         <input id="cs-default" class="text_pole" type="text" placeholder="Enter default costume..." />
@@ -33,44 +30,66 @@
         </small>
       </div>
 
-      <!-- Detection Methods -->
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
           <b>Detection Methods</b>
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-          <small>Enable or disable specific detection methods. Disabling methods can improve accuracy if you only want to switch on specific cues (like speaker tags). Speaker tags (e.g., `Name:`) are always enabled.</small>
+          <small>Enable or disable specific detection methods. Disabling methods can improve accuracy if you only want to switch on specific cues. Speaker tags (e.g., `Name:`) are always enabled.</small>
           
-          <div class="tracker-block">
-            <input id="cs-detect-attribution" type="checkbox" />
-            <label for="cs-detect-attribution">Detect Attribution</label>
-            <small>Looks for phrases where a character is credited with speaking, like <em>"I agree," Tohka said.</em> This is a high-priority, accurate method.</small>
-          </div>
-          <div class="tracker-block">
-            <input id="cs-detect-action" type="checkbox" />
-            <label for="cs-detect-action">Detect Action</label>
-            <small>Looks for a character's name followed by an action verb, like <em>Kotori leaned forward.</em> This is useful for identifying the character performing an action.</small>
-          </div>
-          <div class="tracker-block">
-            <input id="cs-detect-vocative" type="checkbox" />
-            <label for="cs-detect-vocative">Detect Vocative</label>
-            <small>Looks for instances where a character is being directly addressed, like <em>"What do you think, Shido?"</em> This is useful for scenes with direct dialogue.</small>
-          </div>
-          <div class="tracker-block">
-            <input id="cs-detect-possessive" type="checkbox" />
-            <label for="cs-detect-possessive">Detect Possessive</label>
-            <small>Looks for a character's name showing ownership, like <em>Tohka's sword glowed.</em> This is a lower-priority match.</small>
-          </div>
-          <div class="tracker-block">
-            <input id="cs-detect-general" type="checkbox" />
-            <label for="cs-detect-general">Detect General Name Mentions</label>
-            <small>The least accurate method. It will trigger on any mention of a character's name that doesn't fit the other categories. <b>Warning:</b> This can cause incorrect switches if a character is mentioned by someone else.</small>
-          </div>
+          <table style="width: 100%; margin-top: 10px; border-spacing: 0 12px; border-collapse: separate;">
+            <tbody>
+              <tr>
+                <td style="width: 35%; vertical-align: top;">
+                  <input id="cs-detect-attribution" type="checkbox" />
+                  <label for="cs-detect-attribution"><b>Detect Attribution</b></label>
+                </td>
+                <td>
+                  <small>Looks for phrases where a character is credited with speaking, like <em>"I agree," Tohka said.</em> This is a high-priority, accurate method.</small>
+                </td>
+              </tr>
+              <tr>
+                <td style="vertical-align: top;">
+                  <input id="cs-detect-action" type="checkbox" />
+                  <label for="cs-detect-action"><b>Detect Action</b></label>
+                </td>
+                <td>
+                  <small>Looks for a character's name followed by an action verb, like <em>Kotori leaned forward.</em> This is useful for identifying the character performing an action.</small>
+                </td>
+              </tr>
+              <tr>
+                <td style="vertical-align: top;">
+                  <input id="cs-detect-vocative" type="checkbox" />
+                  <label for="cs-detect-vocative"><b>Detect Vocative</b></label>
+                </td>
+                <td>
+                  <small>Looks for instances where a character is being directly addressed, like <em>"What do you think, Shido?"</em> This is useful for scenes with direct dialogue.</small>
+                </td>
+              </tr>
+              <tr>
+                <td style="vertical-align: top;">
+                  <input id="cs-detect-possessive" type="checkbox" />
+                  <label for="cs-detect-possessive"><b>Detect Possessive</b></label>
+                </td>
+                <td>
+                  <small>Looks for a character's name showing ownership, like <em>Tohka's sword glowed.</em> This is a lower-priority match.</small>
+                </td>
+              </tr>
+              <tr>
+                <td style="vertical-align: top;">
+                  <input id="cs-detect-general" type="checkbox" />
+                  <label for="cs-detect-general"><b>Detect General Mentions</b></label>
+                </td>
+                <td>
+                  <small>The least accurate method. It will trigger on any mention of a character's name that doesn't fit the other categories. <b>Warning:</b> This can cause incorrect switches if a character is mentioned by someone else.</small>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <!-- Cooldowns and Timeouts -->
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
           <b>Cooldowns & Timeouts</b>
@@ -103,7 +122,6 @@
         </div>
       </div>
 
-      <!-- Costume Mappings -->
       <div class="tracker-block">
         <label for="cs-mappings">Costume Mappings</label><br />
         <table id="cs-mappings" class="text_pole">
@@ -115,8 +133,7 @@
             </tr>
           </thead>
           <tbody id="cs-mappings-tbody">
-            <!-- Mappings will be dynamically inserted here -->
-          </tbody>
+            </tbody>
         </table>
         <button id="cs-mapping-add" class="menu_button fa-solid fa-file-circle-plus interactable">Add Mapping</button>
         <small>
@@ -124,7 +141,6 @@
         </small>
       </div>
 
-      <!-- Enable Debug Logging -->
       <div class="tracker-block">
         <input id="cs-debug" type="checkbox" />
         <label for="cs-debug">Enable Debug Logging</label>
@@ -133,13 +149,11 @@
         </small>
       </div>
 
-      <!-- Buttons -->
       <div class="tracker-block flex-container">
         <button id="cs-save" class="menu_button fa-solid fa-save interactable">Save Settings</button>
         <button id="cs-reset" class="menu_button fa-solid fa-undo interactable">Manual Reset</button>
       </div>
 
-      <!-- Status and Error Messages -->
       <div id="cs-status" class="status-message">Ready</div>
       <div id="cs-error" class="error-message"></div>
     </div>
