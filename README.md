@@ -23,7 +23,7 @@ Features
 
 -    Use SillyTavern's inbuilt extension installer to install the extension.
 
-      *installing manually, download the extension's files and place them into the scripts/extensions/third-party/SillyTavern-CostumeSwitch folder.*
+  *installing manually, download the extension's files and place them into the scripts/extensions/third-party/SillyTavern-CostumeSwitch folder.*
 
 ## Prerequisites
 
@@ -43,7 +43,7 @@ This extension relies on Quick Replies to function. You must create a Quick Repl
 
   Label: This should be the character's name (e.g., Char A).
 
-  Message: This should be the command to change the costume (e.g., /costume Char A/Char A).
+  Message: This should be the command to change the costume (e.g., /costume (Whatever your directors char card is)/Char A).
 
 <img width="674" height="106" alt="image" src="https://github.com/user-attachments/assets/ab177c47-ff04-40b2-af22-c3a51dcd4822" />
 
