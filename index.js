@@ -20,7 +20,7 @@ const DEFAULTS = {
   detectAction: true,
   detectVocative: true,
   detectPossessive: true,
-  detectGeneral: false, // Defaulting general mentions to off for better accuracy
+  detectGeneral: false, 
 };
 
 function escapeRegex(s) {
@@ -59,7 +59,6 @@ function buildSpeakerRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
-  // CORRECTED: Removed the overly broad `|\\b` (word boundary) to make this more specific.
   const body = `(?:^|\\n)\\s*(${parts.join('|')})\\s*[:;,]\\s*`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildSpeakerRegex compile failed:", e); return null; }
