@@ -20,7 +20,7 @@ const DEFAULTS = {
   detectAction: true,
   detectVocative: true,
   detectPossessive: true,
-  detectGeneral: true,
+  detectGeneral: false, // Defaulting general mentions to off for better accuracy
 };
 
 function escapeRegex(s) {
@@ -59,7 +59,8 @@ function buildSpeakerRegex(patternList) {
   const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
   if (!entries.length) return null;
   const parts = entries.map(e => `(?:${e.body})`);
-  const body = `(?:^|\\n)\\s*(${parts.join('|')})\\s*(?:[:;,]|\\b)\\s*`;
+  // CORRECTED: Removed the overly broad `|\\b` (word boundary) to make this more specific.
+  const body = `(?:^|\\n)\\s*(${parts.join('|')})\\s*[:;,]\\s*`;
   const flags = computeFlagsFromEntries(entries, true);
   try { return new RegExp(body, flags); } catch (e) { console.warn("buildSpeakerRegex compile failed:", e); return null; }
 }
@@ -151,7 +152,6 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
     name: 1,
   };
 
-  // Speaker detection is always on as the baseline
   if (speakerRegex) {
     findNonQuotedMatches(combined, speakerRegex, quoteRanges).forEach(m => {
       const name = m.groups?.[0]?.trim();
@@ -159,7 +159,6 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
     });
   }
   
-  // Toggleable detections
   if (settings.detectAttribution && attributionRegex) {
     findNonQuotedMatches(combined, attributionRegex, quoteRanges).forEach(m => {
       const name = m.groups?.find(g => g)?.trim();
@@ -296,7 +295,6 @@ jQuery(async () => {
   $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
   $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
   
-  // Load new detection toggles
   $("#cs-detect-attribution").prop("checked", !!settings.detectAttribution);
   $("#cs-detect-action").prop("checked", !!settings.detectAction);
   $("#cs-detect-vocative").prop("checked", !!settings.detectVocative);
@@ -355,7 +353,6 @@ jQuery(async () => {
         const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
         settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
 
-        // Save new detection toggles
         settings.detectAttribution = !!$("#cs-detect-attribution").prop("checked");
         settings.detectAction = !!$("#cs-detect-action").prop("checked");
         settings.detectVocative = !!$("#cs-detect-vocative").prop("checked");
