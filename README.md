@@ -83,7 +83,7 @@ Here are a few visual examples to help guide you through the configuration:
 
 ---
 
-*Here, you can see that I've put `Char A`, `Char B`, `Char C`, and `Char D` in the Character patterns. It will search the AI's message for those names. By putting `Char A:` instead, it will search for `Char A:` instead of just `Char A`, to make it easier to detect.*
+*Here, you can see that I've put `Char A`, `Char B`, `Char C`, and `Char D` in the Character patterns. It will search the AI's message for those names. By putting `Char A:` instead, it will search for `Char A:` instead of just `Char A`, if you only want it to detect who's talking this way.*
 
 ## Support and Contributions
 
