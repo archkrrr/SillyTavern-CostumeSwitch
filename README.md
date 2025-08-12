@@ -23,12 +23,12 @@ With this extension, you can **drop multiple character expressions** directly in
 ### Usage
 
 1. Go to the **SillyTavern Extensions** page and enable the **Costume Switcher** extension.
-2. In the extension settings, define the character names you want the extension to listen for. For example: `Shido:`, `Kotori:`, `Tohka:`.
+2. In the extension settings, define the character names you want the extension to listen for. For example: `Char A:`, `Char B:`, `Char C:`.
 
-   * **Note**: By adding a colon after the character name (e.g., `Shido:`), the extension will only detect those names when followed by a colon, ensuring it doesn’t switch costumes for just "Shido" or "Kotori" without the colon.
+   * **Note**: By adding a colon after the character name (e.g., `Char A:`), the extension will only detect those names when followed by a colon, ensuring it doesn’t switch costumes for just "Shido" or "Kotori" without the colon.
 3. Set your **default costume** that will be applied when no character name is detected in the conversation.
 4. Optionally, adjust the **timeout** before the costume resets, the **global cooldown** between costume switches, and **repeat suppression** to avoid rapid costume changes.
-5. When a character name with a colon (like `Shido:`) is detected, the extension will automatically switch to the corresponding costume.
+5. When a character name with a colon (like `Char A:`) is detected, the extension will automatically switch to the corresponding costume.
 6. Use the **Manual Reset** button to reset the costume back to default at any time.
 
 ## Prerequisites
@@ -53,9 +53,9 @@ Quick Replies allows the Costume Switcher extension to interact with predefined 
 
 2. **Define Quick Reply Labels**: In Quick Replies, make sure you have a quick reply for each costume or character name you want to trigger.
 
-   * For example, if you have character names like `Shido:`, `Kotori:`, `Tohka:`, you will need to create quick replies for these in the Quick Replies settings.
+   * For example, if you have character names like `Char A:`, `Char B:`, `Char C:`, you will need to create quick replies for these in the Quick Replies settings.
 
-3. **Map Character Names to Quick Replies**: In the **SillyTavern Costume Switcher** settings, ensure you have set up mappings where each character name with a colon (e.g., `Shido:`) will correspond to the correct Quick Reply label.
+3. **Map Character Names to Quick Replies**: In the **SillyTavern Costume Switcher** settings, ensure you have set up mappings where each character name with a colon (e.g., `Char A:`) will correspond to the correct Quick Reply label.
 
 ### Example Configuration
 
@@ -83,7 +83,7 @@ Here are a few visual examples to help guide you through the configuration:
 
 ---
 
-*Here, you can see how the Costume Switcher settings match the Quick Reply labels. The character names like `Shido:`, `Kotori:`, etc., are mapped to specific costumes.*
+*Here, you can see that I've put `Char A`, `Char B`, `Char C`, and `Char D` in the Character patterns. It will search the AI's message for those names. By putting `Char A:` instead, it will search for `Char A:` instead of just `Char A`, to make it easier to detect.*
 
 ## Support and Contributions
 
