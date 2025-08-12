@@ -33,7 +33,7 @@ Features
 
 ## Setup and Usage
 
-Step 1: Configure Quick Replies
+**Step 1:** Configure Quick Replies
 
 This extension relies on Quick Replies to function. You must create a Quick Reply for each character you want to switch to.
 
@@ -52,7 +52,8 @@ I have all my costume folders inside my main character card, so that's why I put
 <img width="2278" height="1221" alt="image" src="https://github.com/user-attachments/assets/e4886d5e-c653-4d4f-8d4a-8b3bffdcbbad" />
 
 *This is how you want to setup Quick Replies for it to work with the extension.*
-Step 2: Configure the Costume Switcher
+
+**Step 2:** Configure the Costume Switcher
 
 Now, go to the Costume Switcher settings.
 
