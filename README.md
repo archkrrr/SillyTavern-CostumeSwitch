@@ -71,4 +71,4 @@ Now, go to the Costume Switcher settings.
 
 <img width="694" height="597" alt="image" src="https://github.com/user-attachments/assets/4318ac06-3e60-492c-9ab7-fc87fc86f7e2" />
 
-*Here, you can see how the Costume Switcher settings match the Quick Reply labels. The character names like Char A, Char B, etc., are mapped to specific costumes.
+*Here, you can see how the Costume Switcher settings match the Quick Reply labels. The character names like Char A, Char B, etc., are mapped to specific costumes.*
