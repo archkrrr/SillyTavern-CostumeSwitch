@@ -1,4 +1,3 @@
-/* Keep your existing layout rules */
 .costume-switcher-settings {
     display: flex;
     flex-direction: column;
@@ -18,8 +17,6 @@
     margin-top: 10px;
     text-align: center;
 }
-
-/* NEW: Make inputs/textarea/select match dark theme */
 .costume-switcher-settings input[type="text"],
 .costume-switcher-settings input[type="number"],
 .costume-switcher-settings textarea,
@@ -34,15 +31,12 @@
     outline: none;
 }
 
-/* Remove browser autofill bright yellow/white */
 .costume-switcher-settings input:-webkit-autofill,
 .costume-switcher-settings textarea:-webkit-autofill {
     background-color: var(--input-background) !important;
     -webkit-box-shadow: 0 0 0px 1000px var(--input-background) inset !important;
     -webkit-text-fill-color: var(--text-color) !important;
 }
-
-/* Match buttons to other extension panels */
 .costume-switcher-settings button {
     background-color: var(--button-background);
     color: var(--button-text-color);
@@ -56,19 +50,16 @@
     background-color: var(--button-background-hover);
 }
 
-/* Make summary text crisp like other panels */
 details.st-ext-card > summary {
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
 }
 
-/* Layout helpers for the new cooldown inputs */
 .costume-switcher-settings.inline-group > div {
     display: flex;
     flex-direction: column;
 }
 
-/* make small numeric inputs look consistent */
 #cs-global-cooldown,
 #cs-per-cooldown,
 #cs-failed-cooldown,
@@ -79,7 +70,6 @@ details.st-ext-card > summary {
     border-radius: 4px;
 }
 
-/* Keep debug checkbox compact */
 #cs-debug {
     margin-right: 6px;
 }
