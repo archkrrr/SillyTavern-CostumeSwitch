@@ -10,7 +10,7 @@
         <input id="cs-enable" type="checkbox" />
         <label for="cs-enable">Enable Costume Switch</label>
         <small>
-          Enables or disables the costume-switching functionality. When checked, the extension will listen for specific character names in the AI’s responses and automatically switch costumes based on those names. If unchecked, the feature is disabled, and no costume switching will occur. If any changes are made, you must click the save settings button to apply them.
+          Enables or disables the costume-switching functionality. When checked, the extension will listen for character names and automatically switch costumes.
         </small>
       </div>
 
@@ -18,7 +18,7 @@
         <label for="cs-patterns">Character Patterns</label><br />
         <textarea id="cs-patterns" class="text_pole" rows="2" placeholder="Char A, Char B, Char C, Char D"></textarea>
         <small>
-          Enter the character names here. The extension will listen for these names in the AI’s messages. When a match is detected, the extension triggers a costume change. Each name should be entered on a new line.
+          Enter the character names the extension should listen for, one per line. You can use simple names (e.g., `Char A`) or advanced regular expressions (e.g., `/Char A|Char B/`).
         </small>
       </div>
 
@@ -26,7 +26,7 @@
         <label for="cs-default">Default Costume</label><br />
         <input id="cs-default" class="text_pole" type="text" placeholder="Enter default costume..." />
         <small>
-          This input field defines the default costume. If no character name is detected in the stream (or if the detection fails), the extension will revert to this default costume after the specified timeout. You must click save whenever this is changed.
+          The costume to use when no character is detected. If you leave this blank, it will use the character's main avatar.
         </small>
       </div>
 
@@ -36,7 +36,9 @@
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-          <small>Enable or disable specific detection methods. Disabling methods can improve accuracy if you only want to switch on specific cues. Speaker tags (e.g., `Name:`) are always enabled. <b>To detect only speaker tags, uncheck all the boxes below.</b></small>
+          <small>Configure how the extension detects characters for different writing styles. Checking more boxes enables more flexible "Novel Style" detection.</small>
+          <br><br>
+          <small><b>For Script Style (`Name: "Dialogue"`)</b>: Uncheck all boxes below. The extension will only switch when it sees a name followed by a colon.</small>
           
           <table style="width: 100%; margin-top: 10px; border-spacing: 0 12px; border-collapse: separate;">
             <tbody>
@@ -46,7 +48,7 @@
                   <label for="cs-detect-attribution"><b>Detect Attribution</b></label>
                 </td>
                 <td>
-                  <small>Looks for phrases where a character is credited with speaking, like <em>"I agree," Tohka said.</em> This is a high-priority, accurate method.</small>
+                  <small>Looks for phrases like <em>"I agree," Char A said.</em> This is a high-priority hint that tells the engine who is currently speaking.</small>
                 </td>
               </tr>
               <tr>
@@ -55,7 +57,7 @@
                   <label for="cs-detect-action"><b>Detect Action</b></label>
                 </td>
                 <td>
-                  <small>Looks for a character's name followed by an action verb, like <em>Kotori leaned forward.</em> This is useful for identifying the character performing an action.</small>
+                  <small>Looks for a name followed by an action, like <em>Char B leaned forward.</em> This helps identify the character performing an action, making them the scene's focus.</small>
                 </td>
               </tr>
               <tr>
@@ -64,7 +66,7 @@
                   <label for="cs-detect-vocative"><b>Detect Vocative</b></label>
                 </td>
                 <td>
-                  <small>Looks for instances where a character is being directly addressed, like <em>"What do you think, Shido?"</em> This is useful for scenes with direct dialogue.</small>
+                  <small>Looks for characters being addressed, like <em>"What do you think, Char A?"</em> This tells the engine who is being spoken to, which helps it infer who will speak next.</small>
                 </td>
               </tr>
               <tr>
@@ -73,7 +75,7 @@
                   <label for="cs-detect-possessive"><b>Detect Possessive</b></label>
                 </td>
                 <td>
-                  <small>Looks for a character's name showing ownership, like <em>Tohka's sword glowed.</em> This is a lower-priority match.</small>
+                  <small>Looks for ownership, like <em>Char A's sword glowed.</em> This is a lower-priority hint and is less likely to cause a switch on its own.</small>
                 </td>
               </tr>
               <tr>
@@ -82,7 +84,7 @@
                   <label for="cs-detect-general"><b>Detect General Mentions</b></label>
                 </td>
                 <td>
-                  <small>The least accurate method. It will trigger on any mention of a character's name that doesn't fit the other categories. <b>Warning:</b> This can cause incorrect switches if a character is mentioned by someone else.</small>
+                  <small>The least accurate method. It will trigger on any mention of a character's name. <b>Warning:</b> The context engine is good at ignoring these, but it can still cause incorrect switches.</small>
                 </td>
               </tr>
             </tbody>
@@ -100,7 +102,7 @@
             <label for="cs-timeout">Costume Reset Timeout</label><br />
             <input id="cs-timeout" class="text_pole" type="number" min="0" />
             <small>
-              Set the timeout (in milliseconds) before resetting to the default costume. Default is 5 minutes (300000ms).
+              Set the time (in milliseconds) before resetting to the default costume if no character is detected. Set to 0 to disable.
             </small>
           </div>
     
@@ -108,7 +110,7 @@
             <label for="cs-global-cooldown">Global Cooldown</label><br />
             <input id="cs-global-cooldown" class="text_pole" type="number" min="0" />
             <small>
-              Cooldown (in milliseconds) between any two switches to prevent flickering.
+              The minimum time (in milliseconds) between any two costume switches to prevent flickering.
             </small>
           </div>
     
@@ -116,7 +118,7 @@
             <label for="cs-repeat-suppress">Repeat Suppression</label><br />
             <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" />
             <small>
-              Cooldown (in milliseconds) before the same character can be triggered again.
+              The minimum time (in milliseconds) before the same character can trigger another switch.
             </small>
           </div>
         </div>
@@ -137,7 +139,7 @@
         </table>
         <button id="cs-mapping-add" class="menu_button fa-solid fa-file-circle-plus interactable">Add Mapping</button>
         <small>
-          Map character names to specific costume folders here. When a character name is detected, the extension will switch to the mapped costume folder.
+          Map a detected character name to a specific costume folder. Useful if your folder names don't match the character names exactly.
         </small>
       </div>
 
@@ -145,7 +147,7 @@
         <input id="cs-debug" type="checkbox" />
         <label for="cs-debug">Enable Debug Logging</label>
         <small>
-          Logs detailed information to the browser console for troubleshooting.
+          Logs detailed information to the browser console (F12) for troubleshooting.
         </small>
       </div>
 
