@@ -628,7 +628,7 @@ jQuery(async () => {
 
     try { window[`__${extensionName}_unload`] = unload; } catch (e) {}
 
-    console.log("SillyTavern-CostumeSwitch (v2 Logic) loaded successfully.");
+    console.log("SillyTavern-CostumeSwitch loaded successfully.");
 });
 
 function getSettingsObj() {
