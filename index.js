@@ -24,10 +24,12 @@ const DEFAULTS = {
     detectGeneral: false,
 };
 
+// Helper to escape strings for regex construction
 function escapeRegex(s) {
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Parses a user-provided pattern, supporting both simple strings and /regex/
 function parsePatternEntry(raw) {
     const trimmed = String(raw || '').trim();
     if (!trimmed) return null;
@@ -36,6 +38,7 @@ function parsePatternEntry(raw) {
     return { body: escapeRegex(trimmed), flags: '' };
 }
 
+// Combines regex flags from multiple patterns
 function computeFlagsFromEntries(entries, requireI = true) {
     let flagsSet = new Set();
     for (const e of entries) {
@@ -47,6 +50,7 @@ function computeFlagsFromEntries(entries, requireI = true) {
     return Array.from(flagsSet).filter(c => allowed.includes(c)).join('');
 }
 
+// Builds the various regex patterns from the user's list
 function buildNameRegex(patternList) {
     const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
     if (!entries.length) return null;
@@ -69,7 +73,8 @@ function buildVocativeRegex(patternList) {
     const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
     if (!entries.length) return null;
     const parts = entries.map(e => `(?:${e.body})`);
-    const body = `(?:^|\\n|\\s)(${parts.join('|')})\\s*,`;
+    // IMPROVED: Now uses a lookahead to match a name followed by punctuation or end of line/quote, without consuming it.
+    const body = `(?:^|\\n|\\s)(${parts.join('|')})(?=[\\s,.!?“"]|$)`;
     const flags = computeFlagsFromEntries(entries, true);
     try { return new RegExp(body, flags); } catch (e) { console.warn("buildVocativeRegex compile failed:", e); return null; }
 }
@@ -78,8 +83,9 @@ function buildAttributionRegex(patternList) {
     const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
     if (!entries.length) return null;
     const names = entries.map(e => `(?:${e.body})`).join('|');
-    const verbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked)';
-    const patA = '(["\\u201C\\u201D].{0,400}["\\u201C\\u201D])\\s*,?\\s*(' + names + ')\\s+' + verbs;
+    // IMPROVED: Added more common verbs.
+    const verbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked|offered|suggested|stated)';
+    const patA = '(?:["\\u201C\\u201D][^"\\u201C\\u201D]{0,400}["\\u201C\\u201D])\\s*,?\\s*(' + names + ')\\s+' + verbs;
     const patB = '\\b(' + names + ')\\s+' + verbs + '\\s*[:,]?\\s*["\\u201C\\u201D]';
     const body = `(?:${patA})|(?:${patB})`;
     const flags = computeFlagsFromEntries(entries, true);
@@ -90,12 +96,14 @@ function buildActionRegex(patternList) {
     const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
     if (!entries.length) return null;
     const parts = entries.map(e => `(?:${e.body})`);
-    const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved)';
+    // IMPROVED: Added more common action verbs.
+    const actions = '(?:nodded|leaned|smiled|laughed|stood|sat|gestured|sighed|replied|said|murmured|whispered|muttered|observed|watched|turned|glanced|held|lowered|positioned|stepped|approached|walked|looked|moved|danced|spun|tapped)';
     const body = `\\b(${parts.join('|')})(?:\\s+[A-Z][a-z]+)?\\b\\s+${actions}\\b`;
     const flags = computeFlagsFromEntries(entries, true);
     try { return new RegExp(body, flags); } catch (e) { console.warn("buildActionRegex compile failed:", e); return null; }
 }
 
+// Finds all quote pairs in a string to determine what text is dialogue
 function getQuoteRanges(s) {
     const q = /["\u201C\u201D]/g;
     const pos = [];
@@ -106,21 +114,13 @@ function getQuoteRanges(s) {
     return ranges;
 }
 
+// Checks if a given index is inside any of the quote ranges
 function isIndexInsideQuotesRanges(ranges, idx) {
     for (const [a, b] of ranges) if (idx > a && idx < b) return true;
     return false;
 }
 
-function posIsInsideQuotes(pos, combined, quoteRanges) {
-    if (pos == null || !combined) return false;
-    if (quoteRanges && quoteRanges.length) {
-        if (isIndexInsideQuotesRanges(quoteRanges, pos)) return true;
-    }
-    const before = combined.slice(0, pos);
-    const quoteCount = (before.match(/["\u201C\u201D]/g) || []).length;
-    return (quoteCount % 2) === 1;
-}
-
+// Finds all regex matches that are NOT inside quotation marks
 function findNonQuotedMatches(combined, regex, quoteRanges) {
     if (!combined || !regex) return [];
     const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
@@ -129,7 +129,7 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
     let m;
     while ((m = re.exec(combined)) !== null) {
         const idx = m.index || 0;
-        if (!posIsInsideQuotes(idx, combined, quoteRanges)) {
+        if (!isIndexInsideQuotesRanges(quoteRanges, idx)) {
             results.push({ match: m[0], groups: m.slice(1), index: idx });
         }
         if (re.lastIndex === m.index) re.lastIndex++;
@@ -137,11 +137,14 @@ function findNonQuotedMatches(combined, regex, quoteRanges) {
     return results;
 }
 
+// Context-aware match finding.
 function findBestMatch(combined, regexes, settings, quoteRanges) {
     if (!combined) return null;
-    const allMatches = [];
+    let allMatches = [];
     const { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex } = regexes;
-    const priorities = { speaker: 5, attribution: 4, action: 3, vocative: 3, possessive: 2, name: 1 };
+    const priorities = { speaker: 5, attribution: 4, action: 3, vocative: 3, possessive: 2, name: 1, inferred: 6 };
+
+    // Gather all possible matches from all detection methods for KNOWN characters
     if (speakerRegex) {
         findNonQuotedMatches(combined, speakerRegex, quoteRanges).forEach(m => {
             const name = m.groups?.[0]?.trim();
@@ -182,16 +185,58 @@ function findBestMatch(combined, regexes, settings, quoteRanges) {
             if (name) allMatches.push({ name, matchKind: 'name', matchIndex: m.index, priority: priorities.name });
         });
     }
-    if (allMatches.length === 0) return null;
-    allMatches.sort((a, b) => {
-        if (b.priority !== a.priority) {
-            return b.priority - a.priority;
+
+    // This pass looks for any character speaking, to prevent incorrect switches on mentioned names.
+    const genericNamePattern = '[A-Z][a-z]+(?:\\s[A-Z][a-z]+)?';
+    const genericVerbs = '(?:said|asked|replied|murmured|whispered|sighed|laughed|exclaimed|noted|added|answered|shouted|cried|muttered|remarked|offered|suggested|stated)';
+    const genericAttributionRegex = new RegExp(`(?:["“][^"”]{0,400}["”])\\s*,?\\s*(${genericNamePattern})\\s+${genericVerbs}`, 'g');
+    
+    let vetoSpeaker = null;
+    let genericMatches = [];
+    let m;
+    while ((m = genericAttributionRegex.exec(combined)) !== null) {
+        // Ensure the found "name" isn't a common non-name capital word.
+        const potentialName = m[1].trim();
+        if (!/^(The|He|She|It|They)$/i.test(potentialName)) {
+            genericMatches.push({ name: potentialName, index: m.index });
         }
-        return b.matchIndex - a.matchIndex;
-    });
+    }
+
+    if (genericMatches.length > 0) {
+        genericMatches.sort((a, b) => b.index - a.index);
+        vetoSpeaker = genericMatches[0].name;
+        
+        const isKnown = (settings.patterns || []).some(p => p.toLowerCase() === vetoSpeaker.toLowerCase());
+        
+        // If the speaker is UNKNOWN (e.g., Kannazuki), we apply a "soft veto".
+        if (!isKnown) {
+            debugLog(settings, `Unknown speaker '${vetoSpeaker}' detected. Vetoing low-priority matches.`);
+            // Remove low-priority general and possessive matches from consideration.
+            allMatches = allMatches.filter(match => match.priority > priorities.possessive);
+        }
+    }
+
+    if (allMatches.length === 0) return null;
+
+    // Standard Veto Logic for KNOWN speakers
+    const speakerMatches = allMatches.filter(m => m.matchKind === 'speaker' || m.matchKind === 'attribution');
+    if (speakerMatches.length > 0) {
+        speakerMatches.sort((a, b) => b.matchIndex - a.matchIndex || b.priority - a.priority);
+        const primarySpeaker = speakerMatches[0];
+        
+        const vetoedMatches = allMatches.filter(m => m.name.toLowerCase() === primarySpeaker.name.toLowerCase());
+        debugLog(settings, `Primary speaker identified: '${primarySpeaker.name}'. Vetoing other character mentions.`);
+        
+        vetoedMatches.sort((a, b) => b.priority - a.priority || b.matchIndex - a.matchIndex);
+        return vetoedMatches[0];
+    }
+
+    // Fallback for cases with no definitive speaker
+    allMatches.sort((a, b) => b.priority - a.priority || b.matchIndex - a.matchIndex);
     return allMatches[0];
 }
 
+// Normalizes text for processing
 function normalizeStreamText(s) {
     if (!s) return '';
     s = String(s);
@@ -202,6 +247,7 @@ function normalizeStreamText(s) {
     return s;
 }
 
+// Normalizes a name for matching against costumes
 function normalizeCostumeName(n) {
     if (!n) return "";
     let s = String(n).trim();
@@ -210,6 +256,7 @@ function normalizeCostumeName(n) {
     return String(first).replace(/[-_](?:sama|san)$/i, '').trim();
 }
 
+// Global state variables
 const perMessageBuffers = new Map();
 const perMessageStates = new Map();
 let lastIssuedCostume = null;
@@ -217,6 +264,7 @@ let lastSwitchTimestamp = 0;
 const lastTriggerTimes = new Map();
 const failedTriggerTimes = new Map();
 
+// Event handlers
 let _streamHandler = null;
 let _genStartHandler = null;
 let _genEndHandler = null;
@@ -251,7 +299,6 @@ function debugLog(settings, ...args) {
 }
 
 jQuery(async () => {
-    // Check if the required global function exists. If not, abort.
     if (typeof executeSlashCommandsOnChatInput !== 'function') {
         console.error("[CostumeSwitch] FATAL: The global 'executeSlashCommandsOnChatInput' function is not available. This extension cannot run.");
         const statusEl = document.querySelector("#cs-status");
@@ -276,15 +323,13 @@ jQuery(async () => {
     const ok = await waitForSelector("#cs-save", 3000, 100);
     if (!ok) console.warn("CostumeSwitch: settings UI did not appear within timeout. Attempting to continue (UI may be unresponsive).");
 
+    // Load settings into the UI
     $("#cs-enable").prop("checked", !!settings.enabled);
     $("#cs-patterns").val((settings.patterns || []).join("\n"));
     $("#cs-default").val(settings.defaultCostume || "");
     $("#cs-timeout").val(settings.resetTimeoutMs || DEFAULTS.resetTimeoutMs);
     $("#cs-debug").prop("checked", !!settings.debug);
     $("#cs-global-cooldown").val(settings.globalCooldownMs || DEFAULTS.globalCooldownMs);
-    $("#cs-per-cooldown").val(settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs);
-    $("#cs-failed-cooldown").val(settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs);
-    $("#cs-max-buffer").val(settings.maxBufferChars || DEFAULTS.maxBufferChars);
     $("#cs-repeat-suppress").val(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
     $("#cs-detect-attribution").prop("checked", !!settings.detectAttribution);
     $("#cs-detect-action").prop("checked", !!settings.detectAction);
@@ -332,12 +377,7 @@ jQuery(async () => {
             settings.resetTimeoutMs = parseInt($("#cs-timeout").val() || DEFAULTS.resetTimeoutMs, 10);
             settings.debug = !!$("#cs-debug").prop("checked");
             settings.globalCooldownMs = parseInt($("#cs-global-cooldown").val() || DEFAULTS.globalCooldownMs, 10);
-            settings.perTriggerCooldownMs = parseInt($("#cs-per-cooldown").val() || DEFAULTS.perTriggerCooldownMs, 10);
-            settings.failedTriggerCooldownMs = parseInt($("#cs-failed-cooldown").val() || DEFAULTS.failedTriggerCooldownMs, 10);
-            const mb = parseInt($("#cs-max-buffer").val() || DEFAULTS.maxBufferChars, 10);
-            settings.maxBufferChars = isFinite(mb) && mb > 0 ? mb : DEFAULTS.maxBufferChars;
-            const rsp = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
-            settings.repeatSuppressMs = isFinite(rsp) && rsp >= 0 ? rsp : DEFAULTS.repeatSuppressMs;
+            settings.repeatSuppressMs = parseInt($("#cs-repeat-suppress").val() || DEFAULTS.repeatSuppressMs, 10);
             settings.detectAttribution = !!$("#cs-detect-attribution").prop("checked");
             settings.detectAction = !!$("#cs-detect-action").prop("checked");
             settings.detectVocative = !!$("#cs-detect-vocative").prop("checked");
@@ -362,7 +402,6 @@ jQuery(async () => {
             }
             if (compileError) {
                 $("#cs-error").text(`Pattern compile error: ${compileError}`).show();
-                setTimeout(() => $("#cs-error").text("").hide(), 4000);
             } else {
                 $("#cs-error").text("").hide();
             }
@@ -405,7 +444,6 @@ jQuery(async () => {
         const costumeArg = settings.defaultCostume?.trim() ? `\\${settings.defaultCostume.trim()}` : '\\';
         const command = `/costume ${costumeArg}`;
         debugLog(settings, "Attempting manual reset with command:", command);
-
         try {
             await executeSlashCommandsOnChatInput(command);
             lastIssuedCostume = costumeArg;
@@ -413,8 +451,6 @@ jQuery(async () => {
             setTimeout(() => $("#cs-status").text("Ready"), 1500);
         } catch (err) {
             console.error(`[CostumeSwitch] Manual reset failed for "${costumeArg}".`, err);
-            if ($("#cs-status").length) $("#cs-status").text(`Error during reset.`);
-            setTimeout(() => $("#cs-status").text("Ready"), 1500);
         }
     }
 
@@ -424,7 +460,7 @@ jQuery(async () => {
         for (const m of arr) {
             if (!m || !m.name) continue;
             if (m.name.toLowerCase() === name.toLowerCase()) {
-                return m.folder || null;
+                return m.folder ? m.folder.trim() : null;
             }
         }
         return null;
@@ -441,20 +477,16 @@ jQuery(async () => {
             debugLog(settings, "already using costume for", name, "- skipping switch.");
             return;
         }
-
         if (now - lastSwitchTimestamp < (settings.globalCooldownMs || DEFAULTS.globalCooldownMs)) {
             debugLog(settings, "global cooldown active, skipping switch to", name);
             return;
         }
-
         let argFolder = getMappedCostume(name) || name;
-
         const lastSuccess = lastTriggerTimes.get(argFolder) || 0;
         if (now - lastSuccess < (settings.perTriggerCooldownMs || DEFAULTS.perTriggerCooldownMs)) {
             debugLog(settings, "per-trigger cooldown active, skipping", argFolder);
             return;
         }
-
         const lastFailed = failedTriggerTimes.get(argFolder) || 0;
         if (now - lastFailed < (settings.failedTriggerCooldownMs || DEFAULTS.failedTriggerCooldownMs)) {
             debugLog(settings, "failed-trigger cooldown active, skipping", argFolder);
@@ -463,7 +495,6 @@ jQuery(async () => {
 
         const command = `/costume \\${argFolder}`;
         debugLog(settings, "executing command:", command, "kind:", matchKind);
-
         try {
             await executeSlashCommandsOnChatInput(command);
             lastTriggerTimes.set(argFolder, now);
@@ -474,8 +505,6 @@ jQuery(async () => {
         } catch (err) {
             failedTriggerTimes.set(argFolder, now);
             console.error(`[CostumeSwitch] Failed to execute /costume command for "${argFolder}".`, err);
-            if ($("#cs-status").length) $("#cs-status").text(`Failed to switch to ${name}`);
-            setTimeout(() => $("#cs-status").text("Ready"), 1000);
         }
     }
 
@@ -484,7 +513,13 @@ jQuery(async () => {
     _genStartHandler = (messageId) => {
         const bufKey = messageId != null ? `m${messageId}` : 'live';
         debugLog(settings, `Generation started for ${bufKey}, resetting state.`);
-        perMessageStates.delete(bufKey);
+        perMessageStates.set(bufKey, {
+            lastAcceptedName: null,
+            lastAcceptedTs: 0,
+            lastSpeaker: null,
+            lastAddressed: null,
+            lastInferredDialogue: false,
+        });
         perMessageBuffers.delete(bufKey);
     };
 
@@ -493,44 +528,65 @@ jQuery(async () => {
             if (!settings.enabled) return;
             let tokenText = "";
             let messageId = null;
-            if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); } else if (typeof args[0] === 'string' && args.length === 1) { tokenText = args[0]; } else if (args[0] && typeof args[0] === 'object') { tokenText = String(args[0].token ?? args[0].text ?? ""); messageId = args[0].messageId ?? args[1] ?? null; } else { tokenText = String(args.join(' ') || ""); }
+            if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); } else if (typeof args[0] === 'object') { tokenText = String(args[0].token ?? args[0].text ?? ""); messageId = args[0].messageId ?? args[1] ?? null; } else { tokenText = String(args.join(' ') || ""); }
             if (!tokenText) return;
+
             const bufKey = messageId != null ? `m${messageId}` : 'live';
+            if (!perMessageStates.has(bufKey)) { _genStartHandler(messageId); }
+            const state = perMessageStates.get(bufKey);
+
             const sceneChangeRegex = /^(?:\*\*|--|##|__|\*--).*(?:\*\*|--|##|__|\*--)$/i;
             if (sceneChangeRegex.test(tokenText.trim())) {
-                debugLog(settings, `[CostumeSwitch] Scene change detected. Resetting context for: ${bufKey}`);
-                perMessageBuffers.delete(bufKey);
-                perMessageStates.delete(bufKey);
+                debugLog(settings, `Scene change detected. Resetting context for: ${bufKey}`);
+                _genStartHandler(messageId);
                 return;
             }
-            tokenText = normalizeStreamText(tokenText);
+
             const prev = perMessageBuffers.get(bufKey) || "";
-            const combined = (prev + tokenText).slice(-(settings.maxBufferChars || DEFAULTS.maxBufferChars));
-            if (perMessageBuffers.has(bufKey)) perMessageBuffers.delete(bufKey);
+            const normalizedToken = normalizeStreamText(tokenText);
+            const combined = (prev + normalizedToken).slice(-(settings.maxBufferChars || DEFAULTS.maxBufferChars));
             perMessageBuffers.set(bufKey, combined);
             ensureBufferLimit();
-            if (!perMessageStates.has(bufKey)) {
-                perMessageStates.set(bufKey, { lastAcceptedName: null, lastAcceptedTs: 0 });
+
+            const isNewDialogue = /^\s*["\u201C]/.test(normalizedToken);
+            if (isNewDialogue && state.lastAddressed && !state.lastInferredDialogue) {
+                const inferredSpeaker = state.lastAddressed;
+                debugLog(settings, `Inferred speaker from unattributed dialogue: ${inferredSpeaker}`);
+                issueCostumeForName(inferredSpeaker, { matchKind: 'inferred' });
+                state.lastSpeaker = inferredSpeaker;
+                state.lastAddressed = null;
+                state.lastInferredDialogue = true;
+                perMessageStates.set(bufKey, state);
+                return;
             }
-            const state = perMessageStates.get(bufKey);
+
             const quoteRanges = getQuoteRanges(combined);
             const bestMatch = findBestMatch(combined, { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex }, settings, quoteRanges);
+            
             if (bestMatch) {
-                let { name: matchedName, matchKind } = bestMatch;
+                const { name: matchedName, matchKind } = bestMatch;
                 const now = Date.now();
+                
+                if (matchKind === 'speaker' || matchKind === 'attribution' || matchKind === 'action') {
+                    state.lastSpeaker = matchedName;
+                    state.lastAddressed = null;
+                    state.lastInferredDialogue = false;
+                }
+                if (matchKind === 'vocative') {
+                    state.lastAddressed = matchedName;
+                }
+
                 const suppressMs = Number(settings.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
-                if (matchedName && state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < suppressMs)) {
-                    debugLog(settings, 'suppressing repeat accepted match for same name (flicker guard)', { matchedName });
-                    matchedName = null;
+                if (state.lastAcceptedName && state.lastAcceptedName.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < suppressMs)) {
+                    debugLog(settings, 'Suppressing repeat match for same name (flicker guard)', { matchedName });
+                    return;
                 }
-                if (matchedName) {
-                    state.lastAcceptedName = matchedName;
-                    state.lastAcceptedTs = now;
-                    perMessageStates.set(bufKey, state);
-                    issueCostumeForName(matchedName, { matchKind, bufKey });
-                }
+
+                state.lastAcceptedName = matchedName;
+                state.lastAcceptedTs = now;
+                perMessageStates.set(bufKey, state);
+                issueCostumeForName(matchedName, { matchKind, bufKey });
             }
-            debugLog(settings, "CS debug:", { bufKey, bestMatch, state });
         } catch (err) { console.error("CostumeSwitch stream handler error:", err); }
     };
 
@@ -572,7 +628,7 @@ jQuery(async () => {
 
     try { window[`__${extensionName}_unload`] = unload; } catch (e) {}
 
-    console.log("SillyTavern-CostumeSwitch (API method) loaded successfully.");
+    console.log("SillyTavern-CostumeSwitch (v2 Logic) loaded successfully.");
 });
 
 function getSettingsObj() {
