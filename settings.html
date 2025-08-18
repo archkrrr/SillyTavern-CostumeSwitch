@@ -1,163 +1,216 @@
+<style>
+  /* Theme-aware styling for the settings container.
+    This now uses SillyTavern's CSS variables to adapt to any theme.
+  */
+  #costume-switcher-settings {
+    /* Removed hardcoded font to inherit from the user's theme */
+    padding: 10px;
+    border-radius: 8px;
+    background-color: var(--bg1); /* Use theme's primary background */
+  }
+
+  /* Style for each individual setting block */
+  .cs-block {
+    margin-bottom: 20px;
+    padding: 15px;
+    border-radius: 6px;
+    background-color: var(--bg2); /* Use theme's secondary background */
+    border: 1px solid var(--border); /* Use theme's border color */
+  }
+
+  /* Styling for helper text */
+  #costume-switcher-settings small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-color-soft); /* Use theme's soft/secondary text color */
+    font-size: 0.85em;
+  }
+
+  /* Flex container for buttons */
+  .cs-flex-container {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+  }
+
+  /* Status and error messages using theme colors */
+  .cs-status-message, .cs-error-message {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    border: 1px solid transparent;
+  }
+  .cs-status-message {
+    background-color: rgba(var(--green-rgb), 0.15);
+    color: var(--green);
+    border-color: rgba(var(--green-rgb), 0.3);
+  }
+  .cs-error-message {
+    background-color: rgba(var(--red-rgb), 0.15);
+    color: var(--red);
+    border-color: rgba(var(--red-rgb), 0.3);
+    display: none; /* Hidden by default */
+  }
+
+  /* Force buttons to inherit the theme's font */
+  #costume-switcher-settings .menu_button {
+    font-family: inherit;
+  }
+</style>
+
 <div id="costume-switcher-settings" class="extension_container">
-  <div class="inline-drawer">
+  <div class="inline-drawer is-open">
     <div class="inline-drawer-toggle inline-drawer-header">
-      <b>Dynamic Character Expressions</b>
+      <b>Costume Switcher</b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
       
-      <div class="tracker-block">
+      <!-- Profile Management Section -->
+      <div class="cs-block">
+        <label for="cs-profile-select"><b>Profiles</b></label>
+        <small>Save and load different configurations for various chats or characters.</small>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <select id="cs-profile-select" class="text_pole" style="flex-grow: 1;"></select>
+          <button id="cs-profile-delete" class="menu_button interactable" title="Delete Selected Profile">Delete</button>
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <input id="cs-profile-name" class="text_pole" type="text" placeholder="Enter profile name..." style="flex-grow: 1;">
+          <button id="cs-profile-save" class="menu_button interactable">Save</button>
+        </div>
+        <!-- [FIX] Added descriptive text for the save button -->
+        <small>Type a new name to create a duplicate profile. Using the existing name will overwrite the current one.</small>
+      </div>
+
+      <div class="cs-block">
         <input id="cs-enable" type="checkbox" />
-        <label for="cs-enable">Enable Costume Switch</label>
-        <small>
-          Enables or disables the costume-switching functionality. When checked, the extension will listen for character names and automatically switch costumes.
-        </small>
+        <label for="cs-enable"><b>Enable Costume Switch</b></label>
+        <small>Master toggle for the extension. Uncheck to disable all functionality.</small>
       </div>
 
-      <div class="tracker-block">
-        <label for="cs-patterns">Character Patterns</label><br />
-        <textarea id="cs-patterns" class="text_pole" rows="2" placeholder="Char A, Char B, Char C, Char D"></textarea>
-        <small>
-          Enter the character names the extension should listen for, one per line. You can use simple names (e.g., `Char A`) or advanced regular expressions (e.g., `/Char A|Char B/`).
-        </small>
+      <div class="cs-block">
+        <label for="cs-patterns"><b>Character Patterns</b></label>
+        <textarea id="cs-patterns" class="text_pole" rows="3" placeholder="Character One&#10;Character Two&#10;/Regular Expression/"></textarea>
+        <small>Enter character names, one per line. Supports simple names or /regex/.</small>
       </div>
 
-      <div class="tracker-block">
-        <label for="cs-default">Default Costume</label><br />
-        <input id="cs-default" class="text_pole" type="text" placeholder="Enter default costume..." />
-        <small>
-          The costume to use when no character is detected. If you leave this blank, it will use the character's main avatar.
-        </small>
+      <div class="cs-block">
+        <label for="cs-default"><b>Default Costume</b></label>
+        <input id="cs-default" class="text_pole" type="text" placeholder="e.g., neutral" />
+        <small>The costume folder to use when no character is detected. Leave blank to use the main avatar.</small>
       </div>
 
+      <!-- Advanced settings drawer -->
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-          <b>Detection Methods</b>
+          <b>Advanced Settings</b>
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-          <small>Configure how the extension detects characters for different writing styles. Checking more boxes enables more flexible "Novel Style" detection.</small>
-          <br><br>
-          <small><b>For Script Style (`Name: "Dialogue"`)</b>: Uncheck all boxes below. The extension will only switch when it sees a name followed by a colon.</small>
+
+          <div class="cs-block">
+            <label for="cs-ignore-patterns"><b>Ignored Characters</b></label>
+            <textarea id="cs-ignore-patterns" class="text_pole" rows="2" placeholder="Char A&#10;/Narrator/"></textarea>
+            <small>Any character pattern on this list will be ignored during detection. Useful for temporarily disabling a character.</small>
+          </div>
+
+          <div class="cs-block">
+            <label for="cs-veto-patterns"><b>Veto Phrases</b></label>
+            <textarea id="cs-veto-patterns" class="text_pole" rows="2" placeholder="OOC:&#10;(OOC)"></textarea>
+            <small>If any of these phrases or /regex/ patterns are found, the <b>entire message</b> will be ignored, preventing any switch.</small>
+          </div>
+
+          <div class="cs-block">
+            <label><b>Detection Methods (for Novel Style)</b></label>
+            <small>Enable these for flexible detection in narrative text. For simple `Name: "Dialogue"` script style, uncheck all of them.</small>
+            <table style="width: 100%; margin-top: 15px; border-spacing: 0 12px; border-collapse: separate;">
+              <tbody>
+                <tr>
+                  <td style="width: 35%; vertical-align: top;"><input id="cs-detect-attribution" type="checkbox" /><label for="cs-detect-attribution"> Detect Attribution</label></td>
+                  <td><small>Finds dialogue attribution, like <em>"Hello," she said.</em></small></td>
+                </tr>
+                <tr>
+                  <td style="vertical-align: top;"><input id="cs-detect-action" type="checkbox" /><label for="cs-detect-action"> Detect Action</label></td>
+                  <td><small>Finds character actions, like <em>He nodded.</em></small></td>
+                </tr>
+                <tr>
+                  <td style="vertical-align: top;"><input id="cs-detect-vocative" type="checkbox" /><label for="cs-detect-vocative"> Detect Vocative</label></td>
+                  <td><small>Finds when a character is addressed by name.</small></td>
+                </tr>
+                <tr>
+                  <td style="vertical-align: top;"><input id="cs-detect-possessive" type="checkbox" /><label for="cs-detect-possessive"> Detect Possessive</label></td>
+                  <td><small>Finds ownership, like <em>Her eyes widened.</em></small></td>
+                </tr>
+                <tr>
+                  <td style="vertical-align: top;"><input id="cs-detect-general" type="checkbox" /><label for="cs-detect-general"> Detect General Mentions</label></td>
+                  <td><small><b>(Use with caution)</b> Triggers on any name mention. Can be inaccurate.</small></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="cs-block">
+            <label><b>Cooldowns & Timeouts</b></label>
+            <div class="inline-group" style="margin-top: 10px;">
+              <label for="cs-global-cooldown">Global Cooldown (ms)</label>
+              <input id="cs-global-cooldown" class="text_pole" type="number" min="0" />
+              <small>Minimum time between any two switches to prevent flickering.</small>
+            </div>
+            <div class="inline-group" style="margin-top: 10px;">
+              <label for="cs-repeat-suppress">Repeat Suppression (ms)</label>
+              <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" />
+              <small>Minimum time before the *same* character can trigger another switch.</small>
+            </div>
+          </div>
+
+          <div class="cs-block">
+            <label for="cs-mappings"><b>Costume Mappings</b></label>
+            <small>Map a detected name to a specific costume folder.</small>
+            <table id="cs-mappings" class="text_pole" style="margin-top: 10px;">
+              <thead><tr><th>Character Name</th><th>Costume Folder</th><th>Action</th></tr></thead>
+              <tbody id="cs-mappings-tbody"></tbody>
+            </table>
+            <button id="cs-mapping-add" class="menu_button interactable">Add Mapping</button>
+          </div>
+
+          <div class="cs-block">
+            <label><b>Live Pattern Tester</b></label>
+            <small>Paste text to see detections based on your current settings.</small>
+            <textarea id="cs-regex-test-input" class="text_pole" rows="4" placeholder="Paste a message here..." style="margin-top: 10px;"></textarea>
+            <button id="cs-regex-test-button" class="menu_button interactable">Test Pattern</button>
+            <div id="cs-regex-test-output-container" class="text_pole" style="display: flex; gap: 10px; padding: 10px; min-height: 100px; margin-top: 10px; background-color: var(--bg0);">
+              <div style="flex: 1; border-right: 1px solid var(--border); padding-right: 10px;">
+                <div style="font-weight: bold; margin-bottom: 5px;">All Detections (in order):</div>
+                <ul id="cs-test-all-detections" style="list-style-position: inside; padding: 0; margin: 0; font-size: 0.9em;">
+                  <li style="color: var(--text-color-soft);">Results will appear here.</li>
+                </ul>
+              </div>
+              <div style="flex: 1;">
+                <div style="font-weight: bold; margin-bottom: 5px;">Winning Detections (in order):</div>
+                <ul id="cs-test-winner-list" style="list-style-position: inside; padding: 0; margin: 0; font-size: 0.9em;">
+                  <li style="color: var(--text-color-soft);">N/A</li>
+                </ul>
+              </div>
+            </div>
+          </div>
           
-          <table style="width: 100%; margin-top: 10px; border-spacing: 0 12px; border-collapse: separate;">
-            <tbody>
-              <tr>
-                <td style="width: 35%; vertical-align: top;">
-                  <input id="cs-detect-attribution" type="checkbox" />
-                  <label for="cs-detect-attribution"><b>Detect Attribution</b></label>
-                </td>
-                <td>
-                  <small>Looks for phrases like <em>"I agree," Char A said.</em> This is a high-priority hint that tells the engine who is currently speaking.</small>
-                </td>
-              </tr>
-              <tr>
-                <td style="vertical-align: top;">
-                  <input id="cs-detect-action" type="checkbox" />
-                  <label for="cs-detect-action"><b>Detect Action</b></label>
-                </td>
-                <td>
-                  <small>Looks for a name followed by an action, like <em>Char B leaned forward.</em> This helps identify the character performing an action, making them the scene's focus.</small>
-                </td>
-              </tr>
-              <tr>
-                <td style="vertical-align: top;">
-                  <input id="cs-detect-vocative" type="checkbox" />
-                  <label for="cs-detect-vocative"><b>Detect Vocative</b></label>
-                </td>
-                <td>
-                  <small>Looks for characters being addressed, like <em>"What do you think, Char A?"</em> This tells the engine who is being spoken to, which helps it infer who will speak next.</small>
-                </td>
-              </tr>
-              <tr>
-                <td style="vertical-align: top;">
-                  <input id="cs-detect-possessive" type="checkbox" />
-                  <label for="cs-detect-possessive"><b>Detect Possessive</b></label>
-                </td>
-                <td>
-                  <small>Looks for ownership, like <em>Char A's sword glowed.</em> This is a lower-priority hint and is less likely to cause a switch on its own.</small>
-                </td>
-              </tr>
-              <tr>
-                <td style="vertical-align: top;">
-                  <input id="cs-detect-general" type="checkbox" />
-                  <label for="cs-detect-general"><b>Detect General Mentions</b></label>
-                </td>
-                <td>
-                  <small>The least accurate method. It will trigger on any mention of a character's name. <b>Warning:</b> The context engine is good at ignoring these, but it can still cause incorrect switches.</small>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="cs-block">
+            <input id="cs-debug" type="checkbox" />
+            <label for="cs-debug"><b>Enable Debug Logging</b></label>
+            <small>Logs details to the browser console (F12) for troubleshooting.</small>
+          </div>
+
         </div>
       </div>
 
-      <div class="inline-drawer">
-        <div class="inline-drawer-toggle inline-drawer-header">
-          <b>Cooldowns & Timeouts</b>
-          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-        </div>
-        <div class="inline-drawer-content">
-          <div class="tracker-block inline-group">
-            <label for="cs-timeout">Costume Reset Timeout</label><br />
-            <input id="cs-timeout" class="text_pole" type="number" min="0" />
-            <small>
-              Set the time (in milliseconds) before resetting to the default costume if no character is detected. Set to 0 to disable.
-            </small>
-          </div>
-    
-          <div class="tracker-block inline-group">
-            <label for="cs-global-cooldown">Global Cooldown</label><br />
-            <input id="cs-global-cooldown" class="text_pole" type="number" min="0" />
-            <small>
-              The minimum time (in milliseconds) between any two costume switches to prevent flickering.
-            </small>
-          </div>
-    
-          <div class="tracker-block inline-group">
-            <label for="cs-repeat-suppress">Repeat Suppression</label><br />
-            <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" />
-            <small>
-              The minimum time (in milliseconds) before the same character can trigger another switch.
-            </small>
-          </div>
-        </div>
+      <div class="cs-flex-container">
+        <button id="cs-save" class="menu_button interactable">Save Current Profile</button>
+        <button id="cs-reset" class="menu_button interactable">Manual Reset</button>
       </div>
 
-      <div class="tracker-block">
-        <label for="cs-mappings">Costume Mappings</label><br />
-        <table id="cs-mappings" class="text_pole">
-          <thead>
-            <tr>
-              <th>Character Name</th>
-              <th>Costume Folder</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="cs-mappings-tbody">
-            </tbody>
-        </table>
-        <button id="cs-mapping-add" class="menu_button fa-solid fa-file-circle-plus interactable">Add Mapping</button>
-        <small>
-          Map a detected character name to a specific costume folder. Useful if your folder names don't match the character names exactly.
-        </small>
-      </div>
-
-      <div class="tracker-block">
-        <input id="cs-debug" type="checkbox" />
-        <label for="cs-debug">Enable Debug Logging</label>
-        <small>
-          Logs detailed information to the browser console (F12) for troubleshooting.
-        </small>
-      </div>
-
-      <div class="tracker-block flex-container">
-        <button id="cs-save" class="menu_button fa-solid fa-save interactable">Save Settings</button>
-        <button id="cs-reset" class="menu_button fa-solid fa-undo interactable">Manual Reset</button>
-      </div>
-
-      <div id="cs-status" class="status-message">Ready</div>
-      <div id="cs-error" class="error-message"></div>
+      <div id="cs-status" class="cs-status-message">Ready</div>
+      <div id="cs-error" class="cs-error-message"></div>
     </div>
   </div>
 </div>
