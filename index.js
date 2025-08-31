@@ -17,6 +17,7 @@ const PROFILE_DEFAULTS = {
     failedTriggerCooldownMs: 10000,
     maxBufferChars: 2000,
     repeatSuppressMs: 800,
+    tokenProcessThreshold: 60, // <-- ADDED DEFAULT
     mappings: [],
     detectAttribution: true,
     detectAction: true,
@@ -35,7 +36,14 @@ const DEFAULTS = {
 };
 
 function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-function parsePatternEntry(raw) { const t = String(raw || '').trim(); if (!t) return null; const m = t.match(/^\/((?:\\.|[^\/])+)\/([gimsuy]*)$/); return m ? { body: m[1], flags: m[2] || '' } : { body: escapeRegex(t), flags: '' }; }
+function parsePatternEntry(raw) { 
+    const t = String(raw || '').trim(); 
+    if (!t) return null; 
+    const m = t.match(/^\/((?:\\.|[^\/])+)\/([gimsuy]*)$/); 
+    // Store raw for error reporting
+    const entry = m ? { body: m[1], flags: m[2] || '', raw: t } : { body: escapeRegex(t), flags: '', raw: t };
+    return entry;
+}
 function computeFlagsFromEntries(entries, requireI = true) { const f = new Set(); for (const e of entries) { if (!e) continue; for (const c of (e.flags || '')) f.add(c); } if (requireI) f.add('i'); return Array.from(f).filter(c => 'gimsuy'.includes(c)).join(''); }
 
 function buildGenericRegex(patternList) {
@@ -44,7 +52,21 @@ function buildGenericRegex(patternList) {
     const parts = entries.map(e => `(?:${e.body})`);
     const body = `(?:${parts.join('|')})`;
     const flags = computeFlagsFromEntries(entries, true);
-    try { return new RegExp(body, flags); } catch (e) { console.warn("buildGenericRegex compile failed:", e); return null; }
+    try {
+        return new RegExp(body, flags);
+    } catch (e) {
+        // Try to identify which individual entry caused the failure for better error messages.
+        for (let i = 0; i < entries.length; i++) {
+            try {
+                const singleFlags = computeFlagsFromEntries([entries[i]], true);
+                new RegExp(entries[i].body, singleFlags);
+            } catch (err) {
+                const raw = entries[i].raw || entries[i].body;
+                throw new Error(`Pattern #${i+1} failed to compile: "${raw}" — ${err.message}`);
+            }
+        }
+        throw new Error(`Combined pattern failed to compile: ${e.message}`);
+    }
 }
 
 function buildNameRegex(patternList) { const e = (patternList || []).map(parsePatternEntry).filter(Boolean); if (!e.length) return null; const p = e.map(x => `(?:${x.body})`), b = `(?:^|\\n|[\\(\\[\\-—–])(?:(${p.join('|')}))(?:\\W|$)`, f = computeFlagsFromEntries(e, !0); try { return new RegExp(b, f) } catch (err) { return console.warn("buildNameRegex compile failed:", err), null } }
@@ -138,8 +160,10 @@ jQuery(async () => {
         $("#cs-veto-patterns").val((profile.vetoPatterns || []).join("\n"));
         $("#cs-default").val(profile.defaultCostume || "");
         $("#cs-debug").prop("checked", !!profile.debug);
-        $("#cs-global-cooldown").val(profile.globalCooldownMs || DEFAULTS.globalCooldownMs);
-        $("#cs-repeat-suppress").val(profile.repeatSuppressMs || DEFAULTS.repeatSuppressMs);
+        $("#cs-global-cooldown").val(profile.globalCooldownMs || PROFILE_DEFAULTS.globalCooldownMs);
+        $("#cs-repeat-suppress").val(profile.repeatSuppressMs || PROFILE_DEFAULTS.repeatSuppressMs);
+        // LOAD NEW SETTING
+        $("#cs-token-process-threshold").val(profile.tokenProcessThreshold || PROFILE_DEFAULTS.tokenProcessThreshold);
         $("#cs-detect-attribution").prop("checked", !!profile.detectAttribution);
         $("#cs-detect-action").prop("checked", !!profile.detectAction);
         $("#cs-detect-vocative").prop("checked", !!profile.detectVocative);
@@ -154,8 +178,22 @@ jQuery(async () => {
         if (!tbody.length) return;
         tbody.empty();
         (profile.mappings || []).forEach((m, idx) => {
-            const tr = $(`<tr data-idx="${idx}"><td><input class="map-name" value="${(m.name || '').replace(/"/g, '&quot;')}" /></td><td><input class="map-folder" value="${(m.folder || '').replace(/"/g, '&quot;')}" /></td><td><button class="map-remove">Remove</button></td></tr>`);
-            tbody.append(tr);
+            // Use programmatic DOM creation to prevent HTML injection issues
+            const $tr = $("<tr>").attr("data-idx", idx);
+            const $nameTd = $("<td>");
+            const $nameInput = $("<input>").addClass("map-name").val(m.name || "").attr("type","text");
+            $nameTd.append($nameInput);
+
+            const $folderTd = $("<td>");
+            const $folderInput = $("<input>").addClass("map-folder").val(m.folder || "").attr("type","text");
+            $folderTd.append($folderInput);
+
+            const $actionsTd = $("<td>");
+            const $removeBtn = $("<button>").addClass("map-remove menu_button interactable").text("Remove");
+            $actionsTd.append($removeBtn);
+
+            $tr.append($nameTd, $folderTd, $actionsTd);
+            tbody.append($tr);
         });
     }
 
@@ -243,6 +281,37 @@ jQuery(async () => {
         }
     }
 
+    function saveCurrentProfileData() {
+        const profile = getActiveProfile(settings);
+        if (!profile) return null;
+
+        const profileData = {
+            patterns: $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean),
+            ignorePatterns: $("#cs-ignore-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean),
+            vetoPatterns: $("#cs-veto-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean),
+            defaultCostume: $("#cs-default").val().trim(),
+            debug: !!$("#cs-debug").prop("checked"),
+            globalCooldownMs: parseInt($("#cs-global-cooldown").val() || PROFILE_DEFAULTS.globalCooldownMs, 10),
+            repeatSuppressMs: parseInt($("#cs-repeat-suppress").val() || PROFILE_DEFAULTS.repeatSuppressMs, 10),
+            // SAVE NEW SETTING
+            tokenProcessThreshold: parseInt($("#cs-token-process-threshold").val() || PROFILE_DEFAULTS.tokenProcessThreshold, 10),
+            detectAttribution: !!$("#cs-detect-attribution").prop("checked"),
+            detectAction: !!$("#cs-detect-action").prop("checked"),
+            detectVocative: !!$("#cs-detect-vocative").prop("checked"),
+            detectPossessive: !!$("#cs-detect-possessive").prop("checked"),
+            detectGeneral: !!$("#cs-detect-general").prop("checked"),
+            mappings: []
+        };
+        const newMaps = [];
+        $("#cs-mappings-tbody tr").each(function () {
+            const name = $(this).find(".map-name").val().trim();
+            const folder = $(this).find(".map-folder").val().trim();
+            if (name && folder) newMaps.push({ name, folder });
+        });
+        profileData.mappings = newMaps;
+        return profileData;
+    }
+
     function tryWireUI() {
         $("#cs-enable").off('change.cs').on("change.cs", function() {
             settings.enabled = !!$(this).prop("checked");
@@ -250,37 +319,17 @@ jQuery(async () => {
         });
 
         $("#cs-save").off('click.cs').on("click.cs", () => {
-            const profile = getActiveProfile(settings);
-            if (!profile) return;
-
-            profile.patterns = $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-            profile.ignorePatterns = $("#cs-ignore-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-            profile.vetoPatterns = $("#cs-veto-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-            profile.defaultCostume = $("#cs-default").val().trim();
-            profile.debug = !!$("#cs-debug").prop("checked");
-            profile.globalCooldownMs = parseInt($("#cs-global-cooldown").val() || PROFILE_DEFAULTS.globalCooldownMs, 10);
-            profile.repeatSuppressMs = parseInt($("#cs-repeat-suppress").val() || PROFILE_DEFAULTS.repeatSuppressMs, 10);
-            profile.detectAttribution = !!$("#cs-detect-attribution").prop("checked");
-            profile.detectAction = !!$("#cs-detect-action").prop("checked");
-            profile.detectVocative = !!$("#cs-detect-vocative").prop("checked");
-            profile.detectPossessive = !!$("#cs-detect-possessive").prop("checked");
-            profile.detectGeneral = !!$("#cs-detect-general").prop("checked");
-            
-            const newMaps = [];
-            $("#cs-mappings-tbody tr").each(function () {
-                const name = $(this).find(".map-name").val().trim();
-                const folder = $(this).find(".map-folder").val().trim();
-                if (name && folder) newMaps.push({ name, folder });
-            });
-            profile.mappings = newMaps;
-            
-            recompileRegexes();
-            persistSettings();
+            const profileData = saveCurrentProfileData();
+            if(profileData) {
+                settings.profiles[settings.activeProfile] = profileData;
+                recompileRegexes();
+                persistSettings();
+            }
         });
 
         $("#cs-profile-select").off('change.cs').on("change.cs", function() {
             loadProfile($(this).val());
-            persistSettings(); // Save the active profile change
+            // No need to persist here, just loading a different profile
         });
 
         $("#cs-profile-save").off('click.cs').on("click.cs", () => {
@@ -294,35 +343,15 @@ jQuery(async () => {
                 return;
             }
 
-            const profileData = {
-                patterns: $("#cs-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean),
-                ignorePatterns: $("#cs-ignore-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean),
-                vetoPatterns: $("#cs-veto-patterns").val().split(/\r?\n/).map(s => s.trim()).filter(Boolean),
-                defaultCostume: $("#cs-default").val().trim(),
-                debug: !!$("#cs-debug").prop("checked"),
-                globalCooldownMs: parseInt($("#cs-global-cooldown").val() || PROFILE_DEFAULTS.globalCooldownMs, 10),
-                repeatSuppressMs: parseInt($("#cs-repeat-suppress").val() || PROFILE_DEFAULTS.repeatSuppressMs, 10),
-                detectAttribution: !!$("#cs-detect-attribution").prop("checked"),
-                detectAction: !!$("#cs-detect-action").prop("checked"),
-                detectVocative: !!$("#cs-detect-vocative").prop("checked"),
-                detectPossessive: !!$("#cs-detect-possessive").prop("checked"),
-                detectGeneral: !!$("#cs-detect-general").prop("checked"),
-                mappings: []
-            };
-            const newMaps = [];
-            $("#cs-mappings-tbody tr").each(function () {
-                const name = $(this).find(".map-name").val().trim();
-                const folder = $(this).find(".map-folder").val().trim();
-                if (name && folder) newMaps.push({ name, folder });
-            });
-            profileData.mappings = newMaps;
+            const profileData = saveCurrentProfileData();
+            if (!profileData) return;
 
+            // If name changed, delete old and create new
             if (newName !== oldName) {
-                settings.profiles[newName] = profileData;
-            } else {
-                settings.profiles[oldName] = profileData;
+                delete settings.profiles[oldName];
             }
             
+            settings.profiles[newName] = profileData;
             settings.activeProfile = newName;
 
             populateProfileDropdown();
@@ -338,28 +367,31 @@ jQuery(async () => {
 
             const profileNameToDelete = settings.activeProfile;
 
-            if (!settings.profiles[profileNameToDelete]) {
-                console.error(`[CostumeSwitch] Tried to delete a non-existent profile: "${profileNameToDelete}"`);
-                $("#cs-error").text("Error: Selected profile not found.").show();
-                return;
+            if (confirm(`Are you sure you want to delete the profile "${profileNameToDelete}"?`)) {
+                if (!settings.profiles[profileNameToDelete]) {
+                    console.error(`[CostumeSwitch] Tried to delete a non-existent profile: "${profileNameToDelete}"`);
+                    $("#cs-error").text("Error: Selected profile not found.").show();
+                    return;
+                }
+                
+                delete settings.profiles[profileNameToDelete];
+                
+                settings.activeProfile = Object.keys(settings.profiles)[0];
+                
+                populateProfileDropdown();
+                loadProfile(settings.activeProfile);
+                
+                $("#cs-status").text(`Deleted profile "${profileNameToDelete}".`);
+                $("#cs-error").text("").hide();
+                persistSettings();
             }
-            
-            delete settings.profiles[profileNameToDelete];
-            
-            settings.activeProfile = Object.keys(settings.profiles)[0];
-            
-            populateProfileDropdown();
-            loadProfile(settings.activeProfile);
-            
-            $("#cs-status").text(`Deleted profile "${profileNameToDelete}".`);
-            $("#cs-error").text("").hide();
-            persistSettings();
         });
 
         $("#cs-reset").off('click.cs').on("click.cs", async () => { await manualReset(); });
         $("#cs-mapping-add").off('click.cs').on("click.cs", () => {
             const profile = getActiveProfile(settings);
             if (profile) {
+                if (!Array.isArray(profile.mappings)) profile.mappings = [];
                 profile.mappings.push({ name: "", folder: "" });
                 renderMappings(profile);
             }
@@ -456,6 +488,9 @@ jQuery(async () => {
     _streamHandler = (...args) => {
         try {
             if (!settings.enabled) return;
+            const profile = getActiveProfile(settings);
+            if (!profile) return;
+            
             let tokenText = "", messageId = null;
             if (typeof args[0] === 'number') { messageId = args[0]; tokenText = String(args[1] ?? ""); } 
             else if (typeof args[0] === 'object') { tokenText = String(args[0].token ?? args[0].text ?? ""); messageId = args[0].messageId ?? args[1] ?? null; } 
@@ -470,9 +505,22 @@ jQuery(async () => {
 
             const prev = perMessageBuffers.get(bufKey) || "";
             const normalizedToken = normalizeStreamText(tokenText);
-            const combined = (prev + normalizedToken).slice(-(getActiveProfile(settings)?.maxBufferChars || PROFILE_DEFAULTS.maxBufferChars));
+            const combined = (prev + normalizedToken).slice(-(profile.maxBufferChars || PROFILE_DEFAULTS.maxBufferChars));
             perMessageBuffers.set(bufKey, combined);
             ensureBufferLimit();
+            
+            // --- stream processing throttle ---
+            const threshold = Number(profile.tokenProcessThreshold || PROFILE_DEFAULTS.tokenProcessThreshold);
+            const lastChar = normalizedToken.slice(-1);
+            const isBoundary = /[\s\.\,\!\?\:\;\u2014\)\]]$/.test(lastChar);
+            if (!isBoundary && combined.length < (state.nextThreshold || threshold)) {
+                return; // Defer processing
+            }
+            // If we process, reset the dynamic threshold
+            state.nextThreshold = combined.length + threshold;
+            perMessageStates.set(bufKey, state);
+            // --- end throttle ---
+
 
             if (vetoRegex && vetoRegex.test(combined)) {
                 debugLog(settings, "Veto phrase matched. Halting detection for this message.");
@@ -483,12 +531,12 @@ jQuery(async () => {
 
             const quoteRanges = getQuoteRanges(combined);
             const regexes = { speakerRegex, attributionRegex, actionRegex, vocativeRegex, nameRegex };
-            const bestMatch = findBestMatch(combined, regexes, getActiveProfile(settings), quoteRanges);
+            const bestMatch = findBestMatch(combined, regexes, profile, quoteRanges);
             
             if (bestMatch) {
                 const { name: matchedName, matchKind } = bestMatch;
                 const now = Date.now();
-                const suppressMs = Number(getActiveProfile(settings)?.repeatSuppressMs || PROFILE_DEFAULTS.repeatSuppressMs);
+                const suppressMs = Number(profile.repeatSuppressMs || PROFILE_DEFAULTS.repeatSuppressMs);
                 if (state.lastAcceptedName?.toLowerCase() === matchedName.toLowerCase() && (now - state.lastAcceptedTs < suppressMs)) {
                     debugLog(settings, 'Suppressing repeat match for same name (flicker guard)', { matchedName });
                     return;
@@ -513,7 +561,7 @@ jQuery(async () => {
     try { unload(); } catch (e) {}
     try { eventSource.on(streamEventName, _streamHandler); eventSource.on(event_types.GENERATION_STARTED, _genStartHandler); eventSource.on(event_types.GENERATION_ENDED, _genEndHandler); eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler); eventSource.on(event_types.CHAT_CHANGED, _chatChangedHandler); } catch (e) { console.error("CostumeSwitch: failed to attach event handlers:", e); }
     try { window[`__${extensionName}_unload`] = unload; } catch (e) {}
-    console.log("SillyTavern-CostumeSwitch v1.1.0 loaded successfully.");
+    console.log("SillyTavern-CostumeSwitch v1.1.1 loaded successfully.");
 });
 
 function getSettingsObj() {
