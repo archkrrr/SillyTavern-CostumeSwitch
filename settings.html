@@ -64,6 +64,7 @@
     <div class="inline-drawer-toggle inline-drawer-header">
       <b>Costume Switcher</b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    }
     </div>
     <div class="inline-drawer-content">
       
@@ -79,7 +80,6 @@
           <input id="cs-profile-name" class="text_pole" type="text" placeholder="Enter profile name..." style="flex-grow: 1;">
           <button id="cs-profile-save" class="menu_button interactable">Save</button>
         </div>
-        <!-- [FIX] Added descriptive text for the save button -->
         <small>Type a new name to create a duplicate profile. Using the existing name will overwrite the current one.</small>
       </div>
 
@@ -151,7 +151,7 @@
           </div>
 
           <div class="cs-block">
-            <label><b>Cooldowns & Timeouts</b></label>
+            <label><b>Performance Tuning</b></label>
             <div class="inline-group" style="margin-top: 10px;">
               <label for="cs-global-cooldown">Global Cooldown (ms)</label>
               <input id="cs-global-cooldown" class="text_pole" type="number" min="0" />
@@ -161,6 +161,12 @@
               <label for="cs-repeat-suppress">Repeat Suppression (ms)</label>
               <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" />
               <small>Minimum time before the *same* character can trigger another switch.</small>
+            </div>
+            <!-- NEW SETTING ADDED HERE -->
+            <div class="inline-group" style="margin-top: 10px;">
+              <label for="cs-token-process-threshold">Token Process Threshold (chars)</label>
+              <input id="cs-token-process-threshold" class="text_pole" type="number" min="0" />
+              <small>How many characters to wait for before checking. Lower is more reactive but uses more CPU. Higher is smoother but may react slower.</small>
             </div>
           </div>
 
