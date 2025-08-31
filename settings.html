@@ -1,39 +1,31 @@
 <style>
-  /* Theme-aware styling for the settings container.
-    This now uses SillyTavern's CSS variables to adapt to any theme.
-  */
   #costume-switcher-settings {
-    /* Removed hardcoded font to inherit from the user's theme */
     padding: 10px;
     border-radius: 8px;
-    background-color: var(--bg1); /* Use theme's primary background */
+    background-color: var(--bg1);
   }
 
-  /* Style for each individual setting block */
   .cs-block {
     margin-bottom: 20px;
     padding: 15px;
     border-radius: 6px;
-    background-color: var(--bg2); /* Use theme's secondary background */
-    border: 1px solid var(--border); /* Use theme's border color */
+    background-color: var(--bg2);
+    border: 1px solid var(--border);
   }
 
-  /* Styling for helper text */
   #costume-switcher-settings small {
     display: block;
     margin-top: 5px;
-    color: var(--text-color-soft); /* Use theme's soft/secondary text color */
+    color: var(--text-color-soft);
     font-size: 0.85em;
   }
 
-  /* Flex container for buttons */
   .cs-flex-container {
     display: flex;
     gap: 10px;
     margin-top: 15px;
   }
 
-  /* Status and error messages using theme colors */
   .cs-status-message, .cs-error-message {
     margin-top: 15px;
     padding: 10px;
@@ -50,10 +42,9 @@
     background-color: rgba(var(--red-rgb), 0.15);
     color: var(--red);
     border-color: rgba(var(--red-rgb), 0.3);
-    display: none; /* Hidden by default */
+    display: none;
   }
 
-  /* Force buttons to inherit the theme's font */
   #costume-switcher-settings .menu_button {
     font-family: inherit;
   }
@@ -64,11 +55,9 @@
     <div class="inline-drawer-toggle inline-drawer-header">
       <b>Costume Switcher</b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-    }
     </div>
     <div class="inline-drawer-content">
       
-      <!-- Profile Management Section -->
       <div class="cs-block">
         <label for="cs-profile-select"><b>Profiles</b></label>
         <small>Save and load different configurations for various chats or characters.</small>
@@ -101,7 +90,6 @@
         <small>The costume folder to use when no character is detected. Leave blank to use the main avatar.</small>
       </div>
 
-      <!-- Advanced settings drawer -->
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
           <b>Advanced Settings</b>
@@ -162,7 +150,6 @@
               <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" />
               <small>Minimum time before the *same* character can trigger another switch.</small>
             </div>
-            <!-- NEW SETTING ADDED HERE -->
             <div class="inline-group" style="margin-top: 10px;">
               <label for="cs-token-process-threshold">Token Process Threshold (chars)</label>
               <input id="cs-token-process-threshold" class="text_pole" type="number" min="0" />
