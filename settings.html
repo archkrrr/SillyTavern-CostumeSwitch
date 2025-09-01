@@ -73,6 +73,15 @@
       </div>
 
       <div class="cs-block">
+        <label for="cs-focus-lock-select"><b>Manual Focus Lock</b></label>
+        <small>Force the costume to a specific character, overriding all automatic detection.</small>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <select id="cs-focus-lock-select" class="text_pole" style="flex-grow: 1;"></select>
+            <button id="cs-focus-lock-toggle" class="menu_button interactable">Lock</button>
+        </div>
+      </div>
+
+      <div class="cs-block">
         <input id="cs-enable" type="checkbox" />
         <label for="cs-enable"><b>Enable Costume Switch</b></label>
         <small>Master toggle for the extension. Uncheck to disable all functionality.</small>
@@ -82,6 +91,7 @@
         <label for="cs-patterns"><b>Character Patterns</b></label>
         <textarea id="cs-patterns" class="text_pole" rows="3" placeholder="Character One&#10;Character Two&#10;/Regular Expression/"></textarea>
         <small>Enter character names, one per line. Supports simple names or /regex/.</small>
+        <small style="margin-top: 10px; color: var(--text-color-soft-extra);"><b>Tip:</b> For best results, list longer names before shorter names that are part of them (e.g., list 'Arthur' before 'Art'). Avoid overly complex regex to prevent performance issues.</small>
       </div>
 
       <div class="cs-block">
@@ -139,6 +149,18 @@
           </div>
 
           <div class="cs-block">
+            <label for="cs-attribution-verbs"><b>Attribution Verbs</b></label>
+            <small>Comma-separated list of verbs used for `Detect Attribution`. Edit this to add words or support other languages.</small>
+            <textarea id="cs-attribution-verbs" class="text_pole" rows="4"></textarea>
+          </div>
+
+          <div class="cs-block">
+            <label for="cs-action-verbs"><b>Action Verbs</b></label>
+            <small>Comma-separated list of verbs used for `Detect Action`. Edit this to add words or support other languages.</small>
+            <textarea id="cs-action-verbs" class="text_pole" rows="4"></textarea>
+          </div>
+
+          <div class="cs-block">
             <label><b>Performance Tuning</b></label>
             <div class="inline-group" style="margin-top: 10px;">
               <label for="cs-global-cooldown">Global Cooldown (ms)</label>
@@ -154,6 +176,11 @@
               <label for="cs-token-process-threshold">Token Process Threshold (chars)</label>
               <input id="cs-token-process-threshold" class="text_pole" type="number" min="0" />
               <small>How many characters to wait for before checking. Lower is more reactive but uses more CPU. Higher is smoother but may react slower.</small>
+            </div>
+            <div class="inline-group" style="margin-top: 15px;">
+              <label for="cs-detection-bias">Detection Bias (<span id="cs-detection-bias-value">0</span>)</label>
+              <input id="cs-detection-bias" type="range" min="-200" max="200" value="0" style="width: 100%;" />
+              <small>Adjusts detection accuracy. Higher values favor action/dialogue tags; lower values favor the most recently mentioned character.</small>
             </div>
           </div>
 
@@ -183,8 +210,7 @@
                 <div style="font-weight: bold; margin-bottom: 5px;">Winning Detections (in order):</div>
                 <ul id="cs-test-winner-list" style="list-style-position: inside; padding: 0; margin: 0; font-size: 0.9em;">
                   <li style="color: var(--text-color-soft);">N/A</li>
-                </ul>
-              </div>
+                
             </div>
           </div>
           
