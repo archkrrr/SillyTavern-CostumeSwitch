@@ -637,7 +637,7 @@ jQuery(async () => {
     try { unload(); } catch (e) {}
     try { eventSource.on(streamEventName, _streamHandler); eventSource.on(event_types.GENERATION_STARTED, _genStartHandler); eventSource.on(event_types.GENERATION_ENDED, _genEndHandler); eventSource.on(event_types.MESSAGE_RECEIVED, _msgRecvHandler); eventSource.on(event_types.CHAT_CHANGED, _chatChangedHandler); } catch (e) { console.error("CostumeSwitch: failed to attach event handlers:", e); }
     try { window[`__${extensionName}_unload`] = unload; } catch (e) {}
-    console.log("SillyTavern-CostumeSwitch v1.3.0 loaded successfully.");
+    console.log("SillyTavern-CostumeSwitch v1.2.0 loaded successfully.");
 });
 
 function getSettingsObj() {
