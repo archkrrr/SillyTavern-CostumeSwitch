@@ -1,5 +1,5 @@
 {
-  "display_name": "Costume Switch",
+  "display_name": "Character Switcher",
   "loading_order": 10,
   "js": "index.js",
   "css": "style.css",
