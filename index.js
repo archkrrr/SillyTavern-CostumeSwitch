@@ -786,7 +786,7 @@ jQuery(async () => {
         load();
         
         window[`__${extensionName}_unload`] = unload;
-        console.log(`${logPrefix} v2.0.5 (Combined) loaded successfully.`);
+        console.log(`${logPrefix} v2.0.0 loaded successfully.`);
     } catch (error) {
         console.error(`${logPrefix} failed to initialize:`, error);
         alert(`Failed to initialize Costume Switcher. Check console (F12) for details.`);
