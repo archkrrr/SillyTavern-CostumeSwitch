@@ -1,76 +1,166 @@
-.costume-switcher-settings {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 5px;
+/* --- Global & Theme --- */
+#costume-switcher-settings {
+  padding: 10px;
+  border-radius: 8px;
+  background-color: var(--bg1);
+  font-family: 'Roboto', sans-serif;
+  --cs-slider-thumb-color: var(--green);
 }
 
-.costume-switcher-settings.inline-group {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+/* --- Section Blocks --- */
+.cs-block {
+  margin-bottom: 20px;
+  padding: 15px;
+  border-radius: 8px;
+  background-color: var(--bg2);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease-in-out;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.cs-block:hover {
+  border-color: var(--primary-color-faded);
+}
+.cs-block .cs-block { /* Nested blocks */
+  margin-top: 15px;
+  margin-bottom: 0;
+  padding: 10px;
+  background-color: var(--bg1);
 }
 
-.costume-switcher-note {
-    font-size: 0.8em;
-    color: var(--text-color-secondary);
+
+/* --- Typography & Icons --- */
+.cs-label-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cs-label-with-icon .fa-solid {
+  color: var(--text-color-soft);
+  width: 1.2em; /* Ensure consistent alignment */
+  text-align: center;
+}
+#costume-switcher-settings small {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-color-soft);
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+#costume-switcher-settings .cs-tip {
+  margin-top: 10px;
+  padding: 8px;
+  background-color: var(--bg0);
+  border-radius: 4px;
+  border-left: 3px solid var(--green);
+  color: var(--text-color-soft-extra);
+}
+
+/* --- Layout --- */
+.cs-flex-container {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+.inline-group {
     margin-top: 10px;
-    text-align: center;
 }
-.costume-switcher-settings input[type="text"],
-.costume-switcher-settings input[type="number"],
-.costume-switcher-settings textarea,
-.costume-switcher-settings select {
-    background-color: var(--input-background);
-    color: var(--text-color);
-    border: 1px solid var(--input-border-color);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font-size: 0.9em;
-    box-shadow: none;
-    outline: none;
+.inline-group.cs-flex-container label {
+    flex-shrink: 0; /* Prevent label from shrinking */
+}
+.inline-group.cs-flex-container input {
+    flex-grow: 1;
 }
 
-.costume-switcher-settings input:-webkit-autofill,
-.costume-switcher-settings textarea:-webkit-autofill {
-    background-color: var(--input-background) !important;
-    -webkit-box-shadow: 0 0 0px 1000px var(--input-background) inset !important;
-    -webkit-text-fill-color: var(--text-color) !important;
+/* --- Form Elements --- */
+.text_pole, .menu_button {
+  transition: all 0.2s ease-in-out;
 }
-.costume-switcher-settings button {
-    background-color: var(--button-background);
-    color: var(--button-text-color);
-    border: 1px solid var(--button-border-color);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 0.9em;
-    cursor: pointer;
-}
-.costume-switcher-settings button:hover {
-    background-color: var(--button-background-hover);
+.text_pole:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 5px var(--primary-color-faded);
 }
 
-details.st-ext-card > summary {
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
+/* --- Buttons --- */
+.cs-button-primary {
+    background-color: var(--primary-color, #007bff);
+    color: white;
+    border: 1px solid transparent;
+}
+.cs-button-primary:hover {
+    background-color: var(--primary-color-hover, #0056b3);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+.cs-button-danger {
+    background-color: var(--red, #dc3545);
+    color: white;
+    border: 1px solid transparent;
+}
+.cs-button-danger:hover {
+    background-color: var(--red-hover, #c82333);
 }
 
-.costume-switcher-settings.inline-group > div {
-    display: flex;
-    flex-direction: column;
+/* --- Detection Methods Layout --- */
+.cs-detection-methods {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 15px;
+  margin-top: 15px;
+}
+.cs-detection-method {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cs-detection-method > div { /* Label and checkbox container */
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cs-detection-method small {
+  margin-top: 0;
+  padding-left: 21px; /* Align with label text */
 }
 
-#cs-global-cooldown,
-#cs-per-cooldown,
-#cs-failed-cooldown,
-#cs-timeout {
-    box-sizing: border-box;
-    padding: 4px 6px;
-    font-size: 0.9em;
-    border-radius: 4px;
+/* --- Modern Range Slider --- */
+input[type="range"].cs-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 6px;
+  background: transparent; cursor: pointer;
+  outline: none;
 }
-
-#cs-debug {
-    margin-right: 6px;
+input[type="range"].cs-slider::-webkit-slider-runnable-track { height: 6px; background: var(--bg0); border-radius: 5px; }
+input[type="range"].cs-slider::-moz-range-track { height: 6px; background: var(--bg0); border-radius: 5px; }
+input[type="range"].cs-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  margin-top: -6px;
+  height: 18px; width: 18px;
+  background-color: var(--cs-slider-thumb-color);
+  border-radius: 50%;
+  border: 2px solid var(--bg2);
+  transition: transform 0.2s ease;
 }
+input[type="range"].cs-slider::-moz-range-thumb {
+  height: 18px; width: 18px;
+  background-color: var(--cs-slider-thumb-color);
+  border-radius: 50%; border: none;
+  box-shadow: 0 0 0 2px var(--bg2); 
+  transition: transform 0.2s ease;
+}
+input[type="range"].cs-slider:hover::-webkit-slider-thumb,
+input[type="range"].cs-slider:hover::-moz-range-thumb { transform: scale(1.1); }
+input[type="range"].cs-slider:focus::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--primary-color-faded); }
+input[type="range"].cs-slider:focus::-moz-range-thumb { box-shadow: 0 0 0 2px var(--bg2), 0 0 0 4px var(--primary-color-faded); }
 
+
+/* --- Live Tester --- */
+.cs-tester-output-container {
+    display: flex; gap: 10px; padding: 10px; min-height: 100px; 
+    margin-top: 10px; background-color: var(--bg0);
+}
+.cs-tester-col { flex: 1; font-size: 0.9em; }
+.cs-tester-col--divider { border-right: 1px solid var(--border); padding-right: 10px; }
+.cs-tester-list { list-style-position: inside; padding: 0; margin: 0; overflow-wrap: break-word; }
+.cs-tester-list-placeholder { color: var(--text-color-soft); }
+.cs-tester-title { font-weight: bold; margin-bottom: 5px; }
