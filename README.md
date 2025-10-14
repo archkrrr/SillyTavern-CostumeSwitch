@@ -40,7 +40,7 @@ The **Detection Bias** slider in the settings lets you fine-tune the balance bet
 * **Performance Tuning:** Fine-tune cooldowns and thresholds to match your preferences and system performance.
 * **Costume Mapping:** Map multiple names or regular expressions to a single costume folder.
 
-## Disclaimer
+## ❗❗Disclaimer❗❗
 
 Please keep in mind that this extension is a personal project developed by a college freshman, not a large, professional development team.
 
