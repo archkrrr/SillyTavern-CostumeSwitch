@@ -1,6 +1,6 @@
-# Costume Switcher for SillyTavern
+# Character Switcher for SillyTavern
 
-**Costume Switcher** is a powerful extension for SillyTavern that brings your multi-character scenes to life. It intelligently and automatically changes the displayed character avatar in real-time as the AI generates its response, creating a dynamic, narrative-driven experience.
+**Character Switcher** is a powerful extension for SillyTavern that brings your multi-character scenes to life. It intelligently and automatically changes the displayed character avatar in real-time as the AI generates its response, creating a dynamic, narrative-driven experience.
 
 Instead of being limited to a single character avatar, Costume Switcher analyzes the story as it's written and ensures the correct character is always on-screen, making it perfect for single-card narrator or ensemble cast roleplays.
 
