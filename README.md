@@ -8,6 +8,7 @@ Instead of being limited to a single character avatar, Costume Switcher analyzes
 
 -   [How It Works](#how-it-works)
 -   [Key Features](#key-features)
+-   [Disclaimer](#disclaimer)
 -   [Prerequisites](#prerequisites)
 -   [Installation](#installation)
 -   [Quick Start Guide](#quick-start-guide)
@@ -38,6 +39,17 @@ The **Detection Bias** slider in the settings lets you fine-tune the balance bet
 * **Live Pattern Tester:** An indispensable tool to test your settings in real-time and understand the engine's logic.
 * **Performance Tuning:** Fine-tune cooldowns and thresholds to match your preferences and system performance.
 * **Costume Mapping:** Map multiple names or regular expressions to a single costume folder.
+
+## Disclaimer
+
+Please keep in mind that this extension is a personal project developed by a college freshman, not a large, professional development team.
+
+The core of this tool is a detection engine that tries its best to figure out which character is speaking or acting at any given moment. It's important to know that **this is not an AI**; it's a much simpler system that works by matching text patterns (using Regular Expressions) and applying context clues. While it can be quite accurate, **it is not perfect!**
+
+In scenes with complex grammar, ambiguous phrasing, or unconventional narrative styles, the engine might occasionally get confused or select the wrong character. That's why the advanced settings are so important! You are encouraged to use features like **Veto Phrases**, **Ignored Characters**, and the **Live Pattern Tester** to fine-tune the detection for your specific needs.
+
+Think of it as a helpful assistant, not an infallible AI. Your patience and feedback are greatly appreciated!
+
 
 ## Prerequisites
 
