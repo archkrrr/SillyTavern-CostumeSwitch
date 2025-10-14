@@ -58,7 +58,7 @@ Think of it as a helpful assistant, not an infallible AI. Your patience and feed
 
 ## Installation
 
-1.  **Install Costume Switcher**: In the **SillyTavern Extension Manager**, use "Install from URL" and paste the following Git URL:
+1.  **Install Character Switcher**: In the **SillyTavern Extension Manager**, use "Install from URL" and paste the following Git URL:
     ```
     https://github.com/archkrrr/SillyTavern-CostumeSwitch
     ```
