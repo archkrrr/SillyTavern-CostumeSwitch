@@ -1,10 +1,10 @@
 {
-  "display_name": "Character Switcher",
+  "display_name": "Costume Switcher",
   "loading_order": 10,
   "js": "index.js",
   "css": "style.css",
   "author": "Archkr",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "auto_update": false,
   "homePage": "https://github.com/archkrrr/SillyTavern-CostumeSwitch",
   "i18n": {}
