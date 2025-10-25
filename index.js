@@ -2,7 +2,7 @@ import { extension_settings, getContext } from "../../../extensions.js";
 import { saveSettingsDebounced, event_types, eventSource } from "../../../../script.js";
 import { executeSlashCommandsOnChatInput, registerSlashCommand } from "../../../slash-commands.js";
 
-const extensionName = "SillyTavern-CostumeSwitch-Testing";
+const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const logPrefix = "[CostumeSwitch]";
 
