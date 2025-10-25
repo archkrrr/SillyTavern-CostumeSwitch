@@ -1,219 +1,168 @@
-# Character Switcher for SillyTavern
+# Costume Switcher for SillyTavern
 
-**Character Switcher** is a powerful extension for SillyTavern that brings your multi-character scenes to life. It intelligently and automatically changes the displayed character avatar in real-time as the AI generates its response, creating a dynamic, narrative-driven experience.
-
-Instead of being limited to a single character avatar, Costume Switcher analyzes the story as it's written and ensures the correct character is always on-screen, making it perfect for single-card narrator or ensemble cast roleplays.
-
-## Table of Contents
-
--   [How It Works](#how-it-works)
--   [Key Features](#key-features)
--   [Disclaimer](#disclaimer)
--   [Prerequisites](#prerequisites)
--   [Installation](#installation)
--   [Quick Start Guide](#quick-start-guide)
--   [Detailed Feature Guide](#detailed-feature-guide)
--   [Complete Guide to Settings](#complete-guide-to-settings)
--   [Tips & Best Practices](#tips--best-practices)
--   [Recommended Extensions](#recommended-extensions)
--   [Troubleshooting](#troubleshooting)
-
-
-## How It Works
-
-At its core, Costume Switcher simulates reading a story as it's being written. As the AI generates a response token by token, the extension maintains a buffer of the recent text. With every new word, it re-evaluates the entire buffer and runs a sophisticated analysis to determine the most likely active character.
-
-This analysis scores every potential character mention based on two key factors:
-
-1.  **Priority:** *How* was the character mentioned? A direct dialogue tag (e.g., `"Hello," she said.`) has a much higher priority than a passing name drop.
-2.  **Recency:** *When* was the character mentioned? A name that appeared more recently has a higher chance of being the active character.
-
-The **Detection Bias** slider in the settings lets you fine-tune the balance between these two factors. The "winner" of this constant evaluation becomes the active costume. This process happens dozens of times per second, ensuring the avatar is always in sync with the story.
-
-## Key Features
-
-* **Intelligent Narrative Detection:** The core of the extension. It doesn't just look for simple `Name:` tags; it understands the flow and context of a story.
-* **Scene Awareness:** An optional mode that dramatically improves accuracy in scenes with multiple characters by maintaining a "roster" of recently active participants.
-* **On-the-Fly Slash Commands:** Manage your character list without ever leaving the chat for quick additions or adjustments.
-* **Advanced Profile Management:** Create, save, and switch between different configurations for various scenarios. Import and export profiles to share your setups.
-* **Live Pattern Tester:** An indispensable tool to test your settings in real-time and understand the engine's logic.
-* **Performance Tuning:** Fine-tune cooldowns and thresholds to match your preferences and system performance.
-* **Costume Mapping:** Map multiple names or regular expressions to a single costume folder.
-
-## ❗❗Disclaimer❗❗
-
-Please keep in mind that this extension is a personal project developed by a college freshman, not a large, professional development team.
-
-The core of this tool is a detection engine that tries its best to figure out which character is speaking or acting at any given moment. It's important to know that **this is not an AI**; it's a much simpler system that works by matching text patterns (using Regular Expressions) and applying context clues. While it can be quite accurate, **it is not perfect!**
-
-In scenes with complex grammar, ambiguous phrasing, or unconventional narrative styles, the engine might occasionally get confused or select the wrong character. That's why the advanced settings are so important! You are encouraged to use features like **Veto Phrases**, **Ignored Characters**, and the **Live Pattern Tester** to fine-tune the detection for your specific needs.
-
-Think of it as a helpful assistant, not an infallible AI. Your patience and feedback are greatly appreciated!
-
-
-## Prerequisites
-
-* **SillyTavern Version:** It is recommended to use the **latest version** of SillyTavern (either Release or Staging).
-* **Streaming must be enabled:** This extension relies on analyzing the AI's response as it's being generated. You **must** have streaming enabled in your chosen API's settings for it to function.
-
-## Installation
-
-1.  **Install Character Switcher**: In the **SillyTavern Extension Manager**, use "Install from URL" and paste the following Git URL:
-    ```
-    https://github.com/archkrrr/SillyTavern-CostumeSwitch
-    ```
-
-## Quick Start Guide
-
-For the best experience right out of the box, follow this simple setup guide.
-
-1.  **Add Your Characters:** Go to the settings and list all character names in the **Character Patterns** box, one per line.
-2.  **Configure Detection:** Scroll down to **Detection Methods** and enable the following for the most accurate, narrative-driven experience:
-    * `[x] Detect Attribution`
-    * `[x] Detect Action`
-    * `[x] Detect Pronoun`
-3.  **Improve Multi-Character Accuracy (If Needed):** If your scenes frequently involve 3+ characters, also enable:
-    * `[x] Enable Scene Roster`
-4.  **Save Profile:** Give your configuration a name at the top and click **Save**. You're ready to go!
+Costume Switcher keeps the right avatar in focus while you write. It listens to the live stream coming from your model, scores every character mention it finds, and immediately swaps the displayed costume to match the active speaker. The extension ships with powerful tooling, scene awareness, and a fully redesigned configuration UI so you can understand *why* a switch happened and tune the behaviour to fit any story.
 
 ---
 
-## Detailed Feature Guide
+## Highlights at a Glance
 
-### Intelligent Narrative Detection
+- **Narrative-aware detection** – Attribution, action, vocative, possessive, pronoun, and general mention detectors can be mixed to match the format of your prose.
+- **Scene roster logic** – Track who is currently in the conversation and favour them during tight scoring races.
+- **Modern profile workflow** – Save, duplicate, rename, and export complete configurations with a couple of clicks.
+- **Performance tuning** – Adjust global, per-trigger, and failed-trigger cooldowns plus the maximum buffer size and processing cadence.
+- **Live Pattern Tester** – Paste sample prose, inspect every detection, review switch decisions, and copy a rich report for debugging or support requests.
+- **Slash command helpers** – Add, ignore, or map characters on the fly without leaving the chat window, and log mention stats for the last message.
+- **Scene cast exports** – Surface the top detected characters as slash commands or prompt variables so other extensions can react instantly.
 
-This is the engine of the extension. By enabling different methods, you can control how deeply it reads the story.
+---
 
-* **Detect Speaker (`Name: Dialogue`)**
-    * **What it is:** The most basic and accurate method. It looks for a character's name at the beginning of a line, followed by a colon. This is enabled by default and cannot be turned off.
-    * **Example:** `Arthur: "I'll be there in a moment."` -> Switches to `Arthur`.
+## Requirements
 
-* **Detect Attribution**
-    * **What it is:** Detects the speaker from dialogue tags that appear *after* a line of dialogue. Essential for novel-style writing.
-    * **Example:** `"I'll be there in a moment," Arthur said.` -> Switches to `Arthur`.
+- **SillyTavern** v1.10.9 or newer (release or staging). Earlier builds may lack UI hooks required by the extension.
+- **Streaming enabled** in your model or API connector. Costume Switcher listens to streaming tokens; without streaming no automatic switches will occur.
+- **Browser permissions** to read and write extension settings (enabled by default in SillyTavern).
 
-* **Detect Action**
-    * **What it is:** Detects the active character when they perform an action, especially at the start of a paragraph.
-    * **Example:** `Arthur nodded and walked towards the door.` -> Switches to `Arthur`.
+---
 
-* **Detect Pronoun**
-    * **What it is:** A powerful feature that tracks the last explicitly named character. It then attributes subsequent actions by pronouns (he, she, they) to that character, ensuring their avatar remains active even when their name isn't used.
-    * **Example:** `Arthur entered the room. He looked around and sighed.` -> Switches to `Arthur` on the first sentence and *stays on* `Arthur` for the second.
+## Installation
 
-* **Detect Vocative**
-    * **What it is:** Detects when a character is spoken *to* within dialogue. Can be useful but may sometimes cause incorrect switches if you only want the speaker to be active.
-    * **Example:** `"What do you think we should do, Arthur?" she asked.` -> Switches to `Arthur`.
+1. Open **Settings → Extensions → Extension Manager** in SillyTavern.
+2. Click **Install from URL** and paste the repository address:
+   ```
+   https://github.com/archkrrr/SillyTavern-CostumeSwitch
+   ```
+3. Press **Install**. SillyTavern downloads the extension and refreshes the page.
+4. Enable **Costume Switcher** from the Extensions list if it is not activated automatically.
 
-* **Detect Possessive**
-    * **What it is:** Detects when a character's possessive form is used.
-    * **Example:** `Her eyes widened in surprise.` -> This is a weaker detection and may not always trigger a switch unless no better match is found. However, `Merlin's eyes widened...` will correctly switch to `Merlin`.
+To update, return to the Extension Manager and click **Update all** or reinstall from the same URL.
 
-* **Detect General Mentions**
-    * **What it is:** The broadest and most dangerous method. It will trigger a switch any time a character's name is mentioned anywhere. Use with caution, as it can lead to flickering.
-    * **Example:** `He thought about Arthur's plan.` -> Switches to `Arthur`.
+---
 
-### Scene Awareness (Scene Roster)
+## Getting Started in Five Minutes
 
-This feature is designed to fix the most common problem in complex, multi-character scenes: an old character mention causing an incorrect switch.
+1. **Enable the extension.** Expand the Costume Switcher drawer and toggle **Enable Costume Switching** on.
+2. **List your characters.** Enter one name (or `/regex/`) per line inside **Active Characters**. Longer names should appear above abbreviations.
+3. **Pick the core detectors.** Under **Detection Strategy**, enable **Detect Attribution**, **Detect Action**, and **Detect Pronoun** for narrative-style writing. Add **Scene Roster** if multiple characters speak in the same scene.
+4. **Test a sample.** Paste a recent reply into the **Live Pattern Tester** and click **Test Pattern**. Review the detections to confirm the correct costume is chosen.
+5. **Save the profile.** Use the **Save** button in the Profiles card to store the configuration for future sessions.
 
-When enabled, the extension maintains a temporary "roster" of characters who have been mentioned recently. The `Scene Roster TTL (messages)` setting determines how many messages a character stays on the roster without being mentioned before they are dropped. The detection engine will then *strongly* prioritize characters on this roster, improving accuracy in active conversations with many participants.
+That’s it—you can now focus on storytelling while the avatars keep up automatically.
 
-### On-the-Fly Slash Commands
+---
 
-These commands allow you to make quick adjustments to the extension's behavior directly from the chat input box. These changes are temporary and will be reset on a page refresh.
+## Tour of the Settings UI
 
-* `/cs-addchar [Character Name]`
-    * Adds a new character to the list of patterns for the current session.
-    * **Example:** `/cs-addchar Lancelot`
+### Header & Master Toggle
+The hero header summarises what the extension does and houses the **Enable Costume Switching** toggle. Turn it off temporarily to pause detection without losing any settings.
 
-* `/cs-ignore [Character Name]`
-    * Temporarily stops the extension from detecting a specific character.
-    * **Example:** `/cs-ignore Merlin`
+### Profiles
+Create tailored setups for different stories or formats:
+- **Select** swaps between saved profiles.
+- **Save** writes changes back to the currently selected profile.
+- **Save As** copies the active profile under a new name typed in the field.
+- **Rename** updates the active profile’s name to the text input value.
+- **New (Defaults)** starts from the built-in defaults; **Duplicate Current** clones the active profile first.
+- **Delete**, **Import**, and **Export** round out the lifecycle so you can archive and share JSON profiles.
 
-* `/cs-map [Name] to [Costume Folder]`
-    * Creates a temporary mapping from a detected name to a specific costume folder.
-    * **Example:** `/cs-map The King to Arthur`
+### Character Patterns & Filters
+Teach the detector which names to recognise:
+- **Active Characters** accepts plain names or `/regex/` entries—one per line.
+- **Ignored Characters** suppresses specific matches without removing them from the character list.
+- **Veto Phrases** stops detection entirely for a message when the phrase or regex is found (useful for OOC tags).
 
-### Profile Management
+### Presets & Focus
+Kickstart new profiles with curated presets, configure a **Default Costume** to fall back to, and optionally engage **Manual Focus Lock** to pin the avatar to a specific character until you unlock it.
 
-The profile system allows you to save and load entire configurations. This is perfect for switching between different stories, character groups, or detection styles without having to manually re-enter settings every time. You can import and export profiles as `.json` files to back them up or share them.
+### Detection Strategy
+Toggle the individual detectors the engine can use. Tooltips in the UI explain the common scenarios for each detection type. Enable **Scene Roster** to maintain a rolling list of characters active in the conversation and adjust the **Scene Roster TTL (messages)** to control how long they stay on that list.
+
+### Performance & Bias
+Fine-tune responsiveness and tie-breaking behaviour:
+- **Global Cooldown (ms)** – Minimum time between any two costume changes.
+- **Repeat Suppression (ms)** – Minimum time before the same character can switch again.
+- **Per-Trigger Cooldown (ms)** – Delay before the same detection type (e.g., action) can trigger again.
+- **Failed Trigger Cooldown (ms)** – Backoff applied after a switch attempt is rejected.
+- **Max Buffer Size (chars)** – Hard cap on how much of the recent stream is analysed.
+- **Token Process Threshold (chars)** – Number of characters that must arrive before the buffer is rescored.
+- **Detection Bias** – Slider balancing match priority versus recency; positive numbers favour dialogue/action tags, negative values favour the latest mention.
+
+### Costume Mappings
+Map any detected name or alias to a specific costume folder. Use **Add Mapping** to append rows, then fill in the character and destination folder names.
 
 ### Live Pattern Tester
+Paste sample prose and inspect:
+- **All Detections** – Every match in order with its type and priority.
+- **Live Switch Decisions** – Real-time simulation showing switches, skips, scores, and veto events.
+- **Top Characters** – A live summary of the best scoring speakers pulled from the same logic driving the stream.
+- **Copy Report** – Generates an extensive plain-text report containing summaries, skip breakdowns, switch stats, final state details, and key settings so you can share diagnostics quickly.
 
-This is your primary diagnostic tool. Paste any block of text into the tester and click "Test Pattern" to see how the engine analyzes it with your current settings.
+### Footer Controls
+Use **Save Current Profile** as a one-click commit for any edits and **Manual Reset** to snap back to your default costume or main avatar. Status and error banners let you know when actions succeed or if validation fails.
 
-* **All Detections:** Shows every single time a character pattern was found, in the order they appear in the text.
-* **Winning Detections:** Simulates the real-time process, showing a log of every time the "winning" character changed as the message was being "written." This helps you understand why the final avatar was chosen.
+---
 
-## Complete Guide to Settings
+## Understanding Live Tester Reports
+Every report copied from the tester includes:
+- **Input metadata** – Profile name, timestamps, original/processed length, and veto status.
+- **Detection log** – List of every detection with match type, character index, and priority.
+- **Switch timeline** – Each decision, including score, detection kind, and why switches were skipped.
+- **Detection summary** – Aggregated counts per character, highest priority hit, and the range of positions that matched.
+- **Switch summary** – Total and unique costumes, the last switch, and the top scoring triggers.
+- **Skip reasons** – Counts of why detections were ignored (cooldowns, existing costume, veto, etc.).
+- **Final stream state** – Scene roster contents, last accepted name, last subject, processed length, and simulated duration.
+- **Top characters** – Ranking of the four strongest contenders including mention counts, roster status, and weighted scores.
+- **Key settings snapshot** – Cooldowns, thresholds, roster flag, and bias value in effect during the test.
+Attach these reports when filing bug reports or asking for tuning advice—everything needed to reproduce the issue is included.
 
--   **Profiles:**
-    -   **Dropdown:** Select a saved profile to load it.
-    -   **Delete:** Deletes the currently selected profile.
-    -   **Text Input / Save:** Type a new name to create a new profile, or use an existing name to overwrite and save changes to the current profile.
-    -   **Import / Export:** Save your profile to a file or load one from your computer.
+---
 
--   **Manual Focus Lock:** Force the costume to a specific character, disabling all automatic detection until you click "Unlock".
+## Advanced Configuration Tips
+- **Tune the buffer** when working with long-form prose. Reduce **Max Buffer Size** to keep focus on the latest paragraphs or increase it to catch callbacks to earlier exposition.
+- **Combine cooldowns** to eliminate flicker. A short global cooldown paired with per-trigger cooldowns stops rapid-fire switches without muting genuinely new speakers.
+- **Scene roster** excels in multi-character RP. Keep the TTL close to the number of alternating speakers to maintain context without dragging in old participants.
+- **Custom verb lists** (Attribution/Action) help the detectors understand bespoke writing styles. Add uncommon dialogue tags or narrative verbs as needed.
 
--   **Enable Costume Switch:** The master on/off switch for the entire extension.
+---
 
--   **Character Patterns:** The list of names or `/regex/` patterns the extension will look for. One pattern per line.
+## Slash Commands
+All commands are session-scoped—they modify the active profile until you reload the page.
 
--   **Default Costume:** The costume folder to use when no character is detected. Leave blank to use the main character card's avatar.
+| Command | Description |
+| --- | --- |
+| `/cs-addchar <name>` | Appends a character or regex to the profile’s patterns list and recompiles detections. |
+| `/cs-ignore <name>` | Adds a character or regex to the ignore list for the current session. |
+| `/cs-map <alias> to <folder>` | Creates a temporary mapping from `alias` to the specified costume folder. |
+| `/cs-stats` | Logs a breakdown of detected character mentions for the most recent AI message to the browser console. |
+| `/cs-top [count]` | Returns a comma-separated list of the top detected characters from the last AI message and logs the result to the browser console. Accepts `1`–`4`; defaults to four names. |
+| `/cs-top1` – `/cs-top4` | Shortcuts for pulling exactly the top 1–4 characters without specifying an argument. |
 
--   **Ignored Characters:** Any pattern on this list will be completely ignored by the detection engine.
+---
 
--   **Veto Phrases:** If any phrase or `/regex/` on this list is found anywhere in the message, the extension will stop all detection for that message entirely. Perfect for ignoring OOC comments.
+## Sharing Top Characters with Other Extensions
+After each AI message finishes streaming, Costume Switcher ranks every detected character and exposes the results in two convenient ways:
 
--   **Detection Methods:** See the [Detailed Feature Guide](#detailed-feature-guide) above for a full explanation of each method.
+- **Prompt variables** – The latest data lives under `extensions.SillyTavern-CostumeSwitch-Testing.session` in SillyTavern templates.
+  - `topCharactersString` provides a ready-to-use comma-separated list (ideal for Group Expressions).
+  - `topCharacters` (array) and `topCharacterDetails` (objects with `name`, `count`, `score`, and `inSceneRoster`) offer structured access for advanced prompts.
+- **Slash commands** – Use `/cs-top [count]` or the `/cs-top1` … `/cs-top4` shortcuts inside chat inputs, macros, or automations to inject the ranked list on demand.
 
--   **Enable Scene Roster:** Toggles the Scene Awareness feature for scenes with many characters.
-    -   **Scene Roster TTL (messages):** Sets how many messages a character remains "active" in the scene before being dropped from the priority roster.
+Because these exports are refreshed on every message, you can wire them directly into Lenny’s **Group Expressions** extension or any other automation that needs to know who dominated the scene without burdening the model with extra thinking instructions.
 
--   **Attribution / Action Verbs:** Comma-separated lists of verbs used by the "Detect Attribution" and "Detect Action" methods. You can add or remove verbs to fine-tune detection.
+---
 
--   **Performance Tuning:**
-    -   **Global Cooldown (ms):** The minimum time (in milliseconds) that must pass between *any* two costume switches. Prevents flickering.
-    -   **Repeat Suppression (ms):** The minimum time before the *same* character can trigger another switch.
-    -   **Token Process Threshold (chars):** How many characters the extension waits before re-evaluating the text. Lower values are more reactive but use more CPU.
-    -   **Detection Bias:** The slider that balances Priority vs. Recency.
-        -   **Positive values (+):** Favor high-priority matches (dialogue/action tags) even if they appeared earlier in the text.
-        -   **Negative values (-):** Favor the most recently mentioned character, even if it was a lower-priority mention.
+## Troubleshooting Checklist
+1. **No switches happen:** verify streaming is enabled, the master toggle is on, at least one detection method is selected, and the characters appear in the patterns list exactly as they do in the story.
+2. **The wrong character is chosen:** run the Live Pattern Tester, read the skip reasons, and adjust Detection Bias or enable Scene Roster to give dialogue tags more weight.
+3. **Switches flicker between characters:** raise the global cooldown, tweak per-trigger cooldowns, or disable **Detect General Mentions** for subtle references.
+4. **Reports show a veto:** check the Veto Phrases list to confirm the text did not match an OOC filter.
+5. **Profiles do not persist:** ensure you click **Save** after editing and confirm the SillyTavern browser tab has permission to write local storage.
 
--   **Costume Mappings:** Map a detected name (left column) to a specific costume folder name (right column).
+---
 
--   **Debug Logging:** Check this to print detailed decision-making logs to the browser's developer console (F12) for advanced troubleshooting.
+## Support & Contributions
+Issues and pull requests are welcome. When reporting a problem, include:
+- The copied Live Pattern Tester report (using **Copy Report**).
+- Your SillyTavern build number and API provider.
+- Any custom detector, cooldown, or buffer settings that differ from defaults.
 
-## Tips & Best Practices
-
--   **Order Your Patterns:** When listing names in Character Patterns, always list longer names before shorter names that are part of them (e.g., list 'Bartholomew' before 'Bart').
--   **Use the Live Tester:** Before asking for help, paste your text into the Live Pattern Tester. It will often show you exactly why a switch did or didn't happen. It's also the best way to test and perfect your regular expressions.
--   **Start with Recommended Settings:** For most novel-style roleplays, the recommended detection settings (`Attribution`, `Action`, `Pronoun`) provide the best balance of accuracy and performance. Only enable other methods if you have a specific need.
--   **Turn off "Request model reasoning":** If you are using a model that supports a "thinking" or "reasoning" phase, it is highly recommended to **disable** the "Request model reasoning" option in SillyTavern's settings. The model's internal thoughts may contain character names that will cause the extension to switch costumes prematurely before the actual response is written.
--   **Be Wary of "General Mentions":** This detection method is powerful but can easily cause incorrect switches in complex sentences. Only use it if you understand its behavior.
-
-## Recommended Extensions
-
-These extensions work well alongside Costume Switcher to enhance your storytelling experience.
-
-* **[Moonlit Echoes Theme]**: A really good theme extension that improves your roleplay experience, and makes this extensions settings page look better.
-    ```
-    https://github.com/RivelleDays/SillyTavern-MoonlitEchoesTheme
-    ```
-* **[Extension Name Placeholder]**: A brief description of what this extension does and why it's a good companion.
-    * [GitHub Link Placeholder]
-
-## Troubleshooting
-
--   **Switches aren't happening at all:**
-    1.  **Is Streaming enabled in your API settings?** This is the most common issue. The extension requires streaming to work.
-    2.  Is "Enable Costume Switch" checked in the extension settings?
-    3.  Are your character names spelled correctly in "Character Patterns"?
-    4.  Is at least one "Detection Method" enabled?
-    5.  Could a "Veto Phrase" be present in the message?
-
--   **The wrong character is being selected:**
-    1.  Paste the full message into the "Live Pattern Tester" to see the engine's logic.
-    2.  Try adjusting the "Detection Bias" slider. A more positive bias will help if older dialogue tags are being ignored in favor of recent name drops.
-    3.  For scenes with many active characters, enable the "Scene Roster".
-    4.  Check if an overly broad detection method like "General Mentions" is enabled.
+This information helps others reproduce the behaviour quickly and suggest accurate fixes or tuning advice.
