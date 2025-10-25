@@ -54,6 +54,51 @@ const PRESETS = {
     },
 };
 
+const DEFAULT_PRONOUNS = ['he', 'she', 'they'];
+const UNICODE_WORD_PATTERN = '[\\p{L}\\p{M}\\p{N}_]';
+const WORD_CHAR_REGEX = /[\\p{L}\\p{M}\\p{N}]/u;
+
+const QUOTE_PAIRS = [
+    { open: '"', close: '"', symmetric: true },
+    { open: '＂', close: '＂', symmetric: true },
+    { open: '“', close: '”' },
+    { open: '„', close: '”' },
+    { open: '‟', close: '”' },
+    { open: '«', close: '»' },
+    { open: '‹', close: '›' },
+    { open: '「', close: '」' },
+    { open: '『', close: '』' },
+    { open: '｢', close: '｣' },
+    { open: '《', close: '》' },
+    { open: '〈', close: '〉' },
+    { open: '﹁', close: '﹂' },
+    { open: '﹃', close: '﹄' },
+    { open: '〝', close: '〞' },
+    { open: '‘', close: '’' },
+    { open: '‚', close: '’' },
+    { open: '‛', close: '’' },
+    { open: '\'', close: '\'', symmetric: true, apostropheSensitive: true },
+];
+
+const QUOTE_OPENERS = new Map();
+const QUOTE_CLOSERS = new Map();
+
+for (const pair of QUOTE_PAIRS) {
+    const info = {
+        close: pair.close,
+        symmetric: Boolean(pair.symmetric),
+        apostropheSensitive: Boolean(pair.apostropheSensitive),
+    };
+    QUOTE_OPENERS.set(pair.open, info);
+    if (info.symmetric) {
+        continue;
+    }
+    if (!QUOTE_CLOSERS.has(pair.close)) {
+        QUOTE_CLOSERS.set(pair.close, []);
+    }
+    QUOTE_CLOSERS.get(pair.close).push(pair.open);
+}
+
 
 // ======================================================================
 // DEFAULT SETTINGS
@@ -77,6 +122,7 @@ const PROFILE_DEFAULTS = {
     detectPossessive: true,
     detectPronoun: true,
     detectGeneral: false,
+    pronounVocabulary: [...DEFAULT_PRONOUNS],
     attributionVerbs: ["acknowledged", "added", "admitted", "advised", "affirmed", "agreed", "announced", "answered", "argued", "asked", "barked", "began", "bellowed", "blurted", "boasted", "bragged", "called", "chirped", "commanded", "commented", "complained", "conceded", "concluded", "confessed", "confirmed", "continued", "countered", "cried", "croaked", "crowed", "declared", "decreed", "demanded", "denied", "drawled", "echoed", "emphasized", "enquired", "enthused", "estimated", "exclaimed", "explained", "gasped", "insisted", "instructed", "interjected", "interrupted", "joked", "lamented", "lied", "maintained", "moaned", "mumbled", "murmured", "mused", "muttered", "nagged", "nodded", "noted", "objected", "offered", "ordered", "perked up", "pleaded", "prayed", "predicted", "proclaimed", "promised", "proposed", "protested", "queried", "questioned", "quipped", "rambled", "reasoned", "reassured", "recited", "rejoined", "remarked", "repeated", "replied", "responded", "retorted", "roared", "said", "scolded", "scoffed", "screamed", "shouted", "sighed", "snapped", "snarled", "spoke", "stammered", "stated", "stuttered", "suggested", "surmised", "tapped", "threatened", "turned", "urged", "vowed", "wailed", "warned", "whimpered", "whispered", "wondered", "yelled"],
     actionVerbs: ["adjust", "adjusted", "appear", "appeared", "approach", "approached", "arrive", "arrived", "blink", "blinked", "bow", "bowed", "charge", "charged", "chase", "chased", "climb", "climbed", "collapse", "collapsed", "crawl", "crawled", "crept", "crouch", "crouched", "dance", "danced", "dart", "darted", "dash", "dashed", "depart", "departed", "dive", "dived", "dodge", "dodged", "drag", "dragged", "drift", "drifted", "drop", "dropped", "emerge", "emerged", "enter", "entered", "exit", "exited", "fall", "fell", "flee", "fled", "flinch", "flinched", "float", "floated", "fly", "flew", "follow", "followed", "freeze", "froze", "frown", "frowned", "gesture", "gestured", "giggle", "giggled", "glance", "glanced", "grab", "grabbed", "grasp", "grasped", "grin", "grinned", "groan", "groaned", "growl", "growled", "grumble", "grumbled", "grunt", "grunted", "hold", "held", "hit", "hop", "hopped", "hurry", "hurried", "jerk", "jerked", "jog", "jogged", "jump", "jumped", "kneel", "knelt", "laugh", "laughed", "lean", "leaned", "leap", "leapt", "left", "limp", "limped", "look", "looked", "lower", "lowered", "lunge", "lunged", "march", "marched", "motion", "motioned", "move", "moved", "nod", "nodded", "observe", "observed", "pace", "paced", "pause", "paused", "point", "pointed", "pop", "popped", "position", "positioned", "pounce", "pounced", "push", "pushed", "race", "raced", "raise", "raised", "reach", "reached", "retreat", "retreated", "rise", "rose", "run", "ran", "rush", "rushed", "sit", "sat", "scramble", "scrambled", "set", "shift", "shifted", "shake", "shook", "shrug", "shrugged", "shudder", "shuddered", "sigh", "sighed", "sip", "sipped", "slip", "slipped", "slump", "slumped", "smile", "smiled", "snort", "snorted", "spin", "spun", "sprint", "sprinted", "stagger", "staggered", "stare", "stared", "step", "stepped", "stand", "stood", "straighten", "straightened", "stumble", "stumbled", "swagger", "swaggered", "swallow", "swallowed", "swap", "swapped", "swing", "swung", "tap", "tapped", "throw", "threw", "tilt", "tilted", "tiptoe", "tiptoed", "take", "took", "toss", "tossed", "trudge", "trudged", "turn", "turned", "twist", "twisted", "vanish", "vanished", "wake", "woke", "walk", "walked", "wander", "wandered", "watch", "watched", "wave", "waved", "wince", "winced", "withdraw", "withdrew"],
     detectionBias: 0,
@@ -113,6 +159,7 @@ const state = {
     topSceneRanking: new Map(),
     latestTopRanking: { bufKey: null, ranking: [], fullRanking: [], updatedAt: 0 },
     currentGenerationKey: null,
+    mappingLookup: new Map(),
 };
 
 const TAB_STORAGE_KEY = `${extensionName}-active-tab`;
@@ -225,13 +272,20 @@ function computeFlags(entries, requireI = true) {
     }
     return Array.from(flags).filter(c => 'gimsuy'.includes(c)).join('');
 }
-function buildRegex(patternList, template) {
+function buildRegex(patternList, template, options = {}) {
     const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
     if (!entries.length) return null;
     const parts = entries.map(e => `(?:${e.body})`);
     const combinedBody = parts.join('|');
     const finalBody = template.replace('{{PATTERNS}}', combinedBody);
-    const finalFlags = computeFlags(entries, true);
+    let finalFlags = computeFlags(entries, options.requireI !== false);
+    if (options.extraFlags) {
+        for (const flag of options.extraFlags) {
+            if (flag && !finalFlags.includes(flag)) {
+                finalFlags += flag;
+            }
+        }
+    }
     try {
         return new RegExp(finalBody, finalFlags);
     } catch (e) {
@@ -246,17 +300,59 @@ function buildGenericRegex(patternList) {
 }
 
 function getQuoteRanges(s) {
+    if (!s) return [];
     const ranges = [];
-    const re = /"|\u201C|\u201D/g;
-    let match;
-    const starts = [];
-    while ((match = re.exec(s)) !== null) {
-        starts.push(match.index);
+    const stack = [];
+
+    const isLikelyApostrophe = (index) => {
+        if (index < 0 || index >= s.length) return false;
+        const prev = index > 0 ? s[index - 1] : '';
+        const next = index + 1 < s.length ? s[index + 1] : '';
+        return WORD_CHAR_REGEX.test(prev) && WORD_CHAR_REGEX.test(next);
+    };
+
+    for (let i = 0; i < s.length; i += 1) {
+        const ch = s[i];
+        const openerInfo = QUOTE_OPENERS.get(ch);
+        if (openerInfo) {
+            if (openerInfo.symmetric) {
+                if (openerInfo.apostropheSensitive && isLikelyApostrophe(i)) {
+                    continue;
+                }
+                const top = stack[stack.length - 1];
+                if (top && top.open === ch && top.symmetric) {
+                    stack.pop();
+                    ranges.push([top.index, i]);
+                } else {
+                    stack.push({ open: ch, close: openerInfo.close, index: i, symmetric: true, apostropheSensitive: openerInfo.apostropheSensitive });
+                }
+                continue;
+            }
+            stack.push({ open: ch, close: openerInfo.close, index: i, symmetric: false });
+            continue;
+        }
+
+        const closeCandidates = QUOTE_CLOSERS.get(ch);
+        if (closeCandidates && stack.length) {
+            for (let j = stack.length - 1; j >= 0; j -= 1) {
+                const candidate = stack[j];
+                if (!candidate.symmetric && candidate.close === ch && closeCandidates.includes(candidate.open)) {
+                    stack.splice(j, 1);
+                    ranges.push([candidate.index, i]);
+                    break;
+                }
+            }
+            continue;
+        }
+
+        const top = stack[stack.length - 1];
+        if (top && top.symmetric && ch === top.close) {
+            stack.pop();
+            ranges.push([top.index, i]);
+        }
     }
-    for (let i = 0; i < starts.length - 1; i += 2) {
-        ranges.push([starts[i], starts[i + 1]]);
-    }
-    return ranges;
+
+    return ranges.sort((a, b) => a[0] - b[0]);
 }
 function isIndexInsideQuotes(idx, quoteRanges) {
     for (const [start, end] of quoteRanges) {
@@ -619,12 +715,25 @@ function recompileRegexes() {
         const lowerIgnored = (profile.ignorePatterns || []).map(p => String(p).trim().toLowerCase());
         const effectivePatterns = (profile.patterns || []).filter(p => !lowerIgnored.includes(String(p).trim().toLowerCase()));
 
-        const escapeVerbList = (list) => (list || [])
-            .map(entry => parsePatternEntry(entry)?.body || escapeRegex(entry))
-            .filter(Boolean)
-            .join('|');
+        const escapeVerbList = (list) => {
+            const seen = new Set();
+            return (list || [])
+                .map(entry => parsePatternEntry(entry))
+                .filter(Boolean)
+                .map(entry => entry.body)
+                .filter(body => {
+                    if (!body || seen.has(body)) return false;
+                    seen.add(body);
+                    return true;
+                })
+                .join('|');
+        };
         const attributionVerbsPattern = escapeVerbList(profile.attributionVerbs);
         const actionVerbsPattern = escapeVerbList(profile.actionVerbs);
+        const pronounVocabulary = Array.isArray(profile.pronounVocabulary) && profile.pronounVocabulary.length
+            ? profile.pronounVocabulary
+            : DEFAULT_PRONOUNS;
+        const pronounPattern = escapeVerbList(pronounVocabulary);
 
         const speakerTemplate = '(?:^|[\r\n]+|[>\]]\s*)({{PATTERNS}})\s*:';
         const boundaryLookbehind = "(?<![A-Za-z0-9_'’])";
@@ -632,19 +741,22 @@ function recompileRegexes() {
             ? `${boundaryLookbehind}({{PATTERNS}})\\s+(?:${attributionVerbsPattern})`
             : null;
         const actionTemplate = actionVerbsPattern
-            ? `${boundaryLookbehind}({{PATTERNS}})(?:['’]s)?\\s+(?:\\w+\\s+){0,3}?(?:${actionVerbsPattern})`
+            ? `${boundaryLookbehind}({{PATTERNS}})(?:['’]s)?\\s+(?:${UNICODE_WORD_PATTERN}+\\s+){0,3}?(?:${actionVerbsPattern})`
             : null;
 
         state.compiledRegexes = {
             speakerRegex: buildRegex(effectivePatterns, speakerTemplate),
             attributionRegex: attributionTemplate ? buildRegex(effectivePatterns, attributionTemplate) : null,
-            actionRegex: actionTemplate ? buildRegex(effectivePatterns, actionTemplate) : null,
-            pronounRegex: actionVerbsPattern ? new RegExp(`(?:^|[\r\n]+)\s*(he|she|they)(?:'s)?\s+(?:\\w+\\s+){0,3}?(?:${actionVerbsPattern})`, 'i') : null,
+            actionRegex: actionTemplate ? buildRegex(effectivePatterns, actionTemplate, { extraFlags: 'u' }) : null,
+            pronounRegex: (actionVerbsPattern && pronounPattern)
+                ? new RegExp(`(?:^|[\r\n]+)\s*(?:${pronounPattern})(?:['’]s)?\s+(?:${UNICODE_WORD_PATTERN}+\\s+){0,3}?(?:${actionVerbsPattern})`, 'iu')
+                : null,
             vocativeRegex: buildRegex(effectivePatterns, `["“'\\s]({{PATTERNS}})[,.!?]`),
             possessiveRegex: buildRegex(effectivePatterns, `\\b({{PATTERNS}})['’]s\\b`),
             nameRegex: buildRegex(effectivePatterns, `\\b({{PATTERNS}})\\b`),
             vetoRegex: buildGenericRegex(profile.vetoPatterns),
         };
+        rebuildMappingLookup(profile);
         $("#cs-error").prop('hidden', true).find('.cs-status-text').text('');
     } catch (e) {
         $("#cs-error").prop('hidden', false).find('.cs-status-text').text(`Pattern compile error: ${String(e)}`);
@@ -657,6 +769,21 @@ function ensureMap(value) {
     if (!value) return new Map();
     try { return new Map(value instanceof Array ? value : Object.entries(value)); }
     catch { return new Map(); }
+}
+
+function rebuildMappingLookup(profile) {
+    const map = new Map();
+    if (profile && Array.isArray(profile.mappings)) {
+        for (const entry of profile.mappings) {
+            if (!entry) continue;
+            const normalized = normalizeCostumeName(entry.name);
+            if (!normalized) continue;
+            const folder = String(entry.folder ?? '').trim();
+            map.set(normalized.toLowerCase(), folder || normalized);
+        }
+    }
+    state.mappingLookup = map;
+    return map;
 }
 
 function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOverride = null) {
@@ -683,8 +810,12 @@ function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOver
         return { shouldSwitch: false, reason: 'global-cooldown', name: decision.name, now };
     }
 
-    let mappedFolder = profile.mappings.find(m => m.name.toLowerCase() === decision.name.toLowerCase())?.folder;
-    mappedFolder = mappedFolder ? mappedFolder.trim() : decision.name;
+    const lookupKey = decision.name.toLowerCase();
+    const mapped = state.mappingLookup instanceof Map ? state.mappingLookup.get(lookupKey) : null;
+    let mappedFolder = String(mapped ?? decision.name).trim();
+    if (!mappedFolder) {
+        mappedFolder = decision.name;
+    }
 
     const lastTriggerTimes = ensureMap(runtimeState.lastTriggerTimes);
     const failedTriggerTimes = ensureMap(runtimeState.failedTriggerTimes);
@@ -759,6 +890,7 @@ const uiMapping = {
     detectGeneral: { selector: '#cs-detect-general', type: 'checkbox' },
     attributionVerbs: { selector: '#cs-attribution-verbs', type: 'csvTextarea' },
     actionVerbs: { selector: '#cs-action-verbs', type: 'csvTextarea' },
+    pronounVocabulary: { selector: '#cs-pronoun-vocabulary', type: 'csvTextarea' },
     enableSceneRoster: { selector: '#cs-scene-roster-enable', type: 'checkbox' },
     sceneRosterTTL: { selector: '#cs-scene-roster-ttl', type: 'number' },
 };
@@ -1725,13 +1857,21 @@ function wireUI() {
     });
     $(document).on('input', '#cs-detection-bias', function() { $("#cs-detection-bias-value").text($(this).val()); });
     $(document).on('click', '#cs-reset', manualReset);
-    $(document).on('click', '#cs-mapping-add', () => { const profile = getActiveProfile(); if (profile) { profile.mappings.push({ name: "", folder: "" }); renderMappings(profile); } });
+    $(document).on('click', '#cs-mapping-add', () => {
+        const profile = getActiveProfile();
+        if (profile) {
+            profile.mappings.push({ name: "", folder: "" });
+            renderMappings(profile);
+            rebuildMappingLookup(profile);
+        }
+    });
     $(document).on('click', '#cs-mappings-tbody .map-remove', function() {
         const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
         const profile = getActiveProfile();
         if (profile && !isNaN(idx)) {
             profile.mappings.splice(idx, 1);
             renderMappings(profile); // Re-render to update indices
+            rebuildMappingLookup(profile);
         }
     });
     $(document).on('click', '#cs-regex-test-button', testRegexPattern);
@@ -2040,6 +2180,7 @@ function registerCommands() {
             
             if (alias && folder) {
                 profile.mappings.push({ name: alias, folder: folder });
+                rebuildMappingLookup(profile);
                 showStatus(`Mapped "<b>${escapeHtml(alias)}</b>" to "<b>${escapeHtml(folder)}</b>" for this session.`, 'success');
             } else {
                 showStatus('Invalid format. Use /cs-map (alias) to (folder).', 'error');
