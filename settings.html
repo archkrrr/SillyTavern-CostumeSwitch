@@ -297,6 +297,98 @@
                 </div>
               </div>
             </section>
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-ranking-star"></i>
+                  <div>
+                    <h3>Scoring Weights</h3>
+                    <p>Fine-tune how detections are ranked and how strongly recency matters.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <small>Increase a priority to make that detection type more influential when breaking ties.</small>
+                <div class="cs-grid">
+                  <div class="cs-field-group">
+                    <label for="cs-priority-speaker">Speaker Priority</label>
+                    <input id="cs-priority-speaker" class="text_pole" type="number" step="0.1" min="0" title="Weight for explicit speaker labels such as Name: &quot;Dialogue&quot;." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-attribution">Attribution Priority</label>
+                    <input id="cs-priority-attribution" class="text_pole" type="number" step="0.1" min="0" title="Weight for narration like '...,' she said." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-action">Action Priority</label>
+                    <input id="cs-priority-action" class="text_pole" type="number" step="0.1" min="0" title="Weight for action detections such as He nodded." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-pronoun">Pronoun Priority</label>
+                    <input id="cs-priority-pronoun" class="text_pole" type="number" step="0.1" min="0" title="Weight applied when resolving pronouns to the last subject." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-vocative">Vocative Priority</label>
+                    <input id="cs-priority-vocative" class="text_pole" type="number" step="0.1" min="0" title="Weight for names called out inside dialogue." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-possessive">Possessive Priority</label>
+                    <input id="cs-priority-possessive" class="text_pole" type="number" step="0.1" min="0" title="Weight for possessive mentions like Merlin's staff." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-name">General Name Priority</label>
+                    <input id="cs-priority-name" class="text_pole" type="number" step="0.1" min="0" title="Weight for general name detections when enabled." />
+                  </div>
+                </div>
+                <div class="cs-grid">
+                  <div class="cs-field-group">
+                    <label for="cs-roster-bonus">Roster Bonus</label>
+                    <input id="cs-roster-bonus" class="text_pole" type="number" step="1" min="0" title="Bonus score applied when the character is already in the scene roster." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-roster-dropoff">Roster Priority Drop-off</label>
+                    <input id="cs-roster-dropoff" class="text_pole" type="number" step="0.1" min="0" title="How quickly the roster bonus decays for lower-priority detections." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-distance-penalty">Distance Penalty Weight</label>
+                    <input id="cs-distance-penalty" class="text_pole" type="number" step="0.1" min="0" title="Penalty per character of distance from the end of the message." />
+                  </div>
+                </div>
+                <div class="cs-score-presets">
+                  <div class="cs-score-presets-header">
+                    <h4>Scoring Presets</h4>
+                    <p class="cs-helper-text">Save and compare weight profiles for different scenes.</p>
+                  </div>
+                  <div class="cs-score-presets-guide" aria-live="polite">
+                    <ol>
+                      <li><strong>Preview:</strong> Pick a preset to see how its priorities compare with yours.</li>
+                      <li><strong>Inspect:</strong> Bars show the preset emphasis; the middle column shows your live values.</li>
+                      <li><strong>Apply or Tweak:</strong> Apply the preset or adjust individual weights before saving.</li>
+                    </ol>
+                  </div>
+                  <div class="cs-toolbar">
+                    <select id="cs-score-preset-select" class="text_pole" style="flex: 1 1 auto;" title="Select a saved scoring preset to preview its weights.">
+                      <option value="">Select a scoring preset…</option>
+                    </select>
+                    <button id="cs-score-preset-apply" class="menu_button interactable cs-button-primary" title="Apply the selected scoring preset to this profile.">Apply</button>
+                  </div>
+                  <div class="cs-toolbar cs-toolbar--wrap">
+                    <input id="cs-score-preset-name" class="text_pole" type="text" placeholder="Enter a name…" title="Enter a name to save or rename a scoring preset." />
+                    <button id="cs-score-preset-save" class="menu_button interactable" title="Overwrite the selected preset with the current weights.">Save</button>
+                    <button id="cs-score-preset-saveas" class="menu_button interactable" title="Save the current weights as a new preset.">Save As</button>
+                    <button id="cs-score-preset-rename" class="menu_button interactable" title="Rename the selected custom preset.">Rename</button>
+                    <button id="cs-score-preset-delete" class="menu_button interactable cs-button-danger" title="Delete the selected custom preset.">Delete</button>
+                  </div>
+                  <p id="cs-score-preset-message" class="cs-helper-text">Select a preset to preview how it stacks against your active profile.</p>
+                  <div id="cs-score-preset-preview" class="cs-score-preview">
+                      <table class="cs-score-preview-table">
+                        <tbody>
+                          <tr><td colspan="4" class="cs-tester-list-placeholder">Select a preset to see weight comparisons.</td></tr>
+                        </tbody>
+                      </table>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </section>
@@ -320,38 +412,116 @@
                   <button id="cs-regex-test-button" class="menu_button interactable">Test Pattern</button>
                   <button id="cs-regex-test-copy" class="menu_button interactable" disabled title="Copy the latest live tester report to your clipboard.">Copy Report</button>
                 </div>
-                <div class="cs-tester-meta">
-                  <span class="cs-meta-label">Veto Status:</span>
-                  <span id="cs-test-veto-result" class="cs-tester-list-placeholder">N/A</span>
-                </div>
-                <div class="cs-tester-meta">
-                  <span class="cs-meta-label">Top Characters:</span>
-                  <span id="cs-test-top-characters" class="cs-tester-list-placeholder">N/A</span>
+                <div class="cs-tester-guide">
+                  <h4>Live Tester Walkthrough</h4>
+                  <ol>
+                    <li>Paste a recent chat message or narration chunk, then run <strong>Test Pattern</strong>.</li>
+                    <li>Check the summary cards to see which characters ranked highest and whether a switch fired.</li>
+                    <li>Drill into the panels below to inspect detections, winners, roster health, and vocabulary tips.</li>
+                  </ol>
                 </div>
                 <div id="cs-regex-test-output-container" class="text_pole cs-tester-output-container">
-                  <div class="cs-tester-col cs-tester-col--divider">
-                    <div class="cs-tester-title">All Detections (in order)</div>
-                    <ul id="cs-test-all-detections" class="cs-tester-list">
-                      <li class="cs-tester-list-placeholder">Results will appear here.</li>
-                    </ul>
+                  <div class="cs-tester-summary-grid">
+                    <div class="cs-summary-card">
+                      <span class="cs-summary-label">Top Characters</span>
+                      <div id="cs-test-top-characters" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
+                      <p>Highest scoring matches from the last run.</p>
+                    </div>
+                    <div class="cs-summary-card">
+                      <span class="cs-summary-label">Veto Status</span>
+                      <div id="cs-test-veto-result" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
+                      <p>Explains whether a cooldown or lock blocked the switch.</p>
+                    </div>
+                    <div class="cs-summary-card">
+                      <span class="cs-summary-label">Quick Tip</span>
+                      <p class="cs-summary-help">Use the score, roster, and coverage panes below to focus your next tweaks.</p>
+                    </div>
                   </div>
-                  <div class="cs-tester-col">
-                    <div class="cs-tester-title">Live Switch Decisions</div>
-                    <ul id="cs-test-winner-list" class="cs-tester-list">
-                      <li class="cs-tester-list-placeholder">Stream results will appear here.</li>
-                    </ul>
+                  <div class="cs-tester-panels">
+                    <section class="cs-tester-panel cs-tester-panel--flow">
+                      <header class="cs-tester-panel-header">
+                        <h4>Match Flow</h4>
+                        <p>Follow detections through to the costume decision.</p>
+                      </header>
+                      <div class="cs-tester-split">
+                        <div class="cs-tester-pane">
+                          <div class="cs-tester-title">All Detections</div>
+                          <p class="cs-helper-text">Every detection we spotted, in order.</p>
+                          <ul id="cs-test-all-detections" class="cs-tester-list">
+                            <li class="cs-tester-list-placeholder">Results will appear here.</li>
+                          </ul>
+                        </div>
+                        <div class="cs-tester-pane">
+                          <div class="cs-tester-title">Live Switch Decisions</div>
+                          <p class="cs-helper-text">Who would have received the costume change.</p>
+                          <ul id="cs-test-winner-list" class="cs-tester-list">
+                            <li class="cs-tester-list-placeholder">Stream results will appear here.</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--roster">
+                      <header class="cs-tester-panel-header">
+                        <h4>Scene Roster</h4>
+                        <p>Check for churn or TTL gaps that could impact switching.</p>
+                      </header>
+                      <div class="cs-tester-stack">
+                        <ul id="cs-test-roster-timeline" class="cs-tester-list">
+                          <li class="cs-tester-list-placeholder">Run the tester to see roster events.</li>
+                        </ul>
+                        <div class="cs-roster-health">
+                          <div class="cs-tester-title cs-tester-title--sub">Roster Health</div>
+                          <div id="cs-test-roster-warning" class="cs-roster-warning">No TTL warnings triggered.</div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--score">
+                      <header class="cs-tester-panel-header">
+                        <h4>Score Breakdown</h4>
+                        <p>Scroll to compare how each detection contributed.</p>
+                      </header>
+                      <div class="cs-score-scroll">
+                        <table id="cs-test-score-breakdown" class="cs-score-table">
+                          <tbody>
+                            <tr><td colspan="3" class="cs-tester-list-placeholder">Run the tester to see weighted scores.</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--coverage">
+                      <header class="cs-tester-panel-header">
+                        <h4>Coverage Suggestions</h4>
+                        <p>Click to add helpful pronouns or verbs to your lists.</p>
+                      </header>
+                      <div class="cs-coverage-panel">
+                        <div>
+                          <h5>Pronouns</h5>
+                          <div id="cs-coverage-pronouns" class="cs-coverage-list"><span class="cs-tester-list-placeholder">Run the tester to see suggestions.</span></div>
+                        </div>
+                        <div>
+                          <h5>Attribution Verbs</h5>
+                          <div id="cs-coverage-attribution" class="cs-coverage-list"><span class="cs-tester-list-placeholder">Run the tester to see suggestions.</span></div>
+                        </div>
+                        <div>
+                          <h5>Action Verbs</h5>
+                          <div id="cs-coverage-action" class="cs-coverage-list"><span class="cs-tester-list-placeholder">Run the tester to see suggestions.</span></div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--logs">
+                      <header class="cs-tester-panel-header">
+                        <h4>Debug Tools</h4>
+                        <p>Mirror the tester output to the browser console.</p>
+                      </header>
+                      <label class="cs-toggle cs-toggle--inline" title="Logs detailed decision-making to the browser console (F12) for troubleshooting.">
+                        <input id="cs-debug" type="checkbox" />
+                        <span class="cs-toggle-indicator"></span>
+                        <span><strong>Enable Debug Logging</strong></span>
+                      </label>
+                    </section>
                   </div>
                 </div>
               </div>
-            </section>
-          </div>
-          <div class="cs-column">
-            <section class="cs-card cs-card--compact">
-              <label class="cs-toggle cs-toggle--inline" title="Logs detailed decision-making to the browser console (F12) for troubleshooting.">
-                <input id="cs-debug" type="checkbox" />
-                <span class="cs-toggle-indicator"></span>
-                <span><strong>Enable Debug Logging</strong></span>
-              </label>
             </section>
           </div>
         </div>
