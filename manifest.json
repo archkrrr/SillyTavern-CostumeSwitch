@@ -5,7 +5,7 @@
   "css": "style.css",
   "author": "Archkr",
   "version": "3.1.0",
-  "auto_update": false,
+  "auto_update": true,
   "homePage": "https://github.com/archkrrr/SillyTavern-CostumeSwitch",
   "i18n": {}
 }
