@@ -442,38 +442,129 @@
   padding-top: 4px;
 }
 
-#costume-switcher-settings.cs-theme .cs-tester-meta {
-  display: flex;
-  gap: 8px;
-  font-size: 0.9rem;
-  color: var(--text-muted);
-  align-items: center;
-}
-
-#costume-switcher-settings.cs-theme .cs-meta-label {
-  font-weight: 600;
-  color: var(--text-color);
-}
-
 #costume-switcher-settings.cs-theme .cs-tester-output-container {
   margin-top: 6px;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.3);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.35);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
 }
 
-#costume-switcher-settings.cs-theme .cs-tester-col {
+#costume-switcher-settings.cs-theme .cs-tester-panels {
+  display: grid;
+  gap: 16px;
+  align-items: stretch;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-auto-flow: dense;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  min-height: 0;
 }
 
-#costume-switcher-settings.cs-theme .cs-tester-col--divider {
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+#costume-switcher-settings.cs-theme .cs-tester-panel-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel--flow,
+#costume-switcher-settings.cs-theme .cs-tester-panel--coverage {
+  gap: 16px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel--score {
+  gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-roster-health {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-title--sub {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-scroll {
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.01);
+  padding: 8px 4px;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-scroll table {
+  margin: 0;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel--logs {
+  align-self: stretch;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-panel--logs .cs-toggle {
+  margin-top: 4px;
+}
+
+@media (min-width: 1180px) {
+  #costume-switcher-settings.cs-theme .cs-tester-panel--flow,
+  #costume-switcher-settings.cs-theme .cs-tester-panel--coverage {
+    grid-column: span 2;
+  }
+
+  #costume-switcher-settings.cs-theme .cs-tester-panel--score,
+  #costume-switcher-settings.cs-theme .cs-tester-panel--roster,
+  #costume-switcher-settings.cs-theme .cs-tester-panel--logs {
+    grid-column: span 1;
+  }
 }
 
 #costume-switcher-settings.cs-theme .cs-tester-title {
@@ -488,7 +579,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 220px;
+  max-height: 180px;
   overflow-y: auto;
 }
 
@@ -503,6 +594,274 @@
 #costume-switcher-settings.cs-theme .cs-tester-list-placeholder {
   color: var(--text-muted);
   font-style: italic;
+}
+
+#costume-switcher-settings.cs-theme #cs-test-roster-timeline {
+  max-height: 140px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+#costume-switcher-settings.cs-theme .cs-summary-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 96px;
+}
+
+#costume-switcher-settings.cs-theme .cs-summary-label {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-summary-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+#costume-switcher-settings.cs-theme .cs-summary-help {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-guide {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-guide h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-guide ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-tester-guide strong {
+  color: var(--text-color);
+}
+
+#costume-switcher-settings.cs-theme .cs-roster-warning {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(231, 76, 60, 0.08);
+  color: var(--text-color);
+  font-size: 0.85rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-presets {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-presets-guide {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  border-left: 3px solid var(--accent);
+  padding: 10px 14px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-presets-guide ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-presets-guide strong {
+  color: var(--text-color);
+}
+
+#costume-switcher-settings.cs-theme .cs-score-presets-header h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-preview-table thead {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#costume-switcher-settings.cs-theme .cs-score-preview-table thead th {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-score-preview-table th,
+#costume-switcher-settings.cs-theme .cs-score-preview-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  text-align: left;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-preview-table tr:last-child td {
+  border-bottom: none;
+}
+
+#costume-switcher-settings.cs-theme .cs-weight-bar {
+  position: relative;
+  height: 26px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+#costume-switcher-settings.cs-theme .cs-weight-bar-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+#costume-switcher-settings.cs-theme .cs-weight-bar-fill.is-negative {
+  background: var(--danger);
+}
+
+#costume-switcher-settings.cs-theme .cs-weight-bar-value {
+  position: relative;
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-table tr:last-child td {
+  border-bottom: none;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-trigger strong {
+  display: block;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-trigger small {
+  display: block;
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-score-bar {
+  position: relative;
+  height: 26px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-bar-positive {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-bar-penalty {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: var(--danger);
+  opacity: 0.35;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-bar-total {
+  position: relative;
+  margin-left: auto;
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+#costume-switcher-settings.cs-theme .cs-score-row-negative td {
+  background: rgba(231, 76, 60, 0.08);
+}
+
+#costume-switcher-settings.cs-theme .cs-score-row-roster td {
+  box-shadow: inset 0 0 0 1px rgba(46, 213, 115, 0.25);
+}
+
+#costume-switcher-settings.cs-theme .cs-coverage-panel {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+#costume-switcher-settings.cs-theme .cs-coverage-panel h5 {
+  margin: 0 0 4px;
+  font-size: 0.88rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-coverage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-coverage-pill {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-color);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+#costume-switcher-settings.cs-theme .cs-coverage-pill:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 #costume-switcher-settings.cs-theme #cs-mappings {
@@ -648,6 +1007,10 @@
 
   #costume-switcher-settings.cs-theme .cs-master-toggle input {
     justify-self: flex-start;
+  }
+
+  #costume-switcher-settings.cs-theme .cs-tester-output-container {
+    padding: 14px;
   }
 }
 
