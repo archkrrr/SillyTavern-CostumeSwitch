@@ -8,7 +8,7 @@ import {
     EXTENDED_ATTRIBUTION_VERBS,
 } from "./verbs.js";
 
-const extensionName = "SillyTavern-CostumeSwitch-Testing";
+const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const logPrefix = "[CostumeSwitch]";
 
