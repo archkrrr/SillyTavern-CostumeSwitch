@@ -1,12 +1,37 @@
 # Costume Switcher for SillyTavern
 
-Costume Switcher keeps the right avatar in focus while you write. It listens to the live stream coming from your model, scores every character mention it finds, and immediately swaps the displayed costume to match the active speaker. The extension ships with powerful tooling, scene awareness, and a fully redesigned configuration UI so you can understand *why* a switch happened and tune the behaviour to fit any story.
+Costume Switcher is the companion piece to Lenny’s **Character Expressions** extension—it uses the same foundations, but instead of changing facial expressions it swaps the entire costume or avatar folder the moment a new speaker takes the spotlight. Install both and SillyTavern keeps the correct character in focus *and* their emotions in sync, giving you a live stage crew that reacts faster than you can type.
+
+Under the hood the extension listens to streaming output from your model, scores every character mention it finds, and immediately updates the displayed costume to match the active speaker. It ships with powerful tooling, scene awareness, and a fully redesigned configuration UI so you can understand *why* a switch happened and tune the behaviour to fit any story.
+
+> **New to Costume Switcher?** Start here, then hop over to the Character Expressions README. Together they form a best-friends duo: Expressions handles nuanced emotions, Costume Switcher handles wardrobe changes.
+
+---
+
+## Contents
+
+1. [Highlights at a Glance](#highlights-at-a-glance)
+2. [Requirements](#requirements)
+3. [Installation](#installation)
+4. [Architecture Overview](#architecture-overview)
+5. [Custom Detection Engines](#custom-detection-engines)
+   1. [Main Detection Engine (v3)](#main-detection-engine-v3)
+   2. [Outfit Detection Engine (v1)](#outfit-detection-engine-v1)
+6. [Getting Started in Five Minutes](#getting-started-in-five-minutes)
+7. [Tour of the Settings UI](#tour-of-the-settings-ui)
+8. [Understanding Live Tester Reports](#understanding-live-tester-reports)
+9. [Advanced Configuration Tips](#advanced-configuration-tips)
+10. [Slash Commands](#slash-commands)
+11. [Sharing Top Characters with Other Extensions](#sharing-top-characters-with-other-extensions)
+12. [Troubleshooting Checklist](#troubleshooting-checklist)
+13. [Support & Contributions](#support--contributions)
 
 ---
 
 ## Highlights at a Glance
 
 - **Narrative-aware detection** – Attribution, action, vocative, possessive, pronoun, and general mention detectors can be mixed to match the format of your prose.
+- **Custom engine lineage** – The fully bespoke detection stack (currently in its third major revision) fuses streaming analysis with explainable telemetry so you always know why a switch occurred.
 - **Scene roster logic** – Track who is currently in the conversation and favour them during tight scoring races.
 - **Modern profile workflow** – Save, duplicate, rename, and export complete configurations with a couple of clicks.
 - **Performance tuning** – Adjust global, per-trigger, and failed-trigger cooldowns plus the maximum buffer size and processing cadence.
@@ -35,6 +60,53 @@ Costume Switcher keeps the right avatar in focus while you write. It listens to 
 4. Enable **Costume Switcher** from the Extensions list if it is not activated automatically.
 
 To update, return to the Extension Manager and click **Update all** or reinstall from the same URL.
+
+---
+
+## Architecture Overview
+
+Costume Switcher combines a lightweight UI layer with a purpose-built streaming analysis pipeline so that avatar changes arrive in perfect sync with the narrative. Here is the life of a single message:
+
+1. **Stream listener** – The extension hooks into SillyTavern’s streaming events and keeps a rolling buffer per message. Each incoming token is cleaned up (punctuation, fancy quotes, zero-width characters) and appended without ever blocking the UI.
+2. **Profile compiler** – Your active profile is turned into a ready-to-run bundle of regex detectors, verb lists, cooldown rules, roster preferences, and outfit mappings. Switching profiles simply swaps this bundle out.
+3. **Detection pass** – The main engine sweeps the buffer with detectors for speaker tags, attribution verbs, action verbs, vocatives, possessives, pronouns, and optional “general name” matches. It also honours veto phrases and skips ignored characters before any scoring happens.
+4. **Scoring & context** – Every hit is scored using weighted priorities, distance from the end of the message, and the current scene roster. Bias settings and per-detector weights let you favour explicit dialogue tags or lean toward the freshest mention.
+5. **Decision gate** – Cooldowns, repeat suppression, and manual focus locks are enforced in one place. If the candidate passes, the outfit resolver determines the correct folder (including outfit variants) and issues the `/costume` command.
+6. **Telemetry** – The engine records matches, scores, roster membership, and skip reasons. The Live Pattern Tester, slash commands, and exported session data all pull from this shared telemetry, so you see exactly what the engine saw.
+
+Because each stage is isolated, you can tweak detector settings without relearning the UI, and you can reason about switch decisions by following the same order the engine uses internally.
+
+---
+
+## Custom Detection Engines
+
+Costume Switcher does not rely on third-party libraries for detection. Every matcher, bias rule, and cooldown is part of a fully custom detection stack purpose-built for SillyTavern roleplay. Both engines below share a common orchestration layer, yet each is tuned for a different job so you can mix expressive character work with razor-sharp costume swaps.
+
+### Main Detection Engine (v3)
+
+Version 3 of the primary detection engine powers all speaker attribution. It represents the third full rewrite of the pipeline and focuses on clarity for end users:
+
+- **Detectors you can toggle** – Speaker tags, attribution verbs, action verbs, vocatives, possessives, pronouns, and general-name sweeps are all first-party detectors. Turn them on and off from the settings panel to mirror the way your story is written.
+- **Smart pronoun linking** – The engine remembers the last confirmed subject so that pronoun hits can keep the same character in focus, even when a paragraph swaps from “Alice” to “she.”
+- **Scene roster awareness** – Characters who were recently detected stay in a per-message roster with a configurable TTL. When the next decision comes up, roster members receive bonus weight so ensemble scenes stay stable.
+- **Weighted scoring** – Every detector reports a priority. Those priorities are combined with distance-from-end penalties, your detection bias slider, and per-detector weight controls. The result is a transparent scorecard you can inspect in the Live Pattern Tester.
+- **Cooldown & veto safety nets** – A single decision gate enforces the global cooldown, per-trigger cooldowns, repeat suppression, and veto phrases. Switches are skipped gracefully when a rule applies, and the skip reason is logged for review.
+- **Explainer-first telemetry** – Matches, scores, roster membership, and skip reasons are stored alongside the final decision. Slash commands such as `/cs-stats` and `/cs-top` surface this telemetry directly in chat.
+
+The v3 engine is deterministic by design: given the same buffer and settings it will make the same call every time. That makes testing simple and gives you confidence that profile tweaks translate directly to the behaviour you expect.
+
+### Outfit Detection Engine (v1)
+
+The outfit resolver is treated as its own detection engine because it layers additional rules on top of the main decision:
+
+- **Mapping-first resolution** – Character names (and aliases) map to base costume folders. Each mapping can include one or more outfit variants with custom labels.
+- **Trigger-driven variants** – Variants declare literal phrases or regex triggers. When a detection lands, the resolver evaluates those triggers against the full message buffer so outfits can react to mood, locations, or key phrases.
+- **Match-kind filtering** – Variants can opt into specific match kinds (e.g., only on “action” detections). This keeps reaction outfits from firing on stray name drops.
+- **Scene awareness predicates** – Variants can require certain characters to be present, require at least one of a set, or forbid specific characters. The engine reuses the scene roster from the main detector so outfits respond to who is actually in the conversation.
+- **Cooldown-friendly caching** – Once a character ends up in a specific outfit, that choice is cached. Repeated detections of the same outfit are skipped until something actually changes, preventing needless `/costume` spam.
+- **Readable decisions** – The Live Pattern Tester and status banner show why a variant was selected (trigger hit, awareness rule, fallback, etc.), so you can iterate on rules without guessing.
+
+Outfit Detection Engine v1 is already powerful enough for mood-based wardrobe changes, yet it stays predictable by reusing the same telemetry and cooldown gates as the main engine.
 
 ---
 
@@ -88,6 +160,46 @@ Fine-tune responsiveness and tie-breaking behaviour:
 
 ### Costume Mappings
 Map any detected name or alias to a specific costume folder. Use **Add Mapping** to append rows, then fill in the character and destination folder names.
+
+#### Organizing multi-character cards
+
+Multi-character cards treat the parent directory as the shared biography. Create a child folder for every persona and point each mapping to that nested path. Costume Switcher resolves slash-delimited paths relative to your `characters/` root, so tidy folder names translate directly into mappings.
+
+**Example: Deep-space crew**
+
+```
+SillyTavern/data/default-user/characters/Starship Polaris/
+├── Captain Aris/
+├── Engineer Sol/
+└── Diplomat Lyra/
+```
+
+Map the characters to `Starship Polaris/Captain Aris`, `Starship Polaris/Engineer Sol`, and `Starship Polaris/Diplomat Lyra`. Each subfolder can contain its own portrait variants, background art, or expression packs without leaking into the others.
+
+**Example: Academy roommates**
+
+```
+SillyTavern/data/default-user/characters/Frostglen Dorm/
+├── Ember Hart/
+├── Quinn Vale/
+└── Mira Snow/
+```
+
+If Ember occasionally switches into a winter outfit, add another directory—`Frostglen Dorm/Ember Hart/Winter Gala/`—and point an outfit variant at that path. The base mapping still targets `Frostglen Dorm/Ember Hart`, while the variant appends the extra folder when its trigger (e.g., "snowstorm" or a `/winter/i` regex) fires.
+
+**Example: Band with stage personas**
+
+```
+SillyTavern/data/default-user/characters/Neon Skyline/
+├── Lead Echo/
+├── Bass Nova/
+└── Drummer Pulse/
+```
+
+Use `Neon Skyline/Lead Echo`, `Neon Skyline/Bass Nova`, and `Neon Skyline/Drummer Pulse` as the core mappings. When the group performs an acoustic set, you can swap all three at once by preparing alternate folders such as `Neon Skyline/Lead Echo/Unplugged/` and invoking the `/cs-map` slash command to temporarily reroute the mappings.
+
+Keep folder names readable—those exact strings show up in the UI and make debugging easier when reviewing switch telemetry.
+
 
 ### Live Pattern Tester
 Paste sample prose and inspect:
