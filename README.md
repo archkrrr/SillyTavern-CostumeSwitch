@@ -15,10 +15,27 @@ Under the hood the extension listens to streaming output from your model, scores
 3. [Installation](#installation)
 4. [Architecture Overview](#architecture-overview)
 5. [Custom Detection Engines](#custom-detection-engines)
-   1. [Main Detection Engine (v3)](#main-detection-engine-v3)
-   2. [Outfit Detection Engine (v1)](#outfit-detection-engine-v1)
+    1. [Main Detection Engine (v3)](#main-detection-engine-v3)
+    2. [Outfit Detection Engine (v1)](#outfit-detection-engine-v1)
 6. [Getting Started in Five Minutes](#getting-started-in-five-minutes)
 7. [Tour of the Settings UI](#tour-of-the-settings-ui)
+    1. [Header & Master Toggle](#header--master-toggle)
+    2. [Profiles](#profiles)
+    3. [Character Patterns & Filters](#character-patterns--filters)
+    4. [Presets & Focus](#presets--focus)
+    5. [Detection Strategy](#detection-strategy)
+    6. [Performance & Bias](#performance--bias)
+    7. [Costume Mappings](#costume-mappings)
+    8. [Outfit Lab](#outfit-lab)
+        1. [Prepare your character folders](#1-prepare-your-character-folders)
+        2. [Enable the lab in settings](#2-enable-the-lab-in-settings)
+        3. [Add characters and defaults](#3-add-characters-and-defaults)
+        4. [Build outfit variations](#4-build-outfit-variations)
+        5. [Test and iterate safely](#5-test-and-iterate-safely)
+        6. [Troubleshooting the Outfit Lab](#troubleshooting-the-outfit-lab)
+        7. [Organizing multi-character cards](#organizing-multi-character-cards)
+    9. [Live Pattern Tester](#live-pattern-tester)
+    10. [Footer Controls](#footer-controls)
 8. [Understanding Live Tester Reports](#understanding-live-tester-reports)
 9. [Advanced Configuration Tips](#advanced-configuration-tips)
 10. [Slash Commands](#slash-commands)
@@ -160,6 +177,67 @@ Fine-tune responsiveness and tie-breaking behaviour:
 
 ### Costume Mappings
 Map any detected name or alias to a specific costume folder. Use **Add Mapping** to append rows, then fill in the character and destination folder names.
+
+### Outfit Lab
+The Outfit Lab is an experimental workspace for staging wardrobe variants without destabilising your live mappings. Variants saved here run in the detection engine as soon as **Enable Experimental Outfits** is toggled on for the active profile.
+
+#### 1. Prepare your character folders
+Keep your prototypes in an `Outfit Lab` subdirectory under the character’s main folder. Each outfit variant receives its own subfolder, and every variant should reuse the same expression filenames as the parent directory so expression lookups remain valid.
+
+```
+SillyTavern/data/default-user/characters/Mythic Frontier/
+└── Ranger Elowen/
+    ├── portrait.png
+    ├── determined.png
+    ├── surprised.png
+    └── Outfit Lab/
+        ├── Emberwatch Patrol/
+        │   ├── portrait.png
+        │   ├── determined.png
+        │   └── surprised.png
+        └── Midnight Vanguard/
+            ├── portrait.png
+            ├── determined.png
+            └── surprised.png
+```
+
+- Use folders like `Mythic Frontier/Ranger Elowen/Outfit Lab/Emberwatch Patrol` when pointing variant mappings at prototypes. Promoting a look is as simple as moving its folder up beside the main art and updating the mapping.
+- Each variant inherits the base outfit’s expression manifest. Missing files fall back to whatever PNGs exist in the variant directory; anything absent simply cannot render. Drop at least a `portrait.png` in every folder so fallbacks always have artwork.
+- Store shared assets (e.g., accessories or props) alongside the variant art if you reference them directly. SillyTavern only serves files that live inside the selected outfit directory.
+
+#### 2. Enable the lab in settings
+Open **Settings → Extensions → Costume Switcher → Outfits (Preview)**. The editor stays read-only until you flip **Enable Experimental Outfits** on. Once enabled you can add, edit, or remove variants; turning it back off preserves the data but keeps the profile on its default folders.
+
+#### 3. Add characters and defaults
+Use **Add Character Slot** to create a card per character you want to experiment with. Fill in:
+
+- **Character Name** – the detected name or alias that should trigger the outfit.
+- **Default Folder** – the production-ready costume directory. Variants fall back here when no triggers match.
+
+These values sync with the main **Costume Mappings** table, so characters you configure in the lab are also available to the standard mapping workflow.
+
+#### 4. Build outfit variations
+Inside each card, click **Add Outfit Variation** to define experimental looks:
+
+- **Label (optional)** – Friendly display name for the Live Tester and debug logs.
+- **Folder** – Path to the prototype outfit. Use the directory picker or paste the relative path shown in your SillyTavern character tree.
+- **Triggers** – One literal or `/regex/` pattern per line. Variants with no triggers act as always-on fallbacks after earlier variants fail.
+- **Match Types** – Limit the variant to specific detection sources. Options include `Speaker`, `Attribution`, `Action`, `Pronoun`, `Vocative`, `Possessive`, and `General Name`. Leave all unchecked to accept every match.
+- **Scene Awareness** – Require or exclude characters from the active scene roster. Fill in **Requires all of…**, **Requires any of…**, or **Exclude when present** (one name per line). The roster is case-insensitive and only populated when the **Scene Roster** detector is enabled in **Detection Strategy**.
+
+Variants evaluate in order from top to bottom. The first entry whose folder exists, whose match type (if any) aligns with the detection event, whose triggers match the streaming text, and whose scene-awareness rules pass becomes the active outfit. Everything else falls back to the card’s default folder.
+
+#### 5. Test and iterate safely
+- Use the **Live Pattern Tester** with the lab enabled to verify which variant would win given sample prose. Trigger matches and awareness reasons appear in the report.
+- When a variant is ready for production, disable the lab, move the folder out of `Outfit Lab`, and update the default mapping, or leave the lab on to keep routing live traffic through the variants.
+- Profiles store their lab configuration alongside mappings. Exporting a profile JSON carries the variants with it for backups or sharing.
+
+#### Troubleshooting the Outfit Lab
+- **Variant never fires** – Confirm the variant folder path is relative to your `characters/` directory and spelled exactly like the filesystem entry. Remember variants run sequentially; drag the card handles to reorder if a broader variant is catching the trigger first.
+- **Scene rules never pass** – Enable **Scene Roster** under **Detection Strategy** and keep the TTL high enough for characters to remain “active.” Names are normalised to lowercase; match the roster spelling (e.g., `captain ardan`).
+- **Missing expressions** – Copy the full expression set into each variant directory. Because the manifest is shared, only files that physically exist in the selected folder can render.
+- **Editor looks disabled** – The lab requires **Enable Experimental Outfits** to be on. When off, the UI intentionally locks to prevent accidental edits during live sessions.
+- **Profile reset lost variants** – Variants live inside the active profile. Save the profile after edits and export periodic backups via the Profiles card.
 
 #### Organizing multi-character cards
 

@@ -2,15 +2,77 @@ import { extension_settings, getContext } from "../../../extensions.js";
 import { saveSettingsDebounced, event_types, eventSource } from "../../../../script.js";
 import { executeSlashCommandsOnChatInput, registerSlashCommand } from "../../../slash-commands.js";
 import {
-    DEFAULT_ACTION_VERBS,
-    DEFAULT_ATTRIBUTION_VERBS,
-    EXTENDED_ACTION_VERBS,
-    EXTENDED_ATTRIBUTION_VERBS,
+    DEFAULT_ACTION_VERBS_PRESENT,
+    DEFAULT_ACTION_VERBS_THIRD_PERSON,
+    DEFAULT_ACTION_VERBS_PAST,
+    DEFAULT_ACTION_VERBS_PAST_PARTICIPLE,
+    DEFAULT_ACTION_VERBS_PRESENT_PARTICIPLE,
+    DEFAULT_ATTRIBUTION_VERBS_PRESENT,
+    DEFAULT_ATTRIBUTION_VERBS_THIRD_PERSON,
+    DEFAULT_ATTRIBUTION_VERBS_PAST,
+    DEFAULT_ATTRIBUTION_VERBS_PAST_PARTICIPLE,
+    DEFAULT_ATTRIBUTION_VERBS_PRESENT_PARTICIPLE,
+    EXTENDED_ACTION_VERBS_PRESENT,
+    EXTENDED_ACTION_VERBS_THIRD_PERSON,
+    EXTENDED_ACTION_VERBS_PAST,
+    EXTENDED_ACTION_VERBS_PAST_PARTICIPLE,
+    EXTENDED_ACTION_VERBS_PRESENT_PARTICIPLE,
+    EXTENDED_ATTRIBUTION_VERBS_PRESENT,
+    EXTENDED_ATTRIBUTION_VERBS_THIRD_PERSON,
+    EXTENDED_ATTRIBUTION_VERBS_PAST,
+    EXTENDED_ATTRIBUTION_VERBS_PAST_PARTICIPLE,
+    EXTENDED_ATTRIBUTION_VERBS_PRESENT_PARTICIPLE,
+    buildVerbSlices,
 } from "./verbs.js";
+import {
+    compileProfileRegexes,
+    collectDetections,
+} from "./src/detector-core.js";
+import {
+    mergeDetectionsForReport,
+    summarizeDetections,
+} from "./src/report-utils.js";
+import { loadProfiles, normalizeProfile, normalizeMappingEntry } from "./profile-utils.js";
 
 const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const logPrefix = "[CostumeSwitch]";
+
+function buildVerbList(...lists) {
+    return Array.from(new Set(lists.flat().filter(Boolean)));
+}
+
+const DEFAULT_ATTRIBUTION_VERB_FORMS = buildVerbList(
+    DEFAULT_ATTRIBUTION_VERBS_PRESENT,
+    DEFAULT_ATTRIBUTION_VERBS_THIRD_PERSON,
+    DEFAULT_ATTRIBUTION_VERBS_PAST,
+    DEFAULT_ATTRIBUTION_VERBS_PAST_PARTICIPLE,
+    DEFAULT_ATTRIBUTION_VERBS_PRESENT_PARTICIPLE,
+);
+
+const EXTENDED_ATTRIBUTION_VERB_FORMS = buildVerbList(
+    EXTENDED_ATTRIBUTION_VERBS_PRESENT,
+    EXTENDED_ATTRIBUTION_VERBS_THIRD_PERSON,
+    EXTENDED_ATTRIBUTION_VERBS_PAST,
+    EXTENDED_ATTRIBUTION_VERBS_PAST_PARTICIPLE,
+    EXTENDED_ATTRIBUTION_VERBS_PRESENT_PARTICIPLE,
+);
+
+const DEFAULT_ACTION_VERB_FORMS = buildVerbList(
+    DEFAULT_ACTION_VERBS_PRESENT,
+    DEFAULT_ACTION_VERBS_THIRD_PERSON,
+    DEFAULT_ACTION_VERBS_PAST,
+    DEFAULT_ACTION_VERBS_PAST_PARTICIPLE,
+    DEFAULT_ACTION_VERBS_PRESENT_PARTICIPLE,
+);
+
+const EXTENDED_ACTION_VERB_FORMS = buildVerbList(
+    EXTENDED_ACTION_VERBS_PRESENT,
+    EXTENDED_ACTION_VERBS_THIRD_PERSON,
+    EXTENDED_ACTION_VERBS_PAST,
+    EXTENDED_ACTION_VERBS_PAST_PARTICIPLE,
+    EXTENDED_ACTION_VERBS_PRESENT_PARTICIPLE,
+);
 
 // ======================================================================
 // PRESET PROFILES
@@ -84,6 +146,48 @@ const SCORE_WEIGHT_LABELS = {
     rosterBonus: 'Roster Bonus',
     rosterPriorityDropoff: 'Roster Drop-off',
     distancePenaltyWeight: 'Distance Penalty',
+};
+
+const AUTO_SAVE_DEBOUNCE_MS = 800;
+const AUTO_SAVE_NOTICE_COOLDOWN_MS = 1800;
+const AUTO_SAVE_RECOMPILE_KEYS = new Set([
+    'patterns',
+    'ignorePatterns',
+    'vetoPatterns',
+    'attributionVerbs',
+    'actionVerbs',
+    'pronounVocabulary',
+]);
+const AUTO_SAVE_FOCUS_LOCK_KEYS = new Set(['patterns']);
+const AUTO_SAVE_REASON_OVERRIDES = {
+    patterns: 'character patterns',
+    ignorePatterns: 'ignored names',
+    vetoPatterns: 'veto phrases',
+    defaultCostume: 'default costume',
+    debug: 'debug logging',
+    globalCooldownMs: 'global cooldown',
+    repeatSuppressMs: 'repeat suppression window',
+    perTriggerCooldownMs: 'per-trigger cooldown',
+    failedTriggerCooldownMs: 'failed trigger cooldown',
+    maxBufferChars: 'buffer size',
+    tokenProcessThreshold: 'token processing threshold',
+    detectionBias: 'detection bias',
+    detectAttribution: 'attribution detection',
+    detectAction: 'action detection',
+    detectVocative: 'vocative detection',
+    detectPossessive: 'possessive detection',
+    detectPronoun: 'pronoun detection',
+    detectGeneral: 'general name detection',
+    enableOutfits: 'outfit automation',
+    attributionVerbs: 'attribution verbs',
+    actionVerbs: 'action verbs',
+    pronounVocabulary: 'pronoun vocabulary',
+    enableSceneRoster: 'scene roster',
+    sceneRosterTTL: 'scene roster timing',
+    rosterBonus: 'roster bonus',
+    rosterPriorityDropoff: 'roster drop-off',
+    distancePenaltyWeight: 'distance penalty weight',
+    mappings: 'character mappings',
 };
 
 const DEFAULT_SCORE_PRESETS = {
@@ -174,48 +278,6 @@ const COVERAGE_TOKEN_REGEX = /[\p{L}\p{M}']+/gu;
 const UNICODE_WORD_PATTERN = '[\\p{L}\\p{M}\\p{N}_]';
 const WORD_CHAR_REGEX = /[\\p{L}\\p{M}\\p{N}]/u;
 
-const QUOTE_PAIRS = [
-    { open: '"', close: '"', symmetric: true },
-    { open: '＂', close: '＂', symmetric: true },
-    { open: '“', close: '”' },
-    { open: '„', close: '”' },
-    { open: '‟', close: '”' },
-    { open: '«', close: '»' },
-    { open: '‹', close: '›' },
-    { open: '「', close: '」' },
-    { open: '『', close: '』' },
-    { open: '｢', close: '｣' },
-    { open: '《', close: '》' },
-    { open: '〈', close: '〉' },
-    { open: '﹁', close: '﹂' },
-    { open: '﹃', close: '﹄' },
-    { open: '〝', close: '〞' },
-    { open: '‘', close: '’' },
-    { open: '‚', close: '’' },
-    { open: '‛', close: '’' },
-    { open: '\'', close: '\'', symmetric: true, apostropheSensitive: true },
-];
-
-const QUOTE_OPENERS = new Map();
-const QUOTE_CLOSERS = new Map();
-
-for (const pair of QUOTE_PAIRS) {
-    const info = {
-        close: pair.close,
-        symmetric: Boolean(pair.symmetric),
-        apostropheSensitive: Boolean(pair.apostropheSensitive),
-    };
-    QUOTE_OPENERS.set(pair.open, info);
-    if (info.symmetric) {
-        continue;
-    }
-    if (!QUOTE_CLOSERS.has(pair.close)) {
-        QUOTE_CLOSERS.set(pair.close, []);
-    }
-    QUOTE_CLOSERS.get(pair.close).push(pair.open);
-}
-
-
 // ======================================================================
 // DEFAULT SETTINGS
 // ======================================================================
@@ -232,6 +294,7 @@ const PROFILE_DEFAULTS = {
     repeatSuppressMs: 800,
     tokenProcessThreshold: 60,
     mappings: [],
+    enableOutfits: false,
     detectAttribution: true,
     detectAction: true,
     detectVocative: true,
@@ -239,8 +302,8 @@ const PROFILE_DEFAULTS = {
     detectPronoun: true,
     detectGeneral: false,
     pronounVocabulary: [...DEFAULT_PRONOUNS],
-    attributionVerbs: [...DEFAULT_ATTRIBUTION_VERBS],
-    actionVerbs: [...DEFAULT_ACTION_VERBS],
+    attributionVerbs: [...DEFAULT_ATTRIBUTION_VERB_FORMS],
+    actionVerbs: [...DEFAULT_ACTION_VERB_FORMS],
     detectionBias: 0,
     enableSceneRoster: true,
     sceneRosterTTL: 5,
@@ -263,14 +326,18 @@ const KNOWN_PRONOUNS = new Set([
 ].map(value => String(value).toLowerCase()));
 
 const KNOWN_ATTRIBUTION_VERBS = new Set([
-    ...PROFILE_DEFAULTS.attributionVerbs,
-    ...EXTENDED_ATTRIBUTION_VERBS,
+    ...DEFAULT_ATTRIBUTION_VERB_FORMS,
+    ...EXTENDED_ATTRIBUTION_VERB_FORMS,
 ].map(value => String(value).toLowerCase()));
 
 const KNOWN_ACTION_VERBS = new Set([
-    ...PROFILE_DEFAULTS.actionVerbs,
-    ...EXTENDED_ACTION_VERBS,
+    ...DEFAULT_ACTION_VERB_FORMS,
+    ...EXTENDED_ACTION_VERB_FORMS,
 ].map(value => String(value).toLowerCase()));
+
+function getVerbInflections(category = "attribution", edition = "default") {
+    return buildVerbSlices({ category, edition });
+}
 
 const DEFAULTS = {
     enabled: true,
@@ -290,9 +357,11 @@ const MAX_TRACKED_MESSAGES = 24;
 
 const state = {
     lastIssuedCostume: null,
+    lastIssuedFolder: null,
     lastSwitchTimestamp: 0,
     lastTriggerTimes: new Map(),
     failedTriggerTimes: new Map(),
+    characterOutfits: new Map(),
     perMessageBuffers: new Map(),
     perMessageStates: new Map(),
     messageStats: new Map(), // For statistical logging
@@ -309,7 +378,53 @@ const state = {
     messageKeyQueue: [],
     activeScorePresetKey: null,
     coverageDiagnostics: null,
+    outfitCardCollapse: new Map(),
+    autoSave: {
+        timer: null,
+        pendingReasons: new Set(),
+        requiresRecompile: false,
+        requiresMappingRebuild: false,
+        requiresFocusLockRefresh: false,
+        lastNoticeAt: new Map(),
+    },
 };
+
+let nextOutfitCardId = 1;
+
+function ensureMappingCardId(mapping) {
+    if (!mapping || typeof mapping !== "object") {
+        return null;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(mapping, "__cardId")) {
+        const id = `cs-outfit-card-${Date.now()}-${nextOutfitCardId++}`;
+        Object.defineProperty(mapping, "__cardId", {
+            value: id,
+            enumerable: false,
+            configurable: true,
+        });
+    }
+
+    return mapping.__cardId;
+}
+
+function markMappingForInitialCollapse(mapping) {
+    if (!mapping || typeof mapping !== "object") {
+        return mapping;
+    }
+
+    try {
+        Object.defineProperty(mapping, "__startCollapsed", {
+            value: true,
+            enumerable: false,
+            configurable: true,
+        });
+    } catch (err) {
+        mapping.__startCollapsed = true;
+    }
+
+    return mapping;
+}
 
 const TAB_STORAGE_KEY = `${extensionName}-active-tab`;
 
@@ -459,122 +574,6 @@ function pruneMessageCaches(limit = MAX_TRACKED_MESSAGES) {
 // ======================================================================
 // REGEX & DETECTION LOGIC
 // ======================================================================
-function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-function parsePatternEntry(raw) {
-    const t = String(raw || '').trim();
-    if (!t) return null;
-    const m = t.match(/^\/((?:\\.|[^\/])+)\/([gimsuy]*)$/);
-    return m ? { body: m[1], flags: m[2] || '', raw: t } : { body: escapeRegex(t), flags: '', raw: t };
-}
-function computeFlags(entries, requireI = true) {
-    const flags = new Set(requireI ? ['i'] : []);
-    for (const e of entries) {
-        if (!e) continue;
-        for (const c of (e.flags || '')) flags.add(c);
-    }
-    return Array.from(flags).filter(c => 'gimsuy'.includes(c)).join('');
-}
-function buildRegex(patternList, template, options = {}) {
-    const entries = (patternList || []).map(parsePatternEntry).filter(Boolean);
-    if (!entries.length) return null;
-    const parts = entries.map(e => `(?:${e.body})`);
-    const combinedBody = parts.join('|');
-    const finalBody = template.replace('{{PATTERNS}}', combinedBody);
-    let finalFlags = computeFlags(entries, options.requireI !== false);
-    if (options.extraFlags) {
-        for (const flag of options.extraFlags) {
-            if (flag && !finalFlags.includes(flag)) {
-                finalFlags += flag;
-            }
-        }
-    }
-    try {
-        return new RegExp(finalBody, finalFlags);
-    } catch (e) {
-        console.warn(`${logPrefix} Regex compilation failed for template: ${template}`, e);
-        return null;
-    }
-}
-function buildGenericRegex(patternList) {
-    if (!patternList || patternList.length === 0) return null;
-    const body = `(?:${patternList.map(p => parsePatternEntry(p)?.body).filter(Boolean).join('|')})`;
-    return new RegExp(body, computeFlags(patternList.map(parsePatternEntry)));
-}
-
-function getQuoteRanges(s) {
-    if (!s) return [];
-    const ranges = [];
-    const stack = [];
-
-    const isLikelyApostrophe = (index) => {
-        if (index < 0 || index >= s.length) return false;
-        const prev = index > 0 ? s[index - 1] : '';
-        const next = index + 1 < s.length ? s[index + 1] : '';
-        return WORD_CHAR_REGEX.test(prev) && WORD_CHAR_REGEX.test(next);
-    };
-
-    for (let i = 0; i < s.length; i += 1) {
-        const ch = s[i];
-        const openerInfo = QUOTE_OPENERS.get(ch);
-        if (openerInfo) {
-            if (openerInfo.symmetric) {
-                if (openerInfo.apostropheSensitive && isLikelyApostrophe(i)) {
-                    continue;
-                }
-                const top = stack[stack.length - 1];
-                if (top && top.open === ch && top.symmetric) {
-                    stack.pop();
-                    ranges.push([top.index, i]);
-                } else {
-                    stack.push({ open: ch, close: openerInfo.close, index: i, symmetric: true, apostropheSensitive: openerInfo.apostropheSensitive });
-                }
-                continue;
-            }
-            stack.push({ open: ch, close: openerInfo.close, index: i, symmetric: false });
-            continue;
-        }
-
-        const closeCandidates = QUOTE_CLOSERS.get(ch);
-        if (closeCandidates && stack.length) {
-            for (let j = stack.length - 1; j >= 0; j -= 1) {
-                const candidate = stack[j];
-                if (!candidate.symmetric && candidate.close === ch && closeCandidates.includes(candidate.open)) {
-                    stack.splice(j, 1);
-                    ranges.push([candidate.index, i]);
-                    break;
-                }
-            }
-            continue;
-        }
-
-        const top = stack[stack.length - 1];
-        if (top && top.symmetric && ch === top.close) {
-            stack.pop();
-            ranges.push([top.index, i]);
-        }
-    }
-
-    return ranges.sort((a, b) => a[0] - b[0]);
-}
-function isIndexInsideQuotes(idx, quoteRanges) {
-    for (const [start, end] of quoteRanges) {
-        if (idx > start && idx < end) return true;
-    }
-    return false;
-}
-function findMatches(text, regex, quoteRanges, searchInsideQuotes = false) {
-    if (!text || !regex) return [];
-    const results = [];
-    const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
-    let match;
-    while ((match = re.exec(text)) !== null) {
-        if (searchInsideQuotes || !isIndexInsideQuotes(match.index, quoteRanges)) {
-            results.push({ match: match[0], groups: match.slice(1), index: match.index });
-        }
-    }
-    return results;
-}
-
 const PRIORITY_FIELD_MAP = {
     speaker: 'prioritySpeakerWeight',
     attribution: 'priorityAttributionWeight',
@@ -594,63 +593,29 @@ function getPriorityWeights(profile) {
 }
 
 function findAllMatches(combined) {
-    const allMatches = [];
     const profile = getActiveProfile();
     const { compiledRegexes } = state;
-    if (!profile || !combined) return allMatches;
+    if (!profile || !combined) {
+        return [];
+    }
 
-    const quoteRanges = getQuoteRanges(combined);
-    const priorities = getPriorityWeights(profile);
-
-    if (compiledRegexes.speakerRegex) {
-        findMatches(combined, compiledRegexes.speakerRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.[0]?.trim();
-            if (name) allMatches.push({ name, matchKind: "speaker", matchIndex: m.index, priority: priorities.speaker });
-        });
-    }
-    if (profile.detectAttribution && compiledRegexes.attributionRegex) {
-        findMatches(combined, compiledRegexes.attributionRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.find(g => g)?.trim();
-            if (name) allMatches.push({ name, matchKind: "attribution", matchIndex: m.index, priority: priorities.attribution });
-        });
-    }
-    if (profile.detectAction && compiledRegexes.actionRegex) {
-        findMatches(combined, compiledRegexes.actionRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.find(g => g)?.trim();
-            if (name) allMatches.push({ name, matchKind: "action", matchIndex: m.index, priority: priorities.action });
-        });
-    }
+    let lastSubject = null;
     if (profile.detectPronoun && state.perMessageStates.size > 0) {
-        const msgState = Array.from(state.perMessageStates.values()).pop(); // Get latest state
-        if (msgState && msgState.lastSubject && compiledRegexes.pronounRegex) {
-            findMatches(combined, compiledRegexes.pronounRegex, quoteRanges).forEach(m => {
-                allMatches.push({ name: msgState.lastSubject, matchKind: "pronoun", matchIndex: m.index, priority: priorities.pronoun });
-            });
+        const msgState = Array.from(state.perMessageStates.values()).pop();
+        if (msgState && msgState.lastSubject) {
+            lastSubject = msgState.lastSubject;
         }
     }
-    if (profile.detectVocative && compiledRegexes.vocativeRegex) {
-        findMatches(combined, compiledRegexes.vocativeRegex, quoteRanges, true).forEach(m => {
-            const name = m.groups?.[0]?.trim();
-            if (name) allMatches.push({ name, matchKind: "vocative", matchIndex: m.index, priority: priorities.vocative });
-        });
-    }
-    if (profile.detectPossessive && compiledRegexes.possessiveRegex) {
-        findMatches(combined, compiledRegexes.possessiveRegex, quoteRanges).forEach(m => {
-            const name = m.groups?.[0]?.trim();
-            if (name) allMatches.push({ name, matchKind: "possessive", matchIndex: m.index, priority: priorities.possessive });
-        });
-    }
-    if (profile.detectGeneral && compiledRegexes.nameRegex) {
-        findMatches(combined, compiledRegexes.nameRegex, quoteRanges).forEach(m => {
-            const name = String(m.groups?.[0] || m.match).replace(/-(?:sama|san)$/i, "").trim();
-            if (name) allMatches.push({ name, matchKind: "name", matchIndex: m.index, priority: priorities.name });
-        });
-    }
-    return allMatches;
+
+    return collectDetections(combined, profile, compiledRegexes, {
+        priorityWeights: getPriorityWeights(profile),
+        lastSubject,
+    });
 }
 
-function findBestMatch(combined, precomputedMatches = null) {
+function findBestMatch(combined, precomputedMatches = null, options = {}) {
     const profile = getActiveProfile();
+    if (!profile) return null;
     const allMatches = Array.isArray(precomputedMatches) ? precomputedMatches : findAllMatches(combined);
     if (allMatches.length === 0) return null;
 
@@ -670,6 +635,10 @@ function findBestMatch(combined, precomputedMatches = null) {
         priorityMultiplier: 100,
     };
 
+    if (Number.isFinite(options?.minIndex) && options.minIndex >= 0) {
+        scoringOptions.minIndex = options.minIndex;
+    }
+
     return getWinner(allMatches, profile.detectionBias, combined.length, scoringOptions);
 }
 
@@ -685,8 +654,15 @@ function getWinner(matches, bias = 0, textLength = 0, options = {}) {
     const priorityMultiplier = Number.isFinite(options?.priorityMultiplier)
         ? options.priorityMultiplier
         : 100;
-    const scoredMatches = matches.map(match => {
+    const minIndex = Number.isFinite(options?.minIndex) && options.minIndex >= 0 ? options.minIndex : null;
+    const scoredMatches = [];
+
+    matches.forEach((match) => {
         const isActive = match.priority >= 3; // speaker, attribution, action
+        const hasFiniteIndex = Number.isFinite(match.matchIndex);
+        if (minIndex != null && hasFiniteIndex && match.matchIndex <= minIndex) {
+            return;
+        }
         const distanceFromEnd = Number.isFinite(textLength)
             ? Math.max(0, textLength - match.matchIndex)
             : 0;
@@ -703,7 +679,7 @@ function getWinner(matches, bias = 0, textLength = 0, options = {}) {
                 score += bonus;
             }
         }
-        return { ...match, score };
+        scoredMatches.push({ ...match, score });
     });
     scoredMatches.sort((a, b) => b.score - a.score);
     return scoredMatches[0];
@@ -1016,50 +992,13 @@ function recompileRegexes() {
     try {
         const profile = getActiveProfile();
         if (!profile) return;
-        const lowerIgnored = (profile.ignorePatterns || []).map(p => String(p).trim().toLowerCase());
-        const effectivePatterns = (profile.patterns || []).filter(p => !lowerIgnored.includes(String(p).trim().toLowerCase()));
 
-        const escapeVerbList = (list) => {
-            const seen = new Set();
-            return (list || [])
-                .map(entry => parsePatternEntry(entry))
-                .filter(Boolean)
-                .map(entry => entry.body)
-                .filter(body => {
-                    if (!body || seen.has(body)) return false;
-                    seen.add(body);
-                    return true;
-                })
-                .join('|');
-        };
-        const attributionVerbsPattern = escapeVerbList(profile.attributionVerbs);
-        const actionVerbsPattern = escapeVerbList(profile.actionVerbs);
-        const pronounVocabulary = Array.isArray(profile.pronounVocabulary) && profile.pronounVocabulary.length
-            ? profile.pronounVocabulary
-            : DEFAULT_PRONOUNS;
-        const pronounPattern = escapeVerbList(pronounVocabulary);
+        const compiled = compileProfileRegexes(profile, {
+            unicodeWordPattern: UNICODE_WORD_PATTERN,
+            defaultPronouns: DEFAULT_PRONOUNS,
+        });
 
-        const speakerTemplate = '(?:^|[\r\n]+|[>\]]\s*)({{PATTERNS}})\s*:';
-        const boundaryLookbehind = "(?<![A-Za-z0-9_'’])";
-        const attributionTemplate = attributionVerbsPattern
-            ? `${boundaryLookbehind}({{PATTERNS}})\\s+(?:${attributionVerbsPattern})`
-            : null;
-        const actionTemplate = actionVerbsPattern
-            ? `${boundaryLookbehind}({{PATTERNS}})(?:['’]s)?\\s+(?:${UNICODE_WORD_PATTERN}+\\s+){0,3}?(?:${actionVerbsPattern})`
-            : null;
-
-        state.compiledRegexes = {
-            speakerRegex: buildRegex(effectivePatterns, speakerTemplate),
-            attributionRegex: attributionTemplate ? buildRegex(effectivePatterns, attributionTemplate) : null,
-            actionRegex: actionTemplate ? buildRegex(effectivePatterns, actionTemplate, { extraFlags: 'u' }) : null,
-            pronounRegex: (actionVerbsPattern && pronounPattern)
-                ? new RegExp(`(?:^|[\r\n]+)\s*(?:${pronounPattern})(?:['’]s)?\s+(?:${UNICODE_WORD_PATTERN}+\\s+){0,3}?(?:${actionVerbsPattern})`, 'iu')
-                : null,
-            vocativeRegex: buildRegex(effectivePatterns, `["“'\\s]({{PATTERNS}})[,.!?]`),
-            possessiveRegex: buildRegex(effectivePatterns, `\\b({{PATTERNS}})['’]s\\b`),
-            nameRegex: buildRegex(effectivePatterns, `\\b({{PATTERNS}})\\b`),
-            vetoRegex: buildGenericRegex(profile.vetoPatterns),
-        };
+        state.compiledRegexes = compiled.regexes;
         rebuildMappingLookup(profile);
         $("#cs-error").prop('hidden', true).find('.cs-status-text').text('');
     } catch (e) {
@@ -1082,12 +1021,395 @@ function rebuildMappingLookup(profile) {
             if (!entry) continue;
             const normalized = normalizeCostumeName(entry.name);
             if (!normalized) continue;
-            const folder = String(entry.folder ?? '').trim();
+            const folder = String(entry.defaultFolder ?? entry.folder ?? '').trim();
             map.set(normalized.toLowerCase(), folder || normalized);
         }
     }
     state.mappingLookup = map;
     return map;
+}
+
+function findMappingForName(profile, normalizedName) {
+    if (!profile || !Array.isArray(profile.mappings) || !normalizedName) {
+        return null;
+    }
+
+    const lowered = normalizedName.toLowerCase();
+    for (const entry of profile.mappings) {
+        if (!entry) continue;
+        const candidate = normalizeCostumeName(entry.name);
+        if (candidate && candidate.toLowerCase() === lowered) {
+            return entry;
+        }
+    }
+    return null;
+}
+
+function parseTriggerPattern(trigger) {
+    if (typeof trigger !== "string") {
+        return null;
+    }
+    const trimmed = trigger.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    const regexMatch = trimmed.match(/^\/((?:\\.|[^/])+?)\/([gimsuy]*)$/);
+    if (regexMatch) {
+        const source = regexMatch[1];
+        const rawFlags = regexMatch[2] || "";
+        const mergedFlags = Array.from(new Set((rawFlags + "i").split(""))).filter(flag => "gimsuy".includes(flag)).join("");
+        try {
+            return { type: "regex", raw: trimmed, regex: new RegExp(source, mergedFlags || "i") };
+        } catch (err) {
+            console.warn(`${logPrefix} Invalid outfit trigger regex: ${trimmed}`, err);
+            return null;
+        }
+    }
+
+    return { type: "literal", raw: trimmed, value: trimmed.toLowerCase() };
+}
+
+function evaluateOutfitTriggers(variant, context) {
+    const triggers = Array.isArray(variant?.triggers) ? variant.triggers : [];
+    if (triggers.length === 0) {
+        return { matched: true, trigger: null, triggerType: null, matchIndex: -1, snippet: null };
+    }
+
+    const text = String(context?.text ?? "");
+    const lower = text.toLowerCase();
+
+    for (const trigger of triggers) {
+        const pattern = parseTriggerPattern(trigger);
+        if (!pattern) {
+            continue;
+        }
+
+        if (pattern.type === "regex") {
+            pattern.regex.lastIndex = 0;
+            const match = pattern.regex.exec(text);
+            if (match) {
+                const index = Number.isFinite(match.index) ? match.index : 0;
+                const length = typeof match[0] === "string" ? match[0].length : 0;
+                const snippet = text.slice(Math.max(0, index - 20), Math.min(text.length, index + length + 20)).trim();
+                return {
+                    matched: true,
+                    trigger: pattern.raw,
+                    triggerType: "regex",
+                    matchIndex: index,
+                    snippet,
+                };
+            }
+        } else if (pattern.type === "literal") {
+            const index = lower.indexOf(pattern.value);
+            if (index !== -1) {
+                const snippet = text.slice(Math.max(0, index - 20), Math.min(text.length, index + pattern.value.length + 20)).trim();
+                return {
+                    matched: true,
+                    trigger: pattern.raw,
+                    triggerType: "literal",
+                    matchIndex: index,
+                    snippet,
+                };
+            }
+        }
+    }
+
+    return { matched: false, trigger: null, triggerType: null, matchIndex: -1, snippet: null };
+}
+
+function normalizeAwarenessList(value) {
+    if (value == null) {
+        return [];
+    }
+
+    const array = Array.isArray(value) ? value : [value];
+    return array
+        .map(entry => normalizeCostumeName(entry))
+        .map(name => name.toLowerCase())
+        .filter(Boolean);
+}
+
+function evaluateAwarenessPredicates(predicates, context) {
+    if (!predicates || typeof predicates !== "object") {
+        return { ok: true, reason: "no-awareness", reasons: [] };
+    }
+
+    const rosterSet = context?.rosterNormalized instanceof Set
+        ? context.rosterNormalized
+        : buildLowercaseSet(context?.roster);
+
+    const reasons = [];
+
+    const requiresAll = normalizeAwarenessList(predicates.requires ?? predicates.all ?? null);
+    if (requiresAll.length) {
+        if (!(rosterSet && rosterSet.size)) {
+            return { ok: false, reason: "requires-missing", missing: requiresAll };
+        }
+        const missing = requiresAll.filter(name => !rosterSet.has(name));
+        if (missing.length) {
+            return { ok: false, reason: "requires-missing", missing };
+        }
+        reasons.push({ type: "requires", values: requiresAll });
+    }
+
+    const requiresAny = normalizeAwarenessList(predicates.requiresAny ?? predicates.any ?? predicates.oneOf ?? null);
+    if (requiresAny.length) {
+        const present = rosterSet ? requiresAny.filter(name => rosterSet.has(name)) : [];
+        if (present.length === 0) {
+            return { ok: false, reason: "requires-any", missing: requiresAny };
+        }
+        reasons.push({ type: "requires-any", values: requiresAny, matched: present });
+    }
+
+    const excludes = normalizeAwarenessList(predicates.excludes ?? predicates.absent ?? predicates.none ?? predicates.forbid ?? null);
+    if (excludes.length && rosterSet) {
+        const conflicts = excludes.filter(name => rosterSet.has(name));
+        if (conflicts.length) {
+            return { ok: false, reason: "awareness-excludes", conflicts };
+        }
+        reasons.push({ type: "excludes", values: excludes });
+    }
+
+    return {
+        ok: true,
+        reason: reasons.length ? "awareness-match" : "no-awareness",
+        reasons,
+        rosterSize: rosterSet ? rosterSet.size : 0,
+    };
+}
+
+function buildOutfitMatchContext(options, normalizedName, profile) {
+    const context = { name: normalizedName };
+
+    if (options && typeof options.context === "object" && options.context !== null) {
+        Object.assign(context, options.context);
+    }
+
+    if (typeof options?.text === "string") {
+        context.text = options.text;
+    }
+
+    if (!context.matchKind && typeof options?.matchKind === "string") {
+        context.matchKind = options.matchKind;
+    }
+
+    if (!context.text && typeof options?.buffer === "string") {
+        context.text = options.buffer;
+    }
+
+    const bufKey = typeof options?.bufKey === "string" ? options.bufKey : state.currentGenerationKey;
+    let messageState = options?.messageState || null;
+    if (!messageState && bufKey && state.perMessageStates instanceof Map) {
+        messageState = state.perMessageStates.get(bufKey) || null;
+    }
+
+    if (!context.text && bufKey && state.perMessageBuffers instanceof Map) {
+        context.text = state.perMessageBuffers.get(bufKey) || "";
+    }
+
+    if (messageState) {
+        context.messageState = messageState;
+        if (!context.roster && messageState.sceneRoster instanceof Set) {
+            context.roster = messageState.sceneRoster;
+        }
+        if (messageState.outfitRoster instanceof Map) {
+            context.outfitRoster = messageState.outfitRoster;
+        }
+        if (!context.lastSubject && messageState.lastSubject) {
+            context.lastSubject = messageState.lastSubject;
+        }
+    }
+
+    if (!context.roster && profile?.enableSceneRoster && state.topSceneRanking instanceof Map) {
+        const latestRoster = state.topSceneRanking.get(state.currentGenerationKey || "") || [];
+        if (Array.isArray(latestRoster) && latestRoster.length) {
+            context.roster = new Set(latestRoster.map(entry => entry.normalized?.toLowerCase?.() || entry.toLowerCase?.() || entry));
+        }
+    }
+
+    context.rosterNormalized = buildLowercaseSet(context.roster);
+    context.text = String(context.text || "");
+
+    return context;
+}
+
+function resolveOutfitForMatch(rawName, options = {}) {
+    const profile = options?.profile || getActiveProfile();
+    const normalizedName = normalizeCostumeName(rawName);
+    const now = Number.isFinite(options?.now) ? options.now : Date.now();
+
+    if (!normalizedName || !profile) {
+        return {
+            folder: String(options?.fallbackFolder || normalizedName || "").trim(),
+            reason: profile ? "no-name" : "no-profile",
+            normalizedName,
+            resolvedAt: now,
+            variant: null,
+            trigger: null,
+            awareness: { ok: true, reason: "no-awareness", reasons: [] },
+            label: null,
+        };
+    }
+
+    const mapping = findMappingForName(profile, normalizedName);
+    const defaultFolder = String(options?.fallbackFolder || mapping?.defaultFolder || mapping?.folder || normalizedName).trim();
+    const baseResult = {
+        folder: defaultFolder || normalizedName,
+        reason: "default-folder",
+        normalizedName,
+        mapping,
+        variant: null,
+        trigger: null,
+        awareness: { ok: true, reason: "no-awareness", reasons: [] },
+        label: null,
+        resolvedAt: now,
+    };
+
+    if (!profile.enableOutfits || !mapping || !Array.isArray(mapping.outfits) || mapping.outfits.length === 0) {
+        return baseResult;
+    }
+
+    const context = buildOutfitMatchContext(options, normalizedName, profile);
+    const matchKind = typeof context.matchKind === "string" ? context.matchKind.trim().toLowerCase() : (typeof options?.matchKind === "string" ? options.matchKind.trim().toLowerCase() : "");
+
+    for (const variant of mapping.outfits) {
+        if (!variant) continue;
+        const folder = typeof variant.folder === "string" ? variant.folder.trim() : "";
+        if (!folder) continue;
+
+        const rawKinds = variant.matchKinds ?? variant.matchKind ?? variant.kinds ?? variant.kind ?? null;
+        const allowedKinds = Array.isArray(rawKinds) ? rawKinds : (rawKinds ? [rawKinds] : []);
+        if (allowedKinds.length) {
+            const loweredKinds = allowedKinds.map(value => String(value ?? "").trim().toLowerCase()).filter(Boolean);
+            if (!matchKind || (loweredKinds.length && !loweredKinds.includes(matchKind))) {
+                continue;
+            }
+        }
+
+        const triggerResult = evaluateOutfitTriggers(variant, context);
+        if (!triggerResult.matched) {
+            const hasTriggers = Array.isArray(variant.triggers) && variant.triggers.length > 0;
+            if (hasTriggers) {
+                continue;
+            }
+        }
+
+        const awarenessResult = evaluateAwarenessPredicates(variant.awareness, context);
+        if (!awarenessResult.ok) {
+            continue;
+        }
+
+        const label = typeof variant.label === "string" && variant.label.trim()
+            ? variant.label.trim()
+            : (typeof variant.slot === "string" && variant.slot.trim() ? variant.slot.trim() : null);
+
+        return {
+            folder,
+            reason: triggerResult.matched ? "trigger-match" : (awarenessResult.reason !== "no-awareness" ? "awareness-match" : "variant-default"),
+            normalizedName,
+            mapping,
+            variant,
+            trigger: triggerResult.matched ? {
+                pattern: triggerResult.trigger,
+                type: triggerResult.triggerType,
+                index: triggerResult.matchIndex,
+                snippet: triggerResult.snippet,
+            } : null,
+            awareness: awarenessResult,
+            label,
+            resolvedAt: now,
+        };
+    }
+
+    return baseResult;
+}
+
+function ensureCharacterOutfitCache(runtimeState) {
+    const target = runtimeState && typeof runtimeState === "object" ? runtimeState : state;
+    if (!(target.characterOutfits instanceof Map)) {
+        target.characterOutfits = new Map();
+    }
+    if (target !== state) {
+        return target.characterOutfits;
+    }
+    state.characterOutfits = target.characterOutfits;
+    return target.characterOutfits;
+}
+
+function updateMessageOutfitRoster(normalizedKey, outfitInfo, opts, profile) {
+    if (!normalizedKey) {
+        return;
+    }
+
+    const bufKey = typeof opts?.bufKey === "string" ? opts.bufKey : state.currentGenerationKey;
+    let msgState = opts?.messageState || null;
+    if (!msgState && bufKey && state.perMessageStates instanceof Map) {
+        msgState = state.perMessageStates.get(bufKey) || null;
+    }
+
+    if (!msgState) {
+        return;
+    }
+
+    if (!(msgState.outfitRoster instanceof Map)) {
+        msgState.outfitRoster = new Map();
+    }
+
+    if (!outfitInfo || !outfitInfo.folder) {
+        msgState.outfitRoster.delete(normalizedKey);
+        return;
+    }
+
+    msgState.outfitRoster.set(normalizedKey, {
+        folder: outfitInfo.folder,
+        label: outfitInfo.label || null,
+        reason: outfitInfo.reason || "default-folder",
+        trigger: outfitInfo.trigger?.pattern || null,
+        updatedAt: Number.isFinite(outfitInfo.resolvedAt) ? outfitInfo.resolvedAt : Date.now(),
+        awareness: outfitInfo.awareness?.reason || "no-awareness",
+    });
+
+    if (typeof msgState.outfitTTL === "number") {
+        msgState.outfitTTL = Number(profile?.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
+    }
+}
+
+function summarizeOutfitDecision(outfit, { separator = ' • ', includeLabel = true, includeFolder = false } = {}) {
+    if (!outfit || typeof outfit !== 'object') {
+        return '';
+    }
+
+    const parts = [];
+    if (includeFolder && outfit.folder) {
+        parts.push(`folder: ${outfit.folder}`);
+    }
+    if (includeLabel && outfit.label) {
+        parts.push(`label: ${outfit.label}`);
+    }
+    if (outfit.reason) {
+        parts.push(`reason: ${outfit.reason}`);
+    }
+    if (outfit.trigger && typeof outfit.trigger === 'object' && outfit.trigger.pattern) {
+        parts.push(`trigger: ${outfit.trigger.pattern}`);
+    }
+    const awareness = outfit.awareness;
+    if (awareness) {
+        if (typeof awareness === 'string') {
+            if (awareness && awareness !== 'no-awareness') {
+                parts.push(`awareness: ${awareness}`);
+            }
+        } else if (typeof awareness === 'object') {
+            const reason = awareness.reason || '';
+            const details = Array.isArray(awareness.reasons)
+                ? awareness.reasons.map(entry => entry?.type || '').filter(Boolean).join(', ')
+                : '';
+            if (reason && reason !== 'no-awareness') {
+                parts.push(`awareness: ${details ? `${reason} (${details})` : reason}`);
+            }
+        }
+    }
+    return parts.join(separator);
 }
 
 function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOverride = null) {
@@ -1104,21 +1426,77 @@ function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOver
     const decision = { now };
 
     decision.name = normalizeCostumeName(rawName);
-    const currentName = normalizeCostumeName(runtimeState.lastIssuedCostume || "");
+    const normalizedKey = decision.name.toLowerCase();
 
-    if (!opts.isLock && currentName && currentName.toLowerCase() === decision.name.toLowerCase()) {
-        return { shouldSwitch: false, reason: 'already-active', name: decision.name, now };
-    }
-
-    if (!opts.isLock && profile.globalCooldownMs > 0 && (now - (runtimeState.lastSwitchTimestamp || 0) < profile.globalCooldownMs)) {
-        return { shouldSwitch: false, reason: 'global-cooldown', name: decision.name, now };
-    }
-
-    const lookupKey = decision.name.toLowerCase();
+    const lookupKey = normalizedKey;
     const mapped = state.mappingLookup instanceof Map ? state.mappingLookup.get(lookupKey) : null;
     let mappedFolder = String(mapped ?? decision.name).trim();
     if (!mappedFolder) {
         mappedFolder = decision.name;
+    }
+
+    if (profile.enableOutfits) {
+        const outfitResult = resolveOutfitForMatch(decision.name, {
+            profile,
+            matchKind: opts.matchKind,
+            bufKey: opts.bufKey,
+            messageState: opts.messageState,
+            context: opts.context,
+            now,
+            fallbackFolder: mappedFolder,
+        });
+        if (outfitResult && outfitResult.folder) {
+            mappedFolder = outfitResult.folder;
+        }
+        if (outfitResult) {
+            decision.outfit = outfitResult;
+        }
+    }
+
+    const currentName = normalizeCostumeName(runtimeState.lastIssuedCostume || "");
+    const lastIssuedFolder = typeof runtimeState.lastIssuedFolder === "string" ? runtimeState.lastIssuedFolder.trim() : "";
+
+    if (!opts.isLock && !profile.enableOutfits && currentName && currentName.toLowerCase() === decision.name.toLowerCase()) {
+        updateMessageOutfitRoster(normalizedKey, decision.outfit, opts, profile);
+        return { shouldSwitch: false, reason: 'already-active', name: decision.name, now };
+    }
+
+    if (!opts.isLock && profile.enableOutfits) {
+        const outfitCache = ensureCharacterOutfitCache(runtimeState);
+        const cached = outfitCache.get(normalizedKey);
+        const cachedFolder = typeof cached?.folder === "string" ? cached.folder.trim() : null;
+        const normalizedMapped = mappedFolder ? mappedFolder.trim() : "";
+        if (cachedFolder && normalizedMapped && cachedFolder.toLowerCase() === normalizedMapped.toLowerCase()) {
+            const outfitInfo = decision.outfit || { folder: mappedFolder, reason: 'outfit-unchanged', resolvedAt: now };
+            outfitInfo.folder = mappedFolder;
+            outfitInfo.reason = outfitInfo.reason || 'outfit-unchanged';
+            outfitInfo.resolvedAt = now;
+            decision.outfit = outfitInfo;
+            updateMessageOutfitRoster(normalizedKey, outfitInfo, opts, profile);
+            return {
+                shouldSwitch: false,
+                reason: 'outfit-unchanged',
+                name: decision.name,
+                folder: mappedFolder,
+                outfit: outfitInfo,
+                now,
+            };
+        }
+        if (
+            lastIssuedFolder &&
+            normalizedMapped &&
+            lastIssuedFolder.toLowerCase() === normalizedMapped.toLowerCase() &&
+            currentName &&
+            currentName.toLowerCase() === decision.name.toLowerCase()
+        ) {
+            updateMessageOutfitRoster(normalizedKey, decision.outfit, opts, profile);
+            return { shouldSwitch: false, reason: 'already-active', name: decision.name, folder: mappedFolder, now };
+        }
+    }
+
+    if (!opts.isLock && profile.globalCooldownMs > 0 && (now - (runtimeState.lastSwitchTimestamp || 0) < profile.globalCooldownMs)) {
+        updateMessageOutfitRoster(normalizedKey, decision.outfit, opts, profile);
+        return { shouldSwitch: false, reason: 'global-cooldown', name: decision.name, folder: mappedFolder, now };
     }
 
     const lastTriggerTimes = ensureMap(runtimeState.lastTriggerTimes);
@@ -1134,6 +1512,7 @@ function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOver
     if (!opts.isLock && profile.perTriggerCooldownMs > 0) {
         const lastSuccess = lastTriggerTimes.get(mappedFolder) || 0;
         if (now - lastSuccess < profile.perTriggerCooldownMs) {
+            updateMessageOutfitRoster(normalizedKey, decision.outfit, opts, profile);
             return { shouldSwitch: false, reason: 'per-trigger-cooldown', name: decision.name, folder: mappedFolder, now };
         }
     }
@@ -1141,17 +1520,39 @@ function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOver
     if (!opts.isLock && profile.failedTriggerCooldownMs > 0) {
         const lastFailed = failedTriggerTimes.get(mappedFolder) || 0;
         if (now - lastFailed < profile.failedTriggerCooldownMs) {
+            updateMessageOutfitRoster(normalizedKey, decision.outfit, opts, profile);
             return { shouldSwitch: false, reason: 'failed-trigger-cooldown', name: decision.name, folder: mappedFolder, now };
         }
     }
 
-    return { shouldSwitch: true, name: decision.name, folder: mappedFolder, now };
+    const outfitInfo = decision.outfit || {
+        folder: mappedFolder,
+        reason: profile.enableOutfits ? 'variant-default' : 'default-folder',
+        resolvedAt: now,
+    };
+    outfitInfo.folder = mappedFolder;
+    outfitInfo.resolvedAt = now;
+    decision.outfit = outfitInfo;
+    updateMessageOutfitRoster(normalizedKey, outfitInfo, opts, profile);
+
+    return { shouldSwitch: true, name: decision.name, folder: mappedFolder, outfit: outfitInfo, now };
 }
 
 async function issueCostumeForName(name, opts = {}) {
     const decision = evaluateSwitchDecision(name, opts);
+    const normalizedKey = decision?.name ? decision.name.toLowerCase() : null;
+
     if (!decision.shouldSwitch) {
         debugLog("Switch skipped for", name, "reason:", decision.reason || 'n/a');
+        if (decision.reason === 'outfit-unchanged' && decision.outfit?.folder && normalizedKey) {
+            const outfitCache = ensureCharacterOutfitCache(state);
+            outfitCache.set(normalizedKey, {
+                folder: decision.outfit.folder,
+                reason: decision.outfit.reason,
+                label: decision.outfit.label || null,
+                updatedAt: decision.now,
+            });
+        }
         return;
     }
 
@@ -1161,7 +1562,19 @@ async function issueCostumeForName(name, opts = {}) {
         await executeSlashCommandsOnChatInput(command);
         state.lastTriggerTimes.set(decision.folder, decision.now);
         state.lastIssuedCostume = decision.name;
+        state.lastIssuedFolder = decision.folder;
         state.lastSwitchTimestamp = decision.now;
+        const outfitCache = ensureCharacterOutfitCache(state);
+        if (normalizedKey) {
+            outfitCache.set(normalizedKey, {
+                folder: decision.folder,
+                reason: decision.outfit?.reason || 'manual',
+                label: decision.outfit?.label || null,
+                updatedAt: decision.now,
+            });
+        }
+        const profile = getActiveProfile();
+        updateMessageOutfitRoster(normalizedKey, decision.outfit, opts, profile);
         showStatus(`Switched -> <b>${escapeHtml(decision.folder)}</b>`, 'success');
     } catch (err) {
         state.failedTriggerTimes.set(decision.folder, decision.now);
@@ -1192,6 +1605,7 @@ const uiMapping = {
     detectPossessive: { selector: '#cs-detect-possessive', type: 'checkbox' },
     detectPronoun: { selector: '#cs-detect-pronoun', type: 'checkbox' },
     detectGeneral: { selector: '#cs-detect-general', type: 'checkbox' },
+    enableOutfits: { selector: '#cs-outfits-enable', type: 'checkbox' },
     attributionVerbs: { selector: '#cs-attribution-verbs', type: 'csvTextarea' },
     actionVerbs: { selector: '#cs-action-verbs', type: 'csvTextarea' },
     pronounVocabulary: { selector: '#cs-pronoun-vocabulary', type: 'csvTextarea' },
@@ -1675,21 +2089,1022 @@ function saveCurrentProfileData() {
     $("#cs-mappings-tbody tr").each(function () {
         const name = $(this).find(".map-name").val().trim();
         const folder = $(this).find(".map-folder").val().trim();
-        if (name && folder) profileData.mappings.push({ name, folder });
+        const outfitsData = $(this).data('outfits');
+        const outfits = Array.isArray(outfitsData)
+            ? (typeof structuredClone === 'function' ? structuredClone(outfitsData) : outfitsData.slice())
+            : [];
+        const mapping = normalizeMappingEntry({ name, defaultFolder: folder, outfits });
+        if (mapping.name && mapping.defaultFolder) {
+            profileData.mappings.push(mapping);
+        }
     });
     return profileData;
+}
+
+const OUTFIT_MATCH_KIND_OPTIONS = [
+    { value: "speaker", label: "Speaker tags (Name: \"Hello\")" },
+    { value: "attribution", label: "Attribution cues (\"...\" she said)" },
+    { value: "action", label: "Action narration (He nodded)" },
+    { value: "pronoun", label: "Pronoun resolution" },
+    { value: "vocative", label: "Vocative mentions (\"Hey, Alice!\")" },
+    { value: "possessive", label: "Possessive mentions (Alice's staff)" },
+    { value: "name", label: "General name hits (any mention)" },
+];
+
+function cloneOutfitList(outfits) {
+    if (!Array.isArray(outfits)) {
+        return [];
+    }
+
+    const cloned = [];
+    outfits.forEach((entry) => {
+        if (entry == null) {
+            return;
+        }
+        if (typeof entry === 'string') {
+            const trimmed = entry.trim();
+            if (trimmed) {
+                cloned.push(trimmed);
+            }
+            return;
+        }
+        if (typeof structuredClone === 'function') {
+            try {
+                cloned.push(structuredClone(entry));
+                return;
+            } catch (err) {
+                // Fall back to JSON-based cloning
+            }
+        }
+        try {
+            cloned.push(JSON.parse(JSON.stringify(entry)));
+        } catch (err) {
+            if (typeof entry === 'object') {
+                cloned.push({ ...entry });
+            }
+        }
+    });
+
+    return cloned;
+}
+
+function ensureAutoSaveState() {
+    if (!state.autoSave) {
+        state.autoSave = {
+            timer: null,
+            pendingReasons: new Set(),
+            requiresRecompile: false,
+            requiresMappingRebuild: false,
+            requiresFocusLockRefresh: false,
+            lastNoticeAt: new Map(),
+        };
+    }
+    return state.autoSave;
+}
+
+function resetAutoSaveState() {
+    const auto = ensureAutoSaveState();
+    if (auto.timer) {
+        clearTimeout(auto.timer);
+        auto.timer = null;
+    }
+    auto.pendingReasons.clear();
+    auto.requiresRecompile = false;
+    auto.requiresMappingRebuild = false;
+    auto.requiresFocusLockRefresh = false;
+}
+
+function syncMappingRowsWithProfile(profile) {
+    const rows = $("#cs-mappings-tbody tr");
+    if (!rows.length) {
+        return;
+    }
+    rows.each(function(index) {
+        const mapping = Array.isArray(profile?.mappings) ? profile.mappings[index] : null;
+        if (!mapping) {
+            $(this).data('outfits', []);
+            return;
+        }
+        const outfits = cloneOutfitList(mapping.outfits);
+        $(this).data('outfits', outfits);
+    });
+}
+
+function formatAutoSaveReason(key) {
+    if (!key) {
+        return 'changes';
+    }
+    if (AUTO_SAVE_REASON_OVERRIDES[key]) {
+        return AUTO_SAVE_REASON_OVERRIDES[key];
+    }
+    if (key.startsWith('priority')) {
+        return 'scoring weights';
+    }
+    if (key.includes('roster')) {
+        return 'roster tuning';
+    }
+    if (key.includes('weight')) {
+        return 'scoring weights';
+    }
+    return key.replace(/([A-Z])/g, ' $1').trim().toLowerCase();
+}
+
+function summarizeAutoSaveReasons(reasonSet) {
+    const list = Array.from(reasonSet || []).filter(Boolean);
+    if (!list.length) {
+        return 'changes';
+    }
+    if (list.length === 1) {
+        return list[0];
+    }
+    const head = list.slice(0, -1).join(', ');
+    const tail = list[list.length - 1];
+    return head ? `${head} and ${tail}` : tail;
+}
+
+function announceAutoSaveIntent(target, reason, message, key) {
+    const auto = ensureAutoSaveState();
+    const noticeKey = key
+        || target?.dataset?.changeNoticeKey
+        || target?.id
+        || target?.name
+        || (reason ? reason.replace(/\s+/g, '-') : 'auto-save');
+    const now = Date.now();
+    const last = auto.lastNoticeAt.get(noticeKey);
+    if (last && now - last < AUTO_SAVE_NOTICE_COOLDOWN_MS) {
+        return;
+    }
+    auto.lastNoticeAt.set(noticeKey, now);
+    const noticeMessage = message
+        || target?.dataset?.changeNotice
+        || (reason ? `Auto-saving ${reason}…` : 'Auto-saving changes…');
+    showStatus(noticeMessage, 'info', 2000);
+}
+
+function scheduleProfileAutoSave(options = {}) {
+    const auto = ensureAutoSaveState();
+    const reasonText = options.reason || formatAutoSaveReason(options.key);
+    if (reasonText) {
+        auto.pendingReasons.add(reasonText);
+    }
+    if (options.requiresRecompile) {
+        auto.requiresRecompile = true;
+    }
+    if (options.requiresMappingRebuild) {
+        auto.requiresMappingRebuild = true;
+    }
+    if (options.requiresFocusLockRefresh) {
+        auto.requiresFocusLockRefresh = true;
+    }
+    if (options.element || options.noticeMessage || reasonText) {
+        announceAutoSaveIntent(options.element, reasonText, options.noticeMessage, options.noticeKey || options.key);
+    }
+    if (auto.timer) {
+        clearTimeout(auto.timer);
+    }
+    auto.timer = setTimeout(() => {
+        flushScheduledProfileAutoSave({});
+    }, AUTO_SAVE_DEBOUNCE_MS);
+}
+
+function flushScheduledProfileAutoSave({ overrideMessage, showStatusMessage = true, force = false } = {}) {
+    const auto = ensureAutoSaveState();
+    const hasPending = auto.pendingReasons.size > 0
+        || auto.requiresRecompile
+        || auto.requiresMappingRebuild
+        || auto.requiresFocusLockRefresh;
+    if (!hasPending && !force) {
+        return false;
+    }
+    const summary = summarizeAutoSaveReasons(auto.pendingReasons);
+    const message = overrideMessage !== undefined
+        ? overrideMessage
+        : (hasPending ? `Auto-saved ${summary}.` : null);
+    return commitProfileChanges({
+        message,
+        showStatusMessage: showStatusMessage && Boolean(message),
+        recompile: auto.requiresRecompile,
+        rebuildMappings: auto.requiresMappingRebuild && !auto.requiresRecompile,
+        refreshFocusLock: auto.requiresFocusLockRefresh,
+    });
+}
+
+function commitProfileChanges({
+    message,
+    messageType = 'success',
+    recompile = false,
+    rebuildMappings = false,
+    refreshFocusLock = false,
+    showStatusMessage = true,
+} = {}) {
+    const profile = getActiveProfile();
+    if (!profile) {
+        resetAutoSaveState();
+        return false;
+    }
+    const normalized = normalizeProfile(saveCurrentProfileData(), PROFILE_DEFAULTS);
+    const mappings = Array.isArray(normalized.mappings) ? normalized.mappings : [];
+    mappings.forEach(ensureMappingCardId);
+    Object.assign(profile, normalized);
+    profile.mappings = mappings;
+    syncMappingRowsWithProfile(profile);
+    if (recompile) {
+        recompileRegexes();
+        refreshCoverageFromLastReport();
+    } else if (rebuildMappings) {
+        rebuildMappingLookup(profile);
+    }
+    if (refreshFocusLock) {
+        updateFocusLockUI();
+    }
+    resetAutoSaveState();
+    if (showStatusMessage && message) {
+        persistSettings(message, messageType);
+    } else {
+        saveSettingsDebounced();
+    }
+    return true;
+}
+
+function handleAutoSaveFieldEvent(event, key) {
+    if (!event || !key) {
+        return;
+    }
+    scheduleProfileAutoSave({
+        key,
+        element: event.currentTarget,
+        requiresRecompile: AUTO_SAVE_RECOMPILE_KEYS.has(key),
+        requiresFocusLockRefresh: AUTO_SAVE_FOCUS_LOCK_KEYS.has(key),
+    });
+}
+
+function gatherVariantStringList(value) {
+    const results = [];
+    const visit = (entry) => {
+        if (entry == null) {
+            return;
+        }
+        if (Array.isArray(entry)) {
+            entry.forEach(visit);
+            return;
+        }
+        if (typeof entry === "string") {
+            entry.split(/\r?\n|,/).forEach((part) => {
+                const trimmed = part.trim();
+                if (trimmed) {
+                    results.push(trimmed);
+                }
+            });
+        }
+    };
+    visit(value);
+    return [...new Set(results)];
+}
+
+function normalizeOutfitVariant(rawVariant = {}) {
+    if (rawVariant == null) {
+        return { folder: '', triggers: [] };
+    }
+
+    if (typeof rawVariant === 'string') {
+        return { folder: rawVariant.trim(), triggers: [] };
+    }
+
+    let variant;
+    if (typeof structuredClone === 'function') {
+        try {
+            variant = structuredClone(rawVariant);
+        } catch (err) {
+            // Ignore and fall back to JSON cloning
+        }
+    }
+    if (!variant) {
+        try {
+            variant = JSON.parse(JSON.stringify(rawVariant));
+        } catch (err) {
+            variant = { ...rawVariant };
+        }
+    }
+
+    const normalized = typeof variant === 'object' && variant !== null ? variant : {};
+    const folder = typeof normalized.folder === 'string' ? normalized.folder.trim() : '';
+    normalized.folder = folder;
+
+    const slot = typeof normalized.slot === 'string' ? normalized.slot.trim() : '';
+    const labelSource = typeof normalized.label === 'string' ? normalized.label.trim()
+        : (typeof normalized.name === 'string' ? normalized.name.trim()
+            : slot);
+    if (labelSource) {
+        normalized.label = labelSource;
+    } else {
+        delete normalized.label;
+    }
+    if (slot) {
+        normalized.slot = slot;
+    } else {
+        delete normalized.slot;
+    }
+
+    const uniqueTriggers = gatherVariantStringList([
+        normalized.triggers,
+        normalized.patterns,
+        normalized.matchers,
+        normalized.trigger,
+        normalized.matcher,
+    ]);
+    normalized.triggers = uniqueTriggers;
+    delete normalized.patterns;
+    delete normalized.matchers;
+    delete normalized.trigger;
+    delete normalized.matcher;
+
+    const matchKinds = gatherVariantStringList([
+        normalized.matchKinds,
+        normalized.matchKind,
+        normalized.kinds,
+        normalized.kind,
+    ]).map((value) => value.toLowerCase());
+    const uniqueMatchKinds = [...new Set(matchKinds)];
+    if (uniqueMatchKinds.length) {
+        normalized.matchKinds = uniqueMatchKinds;
+    } else {
+        delete normalized.matchKinds;
+    }
+    delete normalized.matchKind;
+    delete normalized.kinds;
+    delete normalized.kind;
+
+    const awarenessSource = typeof normalized.awareness === 'object' && normalized.awareness !== null
+        ? normalized.awareness
+        : {};
+    const normalizedAwareness = {};
+    const requiresAll = gatherVariantStringList([
+        awarenessSource.requires,
+        awarenessSource.requiresAll,
+        awarenessSource.all,
+        normalized.requires,
+        normalized.requiresAll,
+        normalized.all,
+    ]);
+    if (requiresAll.length) {
+        normalizedAwareness.requires = requiresAll;
+    }
+    const requiresAny = gatherVariantStringList([
+        awarenessSource.requiresAny,
+        awarenessSource.any,
+        awarenessSource.oneOf,
+        normalized.requiresAny,
+        normalized.any,
+        normalized.oneOf,
+    ]);
+    if (requiresAny.length) {
+        normalizedAwareness.requiresAny = requiresAny;
+    }
+    const excludes = gatherVariantStringList([
+        awarenessSource.excludes,
+        awarenessSource.absent,
+        awarenessSource.none,
+        awarenessSource.forbid,
+        normalized.excludes,
+        normalized.absent,
+        normalized.none,
+        normalized.forbid,
+    ]);
+    if (excludes.length) {
+        normalizedAwareness.excludes = excludes;
+    }
+    if (Object.keys(normalizedAwareness).length) {
+        normalized.awareness = normalizedAwareness;
+    } else {
+        delete normalized.awareness;
+    }
+    delete normalized.requires;
+    delete normalized.requiresAll;
+    delete normalized.all;
+    delete normalized.requiresAny;
+    delete normalized.any;
+    delete normalized.oneOf;
+    delete normalized.excludes;
+    delete normalized.absent;
+    delete normalized.none;
+    delete normalized.forbid;
+
+    return normalized;
+}
+
+function extractDirectoryFromFileList(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) {
+        return '';
+    }
+    const file = files[0];
+    if (file && typeof file.webkitRelativePath === 'string' && file.webkitRelativePath) {
+        const segments = file.webkitRelativePath.split('/');
+        if (segments.length > 1) {
+            segments.pop();
+            return segments.join('/');
+        }
+        return file.webkitRelativePath;
+    }
+    if (file && typeof file.name === 'string') {
+        return file.name;
+    }
+    return '';
+}
+
+function buildVariantFolderPath(characterName, folderPath) {
+    const rawFolder = (folderPath || "").trim();
+    if (!rawFolder) {
+        return "";
+    }
+    let normalizedFolder = rawFolder.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!normalizedFolder) {
+        return "";
+    }
+    const rawName = (characterName || "").trim();
+    if (!rawName) {
+        return normalizedFolder;
+    }
+    const normalizedName = rawName.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!normalizedName) {
+        return normalizedFolder;
+    }
+    if (normalizedFolder === normalizedName || normalizedFolder.startsWith(`${normalizedName}/`)) {
+        return normalizedFolder;
+    }
+    return `${normalizedName}/${normalizedFolder}`;
+}
+
+function getMappingRow(idx) {
+    const rows = $("#cs-mappings-tbody tr");
+    const row = rows.eq(idx);
+    return row.length ? row : $();
+}
+
+function syncMappingRowName(idx, name) {
+    const row = getMappingRow(idx);
+    if (!row.length) return;
+    row.find('.map-name').val(name);
+}
+
+function syncMappingRowFolder(idx, folder) {
+    const row = getMappingRow(idx);
+    if (!row.length) return;
+    row.find('.map-folder').val(folder);
+}
+
+function syncMappingRowOutfits(idx, outfits) {
+    const row = getMappingRow(idx);
+    if (!row.length) return;
+    row.data('outfits', cloneOutfitList(outfits));
+}
+
+function updateOutfitLabEnabledState(enabled) {
+    const editor = $('#cs-outfit-editor');
+    const notice = $('#cs-outfit-disabled-notice');
+    const addButton = $('#cs-outfit-add-character');
+    const isEnabled = Boolean(enabled);
+    if (editor.length) {
+        editor.toggleClass('is-disabled', !isEnabled);
+        editor.attr('aria-disabled', String(!isEnabled));
+    }
+    if (notice.length) {
+        notice.prop('hidden', isEnabled);
+    }
+    if (addButton.length) {
+        addButton.prop('disabled', !isEnabled);
+    }
+}
+
+function createOutfitVariantElement(profile, mapping, mappingIdx, variant, variantIndex) {
+    const normalized = (mapping?.outfits && mapping.outfits[variantIndex] === variant)
+        ? variant
+        : normalizeOutfitVariant(variant);
+
+    if (!Array.isArray(mapping.outfits)) {
+        mapping.outfits = [];
+    }
+    mapping.outfits[variantIndex] = normalized;
+
+    const variantEl = $('<div>')
+        .addClass('cs-outfit-variant')
+        .attr('data-variant-index', variantIndex)
+        .data('variant', normalized);
+
+    const markVariantDirty = (element) => {
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element,
+            requiresMappingRebuild: true,
+        });
+    };
+
+    const header = $('<div>').addClass('cs-outfit-variant-header');
+    header.append($('<h4>').text(`Variation ${variantIndex + 1}`));
+    const removeButton = $('<button>', {
+        type: 'button',
+        class: 'menu_button interactable cs-outfit-variant-remove cs-button-danger',
+    })
+        .attr('data-change-notice', 'Removing this variation auto-saves your mappings.')
+        .attr('data-change-notice-key', `variant-remove-${mappingIdx}`)
+        .append($('<i>').addClass('fa-solid fa-trash-can'), $('<span>').text('Remove'));
+    header.append(removeButton);
+    variantEl.append(header);
+
+    const grid = $('<div>').addClass('cs-outfit-variant-grid');
+    const labelId = `cs-outfit-variant-label-${mappingIdx}-${variantIndex}`;
+    const labelField = $('<div>').addClass('cs-field')
+        .append($('<label>', { for: labelId, text: 'Label (optional)' }));
+    const labelInput = $('<input>', {
+        id: labelId,
+        type: 'text',
+        placeholder: 'Display name',
+    }).addClass('text_pole cs-outfit-variant-label')
+        .val(normalized.label || normalized.slot || '');
+    labelField.append(labelInput);
+
+    const folderId = `cs-outfit-variant-folder-${mappingIdx}-${variantIndex}`;
+    const folderField = $('<div>').addClass('cs-field')
+        .append($('<label>', { for: folderId, text: 'Folder' }));
+    const folderRow = $('<div>').addClass('cs-outfit-folder-row');
+    const folderInput = $('<input>', {
+        id: folderId,
+        type: 'text',
+        placeholder: 'Enter folder path…',
+    }).addClass('text_pole cs-outfit-variant-folder')
+        .val(normalized.folder || '');
+    const folderPicker = $('<input>', { type: 'file', hidden: true });
+    folderPicker.attr({ webkitdirectory: 'true', directory: 'true', multiple: 'true' });
+    const folderButton = $('<button>', {
+        type: 'button',
+        class: 'menu_button interactable cs-outfit-pick-folder',
+    }).append($('<i>').addClass('fa-solid fa-folder-open'), $('<span>').text('Pick Folder'))
+        .on('click', () => folderPicker.trigger('click'));
+    folderPicker.on('change', function() {
+        const folderPath = extractDirectoryFromFileList(this.files || []);
+        if (folderPath) {
+            const combinedPath = buildVariantFolderPath(mapping?.name, folderPath);
+            folderInput.val(combinedPath);
+            folderInput.trigger('input');
+        }
+        $(this).val('');
+    });
+    folderRow.append(folderInput, folderButton, folderPicker);
+    folderField.append(folderRow);
+
+    grid.append(labelField, folderField);
+    variantEl.append(grid);
+
+    const triggerId = `cs-outfit-variant-triggers-${mappingIdx}-${variantIndex}`;
+    const triggerField = $('<div>').addClass('cs-field')
+        .append($('<label>', { for: triggerId, text: 'Triggers' }));
+    const triggerTextarea = $('<textarea>', {
+        id: triggerId,
+        rows: 3,
+        placeholder: 'One trigger per line',
+    }).addClass('text_pole cs-outfit-variant-triggers')
+        .val((normalized.triggers || []).join('\n'));
+    triggerField.append(triggerTextarea);
+    triggerField.append($('<small>').text('Trigger keywords or /regex/ patterns that activate this outfit.'));
+    variantEl.append(triggerField);
+
+    const matchKindField = $('<div>').addClass('cs-field cs-outfit-matchkind');
+    matchKindField.append($('<label>').text('Match Types (optional)'));
+    const matchKindList = $('<div>').addClass('cs-outfit-matchkind-options');
+    const selectedKinds = new Set((Array.isArray(normalized.matchKinds) ? normalized.matchKinds : []).map((value) => String(value).toLowerCase()));
+    OUTFIT_MATCH_KIND_OPTIONS.forEach((option) => {
+        const checkboxId = `cs-outfit-variant-kind-${mappingIdx}-${variantIndex}-${option.value}`;
+        const optionLabel = $('<label>', { class: 'cs-outfit-matchkind-option', for: checkboxId });
+        const checkbox = $('<input>', {
+            type: 'checkbox',
+            id: checkboxId,
+            value: option.value,
+        }).prop('checked', selectedKinds.has(option.value));
+        const text = $('<span>').text(option.label);
+        optionLabel.append(checkbox, text);
+        matchKindList.append(optionLabel);
+        checkbox.on('change', () => {
+            const checked = matchKindList.find('input:checked').map((_, el) => el.value).get();
+            if (checked.length) {
+                normalized.matchKinds = checked;
+            } else {
+                delete normalized.matchKinds;
+            }
+            syncMappingRowOutfits(mappingIdx, mapping.outfits);
+            markVariantDirty(checkbox[0]);
+        });
+    });
+    matchKindField.append(matchKindList);
+    matchKindField.append($('<small>').text('Limit this variant to detections from specific match types. Leave unchecked to accept any match.'));
+    variantEl.append(matchKindField);
+
+    const awarenessField = $('<div>').addClass('cs-field cs-outfit-awareness');
+    awarenessField.append($('<label>').text('Scene Awareness (optional)'));
+    const awarenessGrid = $('<div>').addClass('cs-outfit-awareness-grid');
+    const awarenessState = typeof normalized.awareness === 'object' && normalized.awareness !== null ? normalized.awareness : {};
+    const requiresId = `cs-outfit-variant-requires-${mappingIdx}-${variantIndex}`;
+    const requiresField = $('<div>').addClass('cs-field cs-outfit-awareness-field')
+        .append($('<label>', { for: requiresId, text: 'Requires all of…' }));
+    const requiresTextarea = $('<textarea>', {
+        id: requiresId,
+        rows: 2,
+        placeholder: 'One name per line',
+    }).addClass('text_pole cs-outfit-awareness-input')
+        .val(Array.isArray(awarenessState.requires) ? awarenessState.requires.join('\n') : '');
+    requiresField.append(requiresTextarea);
+    requiresField.append($('<small>').text('Every listed character must be active in the scene roster.'));
+
+    const anyId = `cs-outfit-variant-any-${mappingIdx}-${variantIndex}`;
+    const anyField = $('<div>').addClass('cs-field cs-outfit-awareness-field')
+        .append($('<label>', { for: anyId, text: 'Requires any of…' }));
+    const anyTextarea = $('<textarea>', {
+        id: anyId,
+        rows: 2,
+        placeholder: 'One name per line',
+    }).addClass('text_pole cs-outfit-awareness-input')
+        .val(Array.isArray(awarenessState.requiresAny) ? awarenessState.requiresAny.join('\n') : '');
+    anyField.append(anyTextarea);
+    anyField.append($('<small>').text('At least one of these characters must be active.'));
+
+    const excludesId = `cs-outfit-variant-excludes-${mappingIdx}-${variantIndex}`;
+    const excludesField = $('<div>').addClass('cs-field cs-outfit-awareness-field')
+        .append($('<label>', { for: excludesId, text: 'Exclude when present' }));
+    const excludesTextarea = $('<textarea>', {
+        id: excludesId,
+        rows: 2,
+        placeholder: 'One name per line',
+    }).addClass('text_pole cs-outfit-awareness-input')
+        .val(Array.isArray(awarenessState.excludes) ? awarenessState.excludes.join('\n') : '');
+    excludesField.append(excludesTextarea);
+    excludesField.append($('<small>').text('Leave blank if the variant should ignore scene roster conflicts.'));
+
+    awarenessGrid.append(requiresField, anyField, excludesField);
+    awarenessField.append(awarenessGrid);
+    awarenessField.append($('<small>').text('Scene awareness relies on the Scene Roster detector setting. Names are matched case-insensitively.'));
+    variantEl.append(awarenessField);
+
+    const parseListInput = (value) => value
+        .split(/\r?\n|,/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+    const updateAwarenessState = () => {
+        const requiresList = parseListInput(requiresTextarea.val());
+        const anyList = parseListInput(anyTextarea.val());
+        const excludesList = parseListInput(excludesTextarea.val());
+        const next = {};
+        if (requiresList.length) {
+            next.requires = requiresList;
+        }
+        if (anyList.length) {
+            next.requiresAny = anyList;
+        }
+        if (excludesList.length) {
+            next.excludes = excludesList;
+        }
+        if (Object.keys(next).length) {
+            normalized.awareness = next;
+        } else {
+            delete normalized.awareness;
+        }
+        syncMappingRowOutfits(mappingIdx, mapping.outfits);
+    };
+
+    const handleAwarenessInput = function() {
+        updateAwarenessState();
+        markVariantDirty(this);
+    };
+
+    requiresTextarea.on('input', handleAwarenessInput);
+    anyTextarea.on('input', handleAwarenessInput);
+    excludesTextarea.on('input', handleAwarenessInput);
+
+    labelInput.on('input', () => {
+        const value = labelInput.val().trim();
+        if (value) {
+            normalized.label = value;
+        } else {
+            delete normalized.label;
+        }
+        syncMappingRowOutfits(mappingIdx, mapping.outfits);
+        markVariantDirty(labelInput[0]);
+    });
+
+    folderInput.on('input', () => {
+        normalized.folder = folderInput.val().trim();
+        syncMappingRowOutfits(mappingIdx, mapping.outfits);
+        markVariantDirty(folderInput[0]);
+    });
+
+    triggerTextarea.on('input', () => {
+        const triggers = triggerTextarea.val()
+            .split(/\r?\n/)
+            .map(value => value.trim())
+            .filter(Boolean);
+        normalized.triggers = triggers;
+        syncMappingRowOutfits(mappingIdx, mapping.outfits);
+        markVariantDirty(triggerTextarea[0]);
+    });
+
+    removeButton.on('click', () => {
+        announceAutoSaveIntent(removeButton[0], 'character mappings', removeButton[0].dataset.changeNotice, removeButton[0].dataset.changeNoticeKey);
+        const activeProfile = profile || getActiveProfile();
+        if (!activeProfile?.mappings?.[mappingIdx]) {
+            return;
+        }
+        activeProfile.mappings[mappingIdx].outfits.splice(variantIndex, 1);
+        syncMappingRowOutfits(mappingIdx, activeProfile.mappings[mappingIdx].outfits);
+        variantEl.remove();
+        const card = $(`.cs-outfit-card[data-idx="${mappingIdx}"]`);
+        const variantContainer = card.find('.cs-outfit-variants');
+        variantContainer.find('.cs-outfit-variant').each(function(index) {
+            $(this).attr('data-variant-index', index);
+            $(this).find('.cs-outfit-variant-header h4').text(`Variation ${index + 1}`);
+        });
+        if (!variantContainer.find('.cs-outfit-variant').length) {
+            variantContainer.append($('<div>').addClass('cs-outfit-empty-variants').text('No variations yet. Add one to test trigger-based outfits.'));
+        }
+        markVariantDirty(removeButton[0]);
+    });
+
+    return variantEl;
+}
+
+function createOutfitCard(profile, mapping, idx) {
+    let cardId = ensureMappingCardId(mapping);
+    if (!cardId) {
+        cardId = `cs-outfit-card-${Date.now()}-${nextOutfitCardId++}`;
+    }
+
+    const card = $('<article>').addClass('cs-outfit-card')
+        .attr('data-idx', idx)
+        .attr('data-card-id', cardId);
+    const header = $('<div>').addClass('cs-outfit-card-header');
+    const title = $('<div>').addClass('cs-outfit-card-title');
+    title.append($('<i>').addClass('fa-solid fa-user-astronaut'));
+
+    const nameId = `cs-outfit-name-${idx}`;
+    const nameField = $('<div>').addClass('cs-field')
+        .append($('<label>', { for: nameId, text: 'Character Name' }));
+    const nameInput = $('<input>', {
+        id: nameId,
+        type: 'text',
+        placeholder: 'e.g., Alice',
+    }).addClass('text_pole cs-outfit-character-name')
+        .val(mapping.name || '');
+    nameField.append(nameInput);
+    title.append(nameField);
+    header.append(title);
+
+    const controls = $('<div>').addClass('cs-outfit-card-controls');
+
+    const bodyId = `${cardId}-body`;
+    const toggleLabel = $('<span>').text('Collapse');
+    const toggleButton = $('<button>', {
+        type: 'button',
+        class: 'menu_button interactable cs-outfit-card-toggle',
+        'aria-expanded': 'true',
+        'aria-controls': bodyId,
+    }).append($('<i>').addClass('fa-solid fa-chevron-down'), toggleLabel);
+    controls.append(toggleButton);
+
+    const removeButton = $('<button>', {
+        type: 'button',
+        class: 'menu_button interactable cs-button-danger cs-outfit-remove-character',
+    })
+        .attr('data-change-notice', 'Removing this character saves your mappings immediately.')
+        .attr('data-change-notice-key', `${cardId}-remove`)
+        .append($('<i>').addClass('fa-solid fa-trash-can'), $('<span>').text('Remove Character'))
+        .on('click', () => {
+            announceAutoSaveIntent(removeButton[0], 'character mappings', removeButton[0].dataset.changeNotice, removeButton[0].dataset.changeNoticeKey);
+            if (!profile?.mappings) return;
+            state.outfitCardCollapse?.delete(cardId);
+            profile.mappings.splice(idx, 1);
+            renderMappings(profile);
+            rebuildMappingLookup(profile);
+            scheduleProfileAutoSave({
+                reason: 'character mappings',
+                element: removeButton[0],
+                requiresMappingRebuild: true,
+            });
+        });
+    controls.append(removeButton);
+    header.append(controls);
+    card.append(header);
+
+    const body = $('<div>', { id: bodyId }).addClass('cs-outfit-card-body');
+
+    const defaultId = `cs-outfit-default-${idx}`;
+    const defaultField = $('<div>').addClass('cs-field')
+        .append($('<label>', { for: defaultId, text: 'Default Folder' }));
+    const defaultRow = $('<div>').addClass('cs-outfit-folder-row');
+    const defaultInput = $('<input>', {
+        id: defaultId,
+        type: 'text',
+        placeholder: 'Enter folder path…',
+    }).addClass('text_pole cs-outfit-default-folder')
+        .val(mapping.defaultFolder || '');
+    const defaultPicker = $('<input>', { type: 'file', hidden: true });
+    defaultPicker.attr({ webkitdirectory: 'true', directory: 'true', multiple: 'true' });
+    const defaultButton = $('<button>', {
+        type: 'button',
+        class: 'menu_button interactable cs-outfit-pick-folder',
+    }).append($('<i>').addClass('fa-solid fa-folder-open'), $('<span>').text('Pick Folder'))
+        .on('click', () => defaultPicker.trigger('click'));
+    defaultPicker.on('change', function() {
+        const folderPath = extractDirectoryFromFileList(this.files || []);
+        if (folderPath) {
+            defaultInput.val(folderPath);
+            defaultInput.trigger('input');
+        }
+        $(this).val('');
+    });
+    defaultRow.append(defaultInput, defaultButton, defaultPicker);
+    defaultField.append(defaultRow);
+    defaultField.append($('<small>').text('Fallback folder when no variation triggers.'));
+    body.append(defaultField);
+
+    const variantsContainer = $('<div>').addClass('cs-outfit-variants');
+    if (!Array.isArray(mapping.outfits) || !mapping.outfits.length) {
+        mapping.outfits = [];
+        variantsContainer.append($('<div>').addClass('cs-outfit-empty-variants').text('No variations yet. Add one to test trigger-based outfits.'));
+    } else {
+        mapping.outfits.forEach((variant, variantIndex) => {
+            variantsContainer.append(createOutfitVariantElement(profile, mapping, idx, variant, variantIndex));
+        });
+    }
+    body.append(variantsContainer);
+
+    const addVariantButton = $('<button>', {
+        type: 'button',
+        class: 'menu_button interactable cs-outfit-add-variant',
+    })
+        .attr('data-change-notice', 'Adding a variation auto-saves this character slot.')
+        .attr('data-change-notice-key', `${cardId}-add-variant`)
+        .append($('<i>').addClass('fa-solid fa-plus'), $('<span>').text('Add Outfit Variation'))
+        .on('click', () => {
+            announceAutoSaveIntent(addVariantButton[0], 'character mappings', addVariantButton[0].dataset.changeNotice, addVariantButton[0].dataset.changeNoticeKey);
+            if (!Array.isArray(mapping.outfits)) {
+                mapping.outfits = [];
+            }
+            const variantIndex = mapping.outfits.length;
+            const newVariant = normalizeOutfitVariant({ folder: '', triggers: [] });
+            mapping.outfits.push(newVariant);
+            variantsContainer.find('.cs-outfit-empty-variants').remove();
+            const variantEl = createOutfitVariantElement(profile, mapping, idx, newVariant, variantIndex);
+            variantsContainer.append(variantEl);
+            syncMappingRowOutfits(idx, mapping.outfits);
+            setCollapsed(false);
+            variantEl.find('.cs-outfit-variant-folder').trigger('focus');
+            scheduleProfileAutoSave({
+                reason: 'character mappings',
+                element: addVariantButton[0],
+                requiresMappingRebuild: true,
+            });
+        });
+    body.append(addVariantButton);
+
+    card.append(body);
+
+    const ensureCollapseStore = () => {
+        if (!(state.outfitCardCollapse instanceof Map)) {
+            state.outfitCardCollapse = new Map();
+        }
+        return state.outfitCardCollapse;
+    };
+
+    const setCollapsed = (collapsed) => {
+        const isCollapsed = Boolean(collapsed);
+        card.toggleClass('is-collapsed', isCollapsed);
+        body.toggleClass('is-collapsed', isCollapsed);
+        if (isCollapsed) {
+            body.attr('hidden', 'hidden');
+            body.attr('aria-hidden', 'true');
+            body.css('display', 'none');
+            toggleButton.attr('aria-expanded', 'false');
+            toggleButton.attr('title', 'Expand character slot');
+            toggleButton.attr('aria-label', 'Expand character slot');
+            toggleLabel.text('Expand');
+            ensureCollapseStore().set(cardId, true);
+        } else {
+            body.removeAttr('hidden');
+            body.attr('aria-hidden', 'false');
+            body.css('display', '');
+            toggleButton.attr('aria-expanded', 'true');
+            toggleButton.attr('title', 'Collapse character slot');
+            toggleButton.attr('aria-label', 'Collapse character slot');
+            toggleLabel.text('Collapse');
+            ensureCollapseStore().set(cardId, false);
+        }
+    };
+
+    toggleButton.on('click', () => {
+        const nextCollapsed = !card.hasClass('is-collapsed');
+        setCollapsed(nextCollapsed);
+    });
+
+    nameInput.on('input', () => {
+        mapping.name = nameInput.val().trim();
+        syncMappingRowName(idx, nameInput.val());
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: nameInput[0],
+            requiresMappingRebuild: true,
+        });
+    });
+    nameInput.on('change', () => {
+        rebuildMappingLookup(profile);
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: nameInput[0],
+            requiresMappingRebuild: true,
+        });
+    });
+
+    defaultInput.on('input', () => {
+        const value = defaultInput.val().trim();
+        mapping.defaultFolder = value;
+        mapping.folder = value;
+        syncMappingRowFolder(idx, defaultInput.val());
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: defaultInput[0],
+            requiresMappingRebuild: true,
+        });
+    });
+    defaultInput.on('change', () => {
+        rebuildMappingLookup(profile);
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: defaultInput[0],
+            requiresMappingRebuild: true,
+        });
+    });
+
+    const collapseStore = ensureCollapseStore();
+    let collapsed = true;
+    if (collapseStore.has(cardId)) {
+        collapsed = collapseStore.get(cardId) === true;
+    }
+    setCollapsed(collapsed);
+    if (mapping && Object.prototype.hasOwnProperty.call(mapping, "__startCollapsed")) {
+        try {
+            delete mapping.__startCollapsed;
+        } catch (err) {
+            mapping.__startCollapsed = undefined;
+        }
+    }
+    syncMappingRowOutfits(idx, mapping.outfits);
+
+    return card;
+}
+
+function renderOutfitLab(profile) {
+    const container = $('#cs-outfit-character-list');
+    if (!container.length) {
+        return;
+    }
+
+    container.empty();
+    const mappings = Array.isArray(profile?.mappings) ? profile.mappings : [];
+    if (!mappings.length) {
+        const emptyText = container.attr('data-empty-text') || 'No characters configured yet.';
+        container.append($('<div>').addClass('cs-outfit-empty').text(emptyText));
+    } else {
+        mappings.forEach((entry, idx) => {
+            const normalized = normalizeMappingEntry(entry);
+            if (entry && typeof entry === 'object' && Object.prototype.hasOwnProperty.call(entry, '__cardId') && !Object.prototype.hasOwnProperty.call(normalized, '__cardId')) {
+                Object.defineProperty(normalized, '__cardId', {
+                    value: entry.__cardId,
+                    enumerable: false,
+                    configurable: true,
+                });
+            }
+            profile.mappings[idx] = normalized;
+            container.append(createOutfitCard(profile, normalized, idx));
+        });
+    }
+
+    updateOutfitLabEnabledState(profile?.enableOutfits);
 }
 
 function renderMappings(profile) {
     const tbody = $("#cs-mappings-tbody");
     tbody.empty();
     (profile.mappings || []).forEach((m, idx) => {
-        tbody.append($("<tr>").attr("data-idx", idx)
-            .append($("<td>").append($("<input>").addClass("map-name text_pole").val(m.name || "")))
-            .append($("<td>").append($("<input>").addClass("map-folder text_pole").val(m.folder || "")))
-            .append($("<td>").append($("<button>").addClass("map-remove menu_button interactable").html('<i class="fa-solid fa-trash-can"></i>')))
-        );
+        const normalized = normalizeMappingEntry(m);
+        profile.mappings[idx] = normalized;
+        const row = $("<tr>").attr("data-idx", idx);
+        const outfits = Array.isArray(normalized.outfits)
+            ? (typeof structuredClone === 'function' ? structuredClone(normalized.outfits) : normalized.outfits.slice())
+            : [];
+        row.data('outfits', outfits);
+        row.append($("<td>").append($("<input>").addClass("map-name text_pole").val(normalized.name || "")));
+        row.append($("<td>").append($("<input>").addClass("map-folder text_pole").val(normalized.defaultFolder || normalized.folder || "")));
+        row.append($("<td>").append($("<button>").addClass("map-remove menu_button interactable").html('<i class="fa-solid fa-trash-can"></i>')));
+        tbody.append(row);
     });
+    renderOutfitLab(profile);
 }
 
 async function fetchBuildMetadata() {
@@ -1771,6 +3186,7 @@ function clearTesterTimers() {
 function describeSkipReason(code) {
     const messages = {
         'already-active': 'already the active costume',
+        'outfit-unchanged': 'already wearing the selected outfit',
         'global-cooldown': 'blocked by global cooldown',
         'per-trigger-cooldown': 'blocked by per-trigger cooldown',
         'failed-trigger-cooldown': 'waiting after a failed switch',
@@ -2068,51 +3484,6 @@ function copyTextToClipboard(text) {
     }
 }
 
-function summarizeDetectionsForReport(matches = []) {
-    const summaries = new Map();
-    matches.forEach(match => {
-        const key = String(match.name || '').toLowerCase();
-        if (!key) return;
-        if (!summaries.has(key)) {
-            summaries.set(key, {
-                name: match.name || key,
-                total: 0,
-                highestPriority: -Infinity,
-                earliest: Infinity,
-                latest: -Infinity,
-                kinds: {},
-            });
-        }
-        const summary = summaries.get(key);
-        summary.total += 1;
-        const kind = match.matchKind || 'unknown';
-        summary.kinds[kind] = (summary.kinds[kind] || 0) + 1;
-        if (Number.isFinite(match.priority)) {
-            summary.highestPriority = Math.max(summary.highestPriority, match.priority);
-        }
-        if (Number.isFinite(match.matchIndex)) {
-            summary.earliest = Math.min(summary.earliest, match.matchIndex);
-            summary.latest = Math.max(summary.latest, match.matchIndex);
-        }
-    });
-
-    return Array.from(summaries.values()).map(summary => ({
-        ...summary,
-        highestPriority: summary.highestPriority === -Infinity ? null : summary.highestPriority,
-        earliest: summary.earliest === Infinity ? null : summary.earliest + 1,
-        latest: summary.latest === -Infinity ? null : summary.latest + 1,
-    })).sort((a, b) => {
-        if (b.total !== a.total) return b.total - a.total;
-        const bPriority = b.highestPriority ?? -Infinity;
-        const aPriority = a.highestPriority ?? -Infinity;
-        if (bPriority !== aPriority) return bPriority - aPriority;
-        const aEarliest = a.earliest ?? Infinity;
-        const bEarliest = b.earliest ?? Infinity;
-        if (aEarliest !== bEarliest) return aEarliest - bEarliest;
-        return a.name.localeCompare(b.name);
-    });
-}
-
 function summarizeSkipReasonsForReport(events = []) {
     const counts = new Map();
     events.forEach(event => {
@@ -2172,11 +3543,16 @@ function formatTesterReport(report) {
     lines.push(`Character Patterns: ${patternList.length ? patternList.join(', ') : '(none)'}`);
     lines.push('');
 
+    const mergedDetections = mergeDetectionsForReport(report);
+    const detectionLookup = new Map(
+        mergedDetections.map(entry => [String(entry.name || '').toLowerCase(), entry.name])
+    );
     lines.push('Detections:');
-    if (report.matches?.length) {
-        report.matches.forEach((m, idx) => {
+    if (mergedDetections.length) {
+        mergedDetections.forEach((m, idx) => {
             const charPos = Number.isFinite(m.matchIndex) ? m.matchIndex + 1 : '?';
-            lines.push(`  ${idx + 1}. ${m.name} – ${m.matchKind} @ char ${charPos} (priority ${m.priority})`);
+            const priorityLabel = Number.isFinite(m.priority) ? m.priority : 'n/a';
+            lines.push(`  ${idx + 1}. ${m.name} – ${m.matchKind || 'unknown'} @ char ${charPos} (priority ${priorityLabel})`);
         });
     } else {
         lines.push('  (none)');
@@ -2190,20 +3566,24 @@ function formatTesterReport(report) {
                 const detail = event.matchKind ? ` via ${event.matchKind}` : '';
                 const score = Number.isFinite(event.score) ? `, score ${event.score}` : '';
                 const charPos = Number.isFinite(event.charIndex) ? event.charIndex + 1 : '?';
-                lines.push(`  ${idx + 1}. SWITCH → ${event.folder} (name: ${event.name}${detail}, char ${charPos}${score})`);
+                const outfitSummary = summarizeOutfitDecision(event.outfit, { separator: '; ', includeFolder: false });
+                const outfitNote = outfitSummary ? ` [${outfitSummary}]` : '';
+                lines.push(`  ${idx + 1}. SWITCH → ${event.folder} (name: ${event.name}${detail}, char ${charPos}${score})${outfitNote}`);
             } else if (event.type === 'veto') {
                 const charPos = Number.isFinite(event.charIndex) ? event.charIndex + 1 : '?';
                 lines.push(`  ${idx + 1}. VETO – matched "${event.match}" at char ${charPos}`);
             } else {
                 const reason = describeSkipReason(event.reason);
-                lines.push(`  ${idx + 1}. SKIP – ${event.name} (${event.matchKind}) because ${reason}`);
+                const outfitSummary = summarizeOutfitDecision(event.outfit, { separator: '; ', includeFolder: false });
+                const outfitNote = outfitSummary ? ` [${outfitSummary}]` : '';
+                lines.push(`  ${idx + 1}. SKIP – ${event.name} (${event.matchKind}) because ${reason}${outfitNote}`);
             }
         });
     } else {
         lines.push('  (none)');
     }
 
-    const detectionSummary = summarizeDetectionsForReport(report.matches);
+    const detectionSummary = summarizeDetections(mergedDetections);
     lines.push('');
     lines.push('Detection Summary:');
     if (detectionSummary.length) {
@@ -2261,7 +3641,9 @@ function formatTesterReport(report) {
         const detail = last.matchKind ? ` via ${last.matchKind}` : '';
         const score = Number.isFinite(last.score) ? `, score ${last.score}` : '';
         const folderName = last.folder || last.name || '(unknown)';
-        lines.push(`  Last switch: ${folderName} (trigger: ${last.name}${detail}, char ${charPos}${score})`);
+        const outfitSummary = summarizeOutfitDecision(last.outfit, { separator: '; ', includeFolder: false });
+        const outfitNote = outfitSummary ? ` [${outfitSummary}]` : '';
+        lines.push(`  Last switch: ${folderName} (trigger: ${last.name}${detail}, char ${charPos}${score})${outfitNote}`);
     } else {
         lines.push('  Last switch: (none)');
     }
@@ -2271,7 +3653,9 @@ function formatTesterReport(report) {
             const charPos = Number.isFinite(event.charIndex) ? event.charIndex + 1 : '?';
             const detail = event.matchKind ? ` via ${event.matchKind}` : '';
             const folderName = event.folder || event.name || '(unknown)';
-            lines.push(`    ${idx + 1}. ${folderName} – ${event.score} (trigger: ${event.name}${detail}, char ${charPos})`);
+            const outfitSummary = summarizeOutfitDecision(event.outfit, { separator: '; ', includeFolder: false });
+            const outfitNote = outfitSummary ? ` [${outfitSummary}]` : '';
+            lines.push(`    ${idx + 1}. ${folderName} – ${event.score} (trigger: ${event.name}${detail}, char ${charPos})${outfitNote}`);
         });
     }
 
@@ -2289,7 +3673,7 @@ function formatTesterReport(report) {
     if (report.finalState) {
         const rosterNames = Array.isArray(report.finalState.sceneRoster)
             ? report.finalState.sceneRoster.map(name => {
-                const original = report.matches?.find(m => m.name?.toLowerCase() === name)?.name;
+                const original = detectionLookup.get(String(name || '').toLowerCase());
                 return original || name;
             })
             : [];
@@ -2298,6 +3682,16 @@ function formatTesterReport(report) {
         lines.push(`  Scene roster (${rosterNames.length}): ${rosterNames.length ? rosterNames.join(', ') : '(empty)'}`);
         lines.push(`  Last accepted name: ${report.finalState.lastAcceptedName || '(none)'}`);
         lines.push(`  Last subject: ${report.finalState.lastSubject || '(none)'}`);
+        if (Array.isArray(report.finalState.outfitRoster)) {
+            const outfits = report.finalState.outfitRoster.map(([name, info]) => {
+                const summary = summarizeOutfitDecision(info, { separator: '; ', includeFolder: false });
+                return summary ? `${name} [${summary}]` : name;
+            });
+            lines.push(`  Outfit roster (${outfits.length}): ${outfits.length ? outfits.join('; ') : '(empty)'}`);
+        }
+        if (Number.isFinite(report.finalState.outfitTTL)) {
+            lines.push(`  Outfit TTL: ${report.finalState.outfitTTL}`);
+        }
         if (Number.isFinite(report.finalState.processedLength)) {
             lines.push(`  Processed characters: ${report.finalState.processedLength}`);
         }
@@ -2397,6 +3791,27 @@ function copyTesterReport() {
         });
 }
 
+function adjustWindowForTrim(msgState, trimmedChars, combinedLength) {
+    if (!msgState) {
+        return;
+    }
+
+    if (!Number.isFinite(msgState.processedLength)) {
+        msgState.processedLength = 0;
+    }
+
+    if (Number.isFinite(trimmedChars) && trimmedChars > 0) {
+        if (Number.isFinite(msgState.lastAcceptedIndex) && msgState.lastAcceptedIndex >= 0) {
+            msgState.lastAcceptedIndex = Math.max(-1, msgState.lastAcceptedIndex - trimmedChars);
+        }
+        msgState.processedLength = Math.max(0, msgState.processedLength - trimmedChars);
+    }
+
+    if (Number.isFinite(combinedLength)) {
+        msgState.processedLength = Math.min(msgState.processedLength, combinedLength);
+    }
+}
+
 function createTesterMessageState(profile) {
     return {
         lastAcceptedName: null,
@@ -2405,6 +3820,8 @@ function createTesterMessageState(profile) {
         lastSubject: null,
         sceneRoster: new Set(),
         rosterTTL: profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL,
+        outfitRoster: new Map(),
+        outfitTTL: profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL,
         processedLength: 0,
     };
 }
@@ -2418,9 +3835,11 @@ function simulateTesterStream(combined, profile, bufKey) {
 
     const simulationState = {
         lastIssuedCostume: null,
+        lastIssuedFolder: null,
         lastSwitchTimestamp: 0,
         lastTriggerTimes: new Map(),
         failedTriggerTimes: new Map(),
+        characterOutfits: new Map(),
     };
 
     const threshold = Math.max(0, Number(profile.tokenProcessThreshold) || 0);
@@ -2432,7 +3851,10 @@ function simulateTesterStream(combined, profile, bufKey) {
     const rosterWarnings = [];
     const rosterDisplayNames = new Map();
     for (let i = 0; i < combined.length; i++) {
-        buffer = (buffer + combined[i]).slice(-maxBuffer);
+        const appended = buffer + combined[i];
+        buffer = appended.slice(-maxBuffer);
+        const trimmedChars = appended.length - buffer.length;
+        adjustWindowForTrim(msgState, trimmedChars, buffer.length);
         state.perMessageBuffers.set(bufKey, buffer);
 
         if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(buffer)) {
@@ -2460,6 +3882,7 @@ function simulateTesterStream(combined, profile, bufKey) {
                 rosterDisplayNames.set(normalized, bestMatch.name);
             }
             msgState.rosterTTL = rosterTTL;
+            msgState.outfitTTL = rosterTTL;
             rosterTimeline.push({
                 type: wasPresent ? 'refresh' : 'join',
                 name: bestMatch.name,
@@ -2484,25 +3907,52 @@ function simulateTesterStream(combined, profile, bufKey) {
         msgState.lastAcceptedName = bestMatch.name;
         msgState.lastAcceptedTs = virtualNow;
 
-        const decision = evaluateSwitchDecision(bestMatch.name, { matchKind: bestMatch.matchKind }, simulationState, virtualNow);
+        const decision = evaluateSwitchDecision(bestMatch.name, {
+            matchKind: bestMatch.matchKind,
+            bufKey,
+            messageState: msgState,
+            context: { text: buffer, matchKind: bestMatch.matchKind, roster: msgState.sceneRoster },
+        }, simulationState, virtualNow);
         if (decision.shouldSwitch) {
             events.push({
-        type: 'switch',
-        name: bestMatch.name,
-        folder: decision.folder,
-        matchKind: bestMatch.matchKind,
-        score: Math.round(bestMatch.score ?? 0),
-        charIndex: i,
-    });
+                type: 'switch',
+                name: bestMatch.name,
+                folder: decision.folder,
+                matchKind: bestMatch.matchKind,
+                score: Math.round(bestMatch.score ?? 0),
+                charIndex: i,
+                outfit: decision.outfit ? {
+                    folder: decision.outfit.folder,
+                    label: decision.outfit.label || null,
+                    reason: decision.outfit.reason || null,
+                    trigger: decision.outfit.trigger || null,
+                    awareness: decision.outfit.awareness || null,
+                } : null,
+            });
             simulationState.lastIssuedCostume = decision.name;
+            simulationState.lastIssuedFolder = decision.folder;
             simulationState.lastSwitchTimestamp = decision.now;
             simulationState.lastTriggerTimes.set(decision.folder, decision.now);
+            const cache = ensureCharacterOutfitCache(simulationState);
+            cache.set(decision.name.toLowerCase(), {
+                folder: decision.folder,
+                reason: decision.outfit?.reason || 'tester',
+                label: decision.outfit?.label || null,
+                updatedAt: decision.now,
+            });
         } else {
             events.push({
                 type: 'skipped',
                 name: bestMatch.name,
                 matchKind: bestMatch.matchKind,
                 reason: decision.reason || 'unknown',
+                outfit: decision.outfit ? {
+                    folder: decision.outfit.folder,
+                    label: decision.outfit.label || null,
+                    reason: decision.outfit.reason || null,
+                    trigger: decision.outfit.trigger || null,
+                    awareness: decision.outfit.awareness || null,
+                } : null,
                 charIndex: i,
             });
         }
@@ -2515,6 +3965,8 @@ function simulateTesterStream(combined, profile, bufKey) {
         processedLength: msgState.processedLength,
         sceneRoster: Array.from(msgState.sceneRoster || []),
         rosterTTL: msgState.rosterTTL,
+        outfitRoster: Array.from(msgState.outfitRoster || []),
+        outfitTTL: msgState.outfitTTL,
         vetoed: Boolean(msgState.vetoed),
         virtualDurationMs: combined.length > 0 ? Math.max(0, (combined.length - 1) * 50) : 0,
     };
@@ -2553,11 +4005,17 @@ function renderTesterStream(eventList, events) {
     events.forEach(event => {
         const item = $('<li>');
         if (event.type === 'switch') {
-            item.addClass('cs-tester-log-switch').html(`<b>Switch → ${event.folder}</b><small> (${event.name}${event.matchKind ? ' via ' + event.matchKind : ''}, char #${event.charIndex + 1}${Number.isFinite(event.score) ? ', score ' + event.score : ''})</small>`);
+            const details = `${event.name}${event.matchKind ? ' via ' + event.matchKind : ''}, char #${event.charIndex + 1}${Number.isFinite(event.score) ? ', score ' + event.score : ''}`;
+            const outfitInfo = summarizeOutfitDecision(event.outfit);
+            const extra = outfitInfo ? `<br><span class="cs-tester-outfit-detail">${escapeHtml(outfitInfo)}</span>` : '';
+            item.addClass('cs-tester-log-switch').html(`<b>Switch → ${escapeHtml(event.folder)}</b><small> (${escapeHtml(details)})${extra}</small>`);
         } else if (event.type === 'veto') {
             item.addClass('cs-tester-log-veto').html(`<b>Veto Triggered</b><small> (${event.match})</small>`);
         } else {
-            item.addClass('cs-tester-log-skip').html(`<span>${event.name}</span><small> (${event.matchKind}, ${describeSkipReason(event.reason)})</small>`);
+            const skipDetails = `${event.matchKind}, ${describeSkipReason(event.reason)}`;
+            const outfitInfo = summarizeOutfitDecision(event.outfit);
+            const extra = outfitInfo ? `<br><span class="cs-tester-outfit-detail">${escapeHtml(outfitInfo)}</span>` : '';
+            item.addClass('cs-tester-log-skip').html(`<span>${escapeHtml(event.name)}</span><small> (${escapeHtml(skipDetails)})${extra}</small>`);
         }
 
         const timer = setTimeout(() => {
@@ -2718,29 +4176,66 @@ function testRegexPattern() {
 function wireUI() {
     const settings = getSettings();
     initTabNavigation();
-    $(document).on('change', '#cs-enable', function() { settings.enabled = $(this).prop("checked"); persistSettings("Extension " + (settings.enabled ? "Enabled" : "Disabled"), 'info'); });
-    $(document).on('click', '#cs-save', () => { 
-        const profile = getActiveProfile();
-        if(profile) {
-            Object.assign(profile, saveCurrentProfileData());
-            recompileRegexes(); 
-            updateFocusLockUI();
-            persistSettings("Profile Saved");
+    Object.entries(uiMapping).forEach(([key, mapping]) => {
+        const selector = mapping?.selector;
+        if (!selector) {
+            return;
+        }
+        $(document).on('change', selector, (event) => handleAutoSaveFieldEvent(event, key));
+        if (['text', 'textarea', 'csvTextarea', 'number', 'range'].includes(mapping.type)) {
+            $(document).on('input', selector, (event) => handleAutoSaveFieldEvent(event, key));
         }
     });
-    $(document).on('change', '#cs-profile-select', function() { loadProfile($(this).val()); });
+    $(document).on('focusin mouseenter', '[data-change-notice]', function() {
+        if (this?.disabled) {
+            return;
+        }
+        announceAutoSaveIntent(this, null, this.dataset.changeNotice, this.dataset.changeNoticeKey);
+    });
+
+    $(document).on('change', '#cs-enable', function() {
+        const enabled = $(this).prop('checked');
+        announceAutoSaveIntent(this, null, `Extension will ${enabled ? 'enable' : 'disable'} immediately.`, 'cs-enable');
+        settings.enabled = enabled;
+        persistSettings('Extension ' + (enabled ? 'Enabled' : 'Disabled'), 'info');
+    });
+    $(document).on('click', '#cs-save', () => {
+        const button = document.getElementById('cs-save');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice || 'Saving all changes…', 'cs-save');
+        }
+        commitProfileChanges({
+            message: 'Profile saved.',
+            recompile: true,
+            refreshFocusLock: true,
+        });
+    });
+    $(document).on('change', '#cs-profile-select', function() {
+        announceAutoSaveIntent(this, null, this?.dataset?.changeNotice || 'Switching profiles will auto-save pending edits.', 'cs-profile-select');
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        loadProfile($(this).val());
+    });
     $(document).on('click', '#cs-profile-save', () => {
-        const profile = getActiveProfile();
-        if (!profile) return;
-        Object.assign(profile, saveCurrentProfileData());
-        persistSettings('Profile saved.');
-        loadProfile(settings.activeProfile);
+        const button = document.getElementById('cs-profile-save');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice || 'Saving profile immediately.', 'cs-profile-save');
+        }
+        commitProfileChanges({
+            message: 'Profile saved.',
+            recompile: true,
+            refreshFocusLock: true,
+        });
     });
     $(document).on('click', '#cs-profile-saveas', () => {
         const desiredName = normalizeProfileNameInput($("#cs-profile-name").val());
         if (!desiredName) { showStatus('Enter a name to save a new profile.', 'error'); return; }
         if (settings.profiles[desiredName]) { showStatus('A profile with that name already exists.', 'error'); return; }
-        const profileData = Object.assign({}, structuredClone(PROFILE_DEFAULTS), saveCurrentProfileData());
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-saveas');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-saveas');
+        }
+        const profileData = normalizeProfile(saveCurrentProfileData(), PROFILE_DEFAULTS);
         settings.profiles[desiredName] = profileData;
         settings.activeProfile = desiredName;
         populateProfileDropdown();
@@ -2754,6 +4249,11 @@ function wireUI() {
         if (!newName) { showStatus('Enter a new name to rename this profile.', 'error'); return; }
         if (newName === oldName) { showStatus('The profile already uses that name.', 'info'); return; }
         if (settings.profiles[newName]) { showStatus('A profile with that name already exists.', 'error'); return; }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-rename');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-rename');
+        }
         settings.profiles[newName] = settings.profiles[oldName];
         delete settings.profiles[oldName];
         settings.activeProfile = newName;
@@ -2763,6 +4263,11 @@ function wireUI() {
         persistSettings(`Renamed profile to "${escapeHtml(newName)}".`, 'info');
     });
     $(document).on('click', '#cs-profile-new', () => {
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-new');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-new');
+        }
         const baseName = normalizeProfileNameInput($("#cs-profile-name").val()) || 'New Profile';
         const uniqueName = getUniqueProfileName(baseName);
         settings.profiles[uniqueName] = structuredClone(PROFILE_DEFAULTS);
@@ -2775,9 +4280,14 @@ function wireUI() {
     $(document).on('click', '#cs-profile-duplicate', () => {
         const activeProfile = getActiveProfile();
         if (!activeProfile) return;
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-duplicate');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-duplicate');
+        }
         const baseName = normalizeProfileNameInput($("#cs-profile-name").val()) || `${settings.activeProfile} Copy`;
         const uniqueName = getUniqueProfileName(baseName);
-        settings.profiles[uniqueName] = Object.assign({}, structuredClone(PROFILE_DEFAULTS), structuredClone(activeProfile));
+        settings.profiles[uniqueName] = normalizeProfile(structuredClone(activeProfile), PROFILE_DEFAULTS);
         settings.activeProfile = uniqueName;
         populateProfileDropdown();
         loadProfile(uniqueName);
@@ -2786,6 +4296,11 @@ function wireUI() {
     });
     $(document).on('click', '#cs-profile-delete', () => {
         if (Object.keys(settings.profiles).length <= 1) { showStatus("Cannot delete the last profile.", 'error'); return; }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-delete');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-delete');
+        }
         const profileNameToDelete = settings.activeProfile;
         if (confirm(`Are you sure you want to delete the profile "${profileNameToDelete}"?`)) {
             delete settings.profiles[profileNameToDelete];
@@ -2796,6 +4311,11 @@ function wireUI() {
         }
     });
     $(document).on('click', '#cs-profile-export', () => {
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-export');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-export');
+        }
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({name: settings.activeProfile, data: getActiveProfile()}, null, 2));
         const dl = document.createElement('a');
         dl.setAttribute("href", dataStr);
@@ -2805,7 +4325,14 @@ function wireUI() {
         dl.remove();
         showStatus("Profile exported.", 'info');
     });
-    $(document).on('click', '#cs-profile-import', () => { $('#cs-profile-file-input').click(); });
+    $(document).on('click', '#cs-profile-import', () => {
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-profile-import');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-import');
+        }
+        $('#cs-profile-file-input').click();
+    });
     $(document).on('change', '#cs-profile-file-input', function(event) {
         const file = event.target.files[0]; if (!file) return;
         const reader = new FileReader();
@@ -2815,7 +4342,7 @@ function wireUI() {
                 if (!content.name || !content.data) throw new Error("Invalid profile format.");
                 let profileName = content.name;
                 if (settings.profiles[profileName]) profileName = `${profileName} (Imported) ${Date.now()}`;
-                settings.profiles[profileName] = Object.assign({}, structuredClone(PROFILE_DEFAULTS), content.data);
+                settings.profiles[profileName] = normalizeProfile(content.data, PROFILE_DEFAULTS);
                 settings.activeProfile = profileName;
                 populateProfileDropdown(); loadProfile(profileName);
                 persistSettings(`Imported profile as "${escapeHtml(profileName)}".`);
@@ -2851,11 +4378,20 @@ function wireUI() {
             return;
         }
         const preset = PRESETS[presetKey];
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-preset-load');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-preset-load');
+        }
         if (confirm(`This will apply the "${preset.name}" preset to your current profile ("${settings.activeProfile}").\n\nYour other settings like character patterns and mappings will be kept. Continue?`)) {
             const currentProfile = getActiveProfile();
             Object.assign(currentProfile, preset.settings);
-            loadProfile(settings.activeProfile); // Reload UI to show changes
-            persistSettings(`"${preset.name}" preset loaded.`);
+            loadProfile(settings.activeProfile);
+            commitProfileChanges({
+                message: `"${preset.name}" preset loaded.`,
+                recompile: true,
+                refreshFocusLock: true,
+            });
         }
     });
     $(document).on('click', '#cs-score-preset-apply', () => {
@@ -2864,9 +4400,16 @@ function wireUI() {
             showStatus('Select a scoring preset to apply.', 'error');
             return;
         }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-score-preset-apply');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-score-preset-apply');
+        }
         if (applyScorePresetByName(selected)) {
             setActiveScorePreset(selected);
-            persistSettings(`Applied scoring preset "${escapeHtml(selected)}".`);
+            commitProfileChanges({
+                message: `Applied scoring preset "${escapeHtml(selected)}".`,
+            });
         } else {
             showStatus('Unable to apply the selected preset.', 'error');
         }
@@ -2876,6 +4419,11 @@ function wireUI() {
         if (!selected) {
             showStatus('Select a preset to overwrite or use Save As to create a new one.', 'error');
             return;
+        }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-score-preset-save');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-score-preset-save');
         }
         const store = getScorePresetStore();
         const preset = store?.[selected];
@@ -2899,6 +4447,11 @@ function wireUI() {
             showStatus('Enter a name before saving a new scoring preset.', 'error');
             return;
         }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-score-preset-saveas');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-score-preset-saveas');
+        }
         if (BUILTIN_SCORE_PRESET_KEYS.has(desired)) {
             showStatus('That name is reserved for a built-in preset. Please choose another.', 'error');
             return;
@@ -2919,6 +4472,11 @@ function wireUI() {
         if (!selected) {
             showStatus('Select a preset to rename.', 'error');
             return;
+        }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-score-preset-rename');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-score-preset-rename');
         }
         const store = getScorePresetStore();
         const preset = store?.[selected];
@@ -2970,6 +4528,11 @@ function wireUI() {
             showStatus('Select a preset to delete.', 'error');
             return;
         }
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-score-preset-delete');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-score-preset-delete');
+        }
         const store = getScorePresetStore();
         const preset = store?.[selected];
         if (!preset) {
@@ -3013,9 +4576,19 @@ function wireUI() {
             recompileRegexes();
             refreshCoverageFromLastReport();
             showStatus(`Added "${escapeHtml(value)}" to ${field.replace(/([A-Z])/g, ' $1').toLowerCase()}.`, 'success');
+            scheduleProfileAutoSave({
+                key: field,
+                element: this,
+                requiresRecompile: AUTO_SAVE_RECOMPILE_KEYS.has(field),
+            });
         }
     });
     $(document).on('click', '#cs-focus-lock-toggle', async () => {
+        flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
+        const button = document.getElementById('cs-focus-lock-toggle');
+        if (button) {
+            announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-focus-lock-toggle');
+        }
         if (settings.focusLock.character) {
             settings.focusLock.character = null;
             await manualReset();
@@ -3030,7 +4603,11 @@ function wireUI() {
     $(document).on('click', '#cs-mapping-add', () => {
         const profile = getActiveProfile();
         if (profile) {
-            profile.mappings.push({ name: "", folder: "" });
+            const button = document.getElementById('cs-mapping-add');
+            if (button) {
+                announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-mapping-add');
+            }
+            profile.mappings.push(markMappingForInitialCollapse(normalizeMappingEntry({ name: "", defaultFolder: "", outfits: [] })));
             renderMappings(profile);
             rebuildMappingLookup(profile);
         }
@@ -3039,10 +4616,111 @@ function wireUI() {
         const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
         const profile = getActiveProfile();
         if (profile && !isNaN(idx)) {
+            const mapping = profile.mappings?.[idx];
+            if (mapping && Object.prototype.hasOwnProperty.call(mapping, '__cardId')) {
+                state.outfitCardCollapse?.delete(mapping.__cardId);
+            }
             profile.mappings.splice(idx, 1);
             renderMappings(profile); // Re-render to update indices
             rebuildMappingLookup(profile);
+            scheduleProfileAutoSave({
+                reason: 'character mappings',
+                element: this,
+                requiresMappingRebuild: true,
+            });
         }
+    });
+    $(document).on('change', '#cs-outfits-enable', function() {
+        const profile = getActiveProfile();
+        const enabled = $(this).prop('checked');
+        if (profile) {
+            profile.enableOutfits = enabled;
+        }
+        updateOutfitLabEnabledState(enabled);
+    });
+    $(document).on('click', '#cs-outfit-add-character', () => {
+        const profile = getActiveProfile();
+        if (!profile) {
+            return;
+        }
+        const button = document.getElementById('cs-outfit-add-character');
+        if (button) {
+            announceAutoSaveIntent(button, 'character mappings', button.dataset.changeNotice, button.dataset.changeNoticeKey || 'cs-outfit-add-character');
+        }
+        profile.mappings.push(markMappingForInitialCollapse(normalizeMappingEntry({ name: '', defaultFolder: '', outfits: [] })));
+        renderMappings(profile);
+        rebuildMappingLookup(profile);
+        const newCard = $('#cs-outfit-character-list .cs-outfit-card').last();
+        if (newCard.length) {
+            const toggle = newCard.find('.cs-outfit-card-toggle');
+            if (toggle.length) {
+                toggle.trigger('focus');
+            } else {
+                newCard.find('.cs-outfit-character-name').trigger('focus');
+            }
+        }
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: button || null,
+            requiresMappingRebuild: true,
+        });
+    });
+    $(document).on('input', '#cs-mappings-tbody .map-name', function() {
+        const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
+        if (Number.isNaN(idx)) {
+            return;
+        }
+        const value = String($(this).val() ?? '');
+        const profile = getActiveProfile();
+        if (profile?.mappings?.[idx]) {
+            profile.mappings[idx].name = value.trim();
+        }
+        $(`.cs-outfit-card[data-idx="${idx}"]`).find('.cs-outfit-character-name').val(value);
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: this,
+            requiresMappingRebuild: true,
+        });
+    });
+    $(document).on('change', '#cs-mappings-tbody .map-name', function() {
+        const profile = getActiveProfile();
+        if (profile) {
+            rebuildMappingLookup(profile);
+        }
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: this,
+            requiresMappingRebuild: true,
+        });
+    });
+    $(document).on('input', '#cs-mappings-tbody .map-folder', function() {
+        const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
+        if (Number.isNaN(idx)) {
+            return;
+        }
+        const value = String($(this).val() ?? '');
+        const profile = getActiveProfile();
+        if (profile?.mappings?.[idx]) {
+            profile.mappings[idx].defaultFolder = value.trim();
+            profile.mappings[idx].folder = value.trim();
+        }
+        $(`.cs-outfit-card[data-idx="${idx}"]`).find('.cs-outfit-default-folder').val(value);
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: this,
+            requiresMappingRebuild: true,
+        });
+    });
+    $(document).on('change', '#cs-mappings-tbody .map-folder', function() {
+        const profile = getActiveProfile();
+        if (profile) {
+            rebuildMappingLookup(profile);
+        }
+        scheduleProfileAutoSave({
+            reason: 'character mappings',
+            element: this,
+            requiresMappingRebuild: true,
+        });
     });
     $(document).on('click', '#cs-regex-test-button', testRegexPattern);
     $(document).on('click', '#cs-regex-test-copy', copyTesterReport);
@@ -3371,7 +5049,7 @@ function registerCommands() {
             const folder = cleanArgs.slice(toIndex + 1).join(' ').trim();
 
             if (alias && folder) {
-                profile.mappings.push({ name: alias, folder: folder });
+                profile.mappings.push(markMappingForInitialCollapse(normalizeMappingEntry({ name: alias, defaultFolder: folder })));
                 rebuildMappingLookup(profile);
                 renderMappings(profile);
                 applyCommandProfileUpdates(profile, [], { persist });
@@ -3423,8 +5101,11 @@ function createMessageState(profile, bufKey) {
         vetoed: false,
         lastSubject: oldState?.lastSubject || null,
         sceneRoster: new Set(oldState?.sceneRoster || []),
+        outfitRoster: new Map(oldState?.outfitRoster || []),
         rosterTTL: profile.sceneRosterTTL,
+        outfitTTL: profile.sceneRosterTTL,
         processedLength: 0,
+        lastAcceptedIndex: -1,
     };
 
     if (newState.sceneRoster.size > 0) {
@@ -3432,6 +5113,17 @@ function createMessageState(profile, bufKey) {
         if (newState.rosterTTL <= 0) {
             debugLog("Scene roster TTL expired, clearing roster.");
             newState.sceneRoster.clear();
+        }
+    }
+
+    if (newState.outfitRoster.size > 0) {
+        newState.outfitTTL--;
+        if (newState.outfitTTL <= 0) {
+            const expired = Array.from(newState.outfitRoster.keys());
+            debugLog("Outfit roster TTL expired, clearing tracked outfits:", expired.join(', '));
+            newState.outfitRoster.clear();
+            const cache = ensureCharacterOutfitCache(state);
+            expired.forEach(key => cache.delete(key));
         }
     }
 
@@ -3542,8 +5234,12 @@ const handleStream = (...args) => {
         if (msgState.vetoed) return;
 
         const prev = state.perMessageBuffers.get(bufKey) || "";
+        const normalizedToken = normalizeStreamText(tokenText);
+        const appended = prev + normalizedToken;
         const maxBuffer = resolveMaxBufferChars(profile);
-        const combined = (prev + normalizeStreamText(tokenText)).slice(-maxBuffer);
+        const combined = appended.slice(-maxBuffer);
+        const trimmedChars = appended.length - combined.length;
+        adjustWindowForTrim(msgState, trimmedChars, combined.length);
         state.perMessageBuffers.set(bufKey, combined);
 
         const rosterSet = msgState?.sceneRoster instanceof Set ? msgState.sceneRoster : null;
@@ -3554,7 +5250,7 @@ const handleStream = (...args) => {
         }
 
         msgState.processedLength = combined.length;
-        const bestMatch = findBestMatch(combined, analytics?.matches);
+        const bestMatch = findBestMatch(combined, analytics?.matches, { minIndex: msgState.lastAcceptedIndex });
         debugLog(`[STREAM] Buffer len: ${combined.length}. Match:`, bestMatch ? `${bestMatch.name} (${bestMatch.matchKind})` : 'None');
 
         if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(combined)) {
@@ -3570,18 +5266,28 @@ const handleStream = (...args) => {
             if (profile.enableSceneRoster) {
                 msgState.sceneRoster.add(matchedName.toLowerCase());
                 msgState.rosterTTL = profile.sceneRosterTTL;
+                msgState.outfitTTL = profile.sceneRosterTTL;
             }
             if (matchKind !== 'pronoun') {
                 msgState.lastSubject = matchedName;
             }
-            
+
             if (msgState.lastAcceptedName?.toLowerCase() === matchedName.toLowerCase() && (now - msgState.lastAcceptedTs < suppressMs)) {
                 return;
             }
-            
+
             msgState.lastAcceptedName = matchedName;
             msgState.lastAcceptedTs = now;
-            issueCostumeForName(matchedName, { matchKind, bufKey });
+            if (Number.isFinite(bestMatch.matchIndex)) {
+                msgState.lastAcceptedIndex = bestMatch.matchIndex;
+            }
+            issueCostumeForName(matchedName, {
+                matchKind,
+                bufKey,
+                messageState: msgState,
+                context: { text: combined, matchKind, roster: msgState.sceneRoster },
+                match: bestMatch,
+            });
         }
     } catch (err) { console.error(`${logPrefix} stream handler error:`, err); }
 };
@@ -3641,9 +5347,11 @@ const resetGlobalState = () => {
     updateTesterCopyButton();
     Object.assign(state, {
         lastIssuedCostume: null,
+        lastIssuedFolder: null,
         lastSwitchTimestamp: 0,
         lastTriggerTimes: new Map(),
         failedTriggerTimes: new Map(),
+        characterOutfits: new Map(),
         perMessageBuffers: new Map(),
         perMessageStates: new Map(),
         messageStats: new Map(),
@@ -3653,6 +5361,19 @@ const resetGlobalState = () => {
         messageKeyQueue: [],
     });
     clearSessionTopCharacters();
+};
+
+export {
+    resolveOutfitForMatch,
+    evaluateSwitchDecision,
+    rebuildMappingLookup,
+    summarizeOutfitDecision,
+    state,
+    extensionName,
+    getVerbInflections,
+    getWinner,
+    findBestMatch,
+    adjustWindowForTrim,
 };
 
 function load() {
@@ -3713,9 +5434,7 @@ function getSettingsObj() {
     }
     
     storeSource[extensionName] = Object.assign({}, structuredClone(DEFAULTS), storeSource[extensionName]);
-    for (const profileName in storeSource[extensionName].profiles) {
-        storeSource[extensionName].profiles[profileName] = Object.assign({}, structuredClone(PROFILE_DEFAULTS), storeSource[extensionName].profiles[profileName]);
-    }
+    storeSource[extensionName].profiles = loadProfiles(storeSource[extensionName].profiles, PROFILE_DEFAULTS);
 
     ensureScorePresetStructure(storeSource[extensionName]);
 
@@ -3736,29 +5455,31 @@ function getSettingsObj() {
     return { store: storeSource, save: ctx.saveSettingsDebounced, ctx };
 }
 
-jQuery(async () => {
-    try {
-        const { store } = getSettingsObj();
-        extension_settings[extensionName] = store[extensionName];
+if (typeof window !== "undefined" && typeof jQuery === "function") {
+    jQuery(async () => {
+        try {
+            const { store } = getSettingsObj();
+            extension_settings[extensionName] = store[extensionName];
 
-        const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
-        $("#extensions_settings").append(settingsHtml);
+            const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
+            $("#extensions_settings").append(settingsHtml);
 
-        const buildMeta = await fetchBuildMetadata();
-        renderBuildMetadata(buildMeta);
+            const buildMeta = await fetchBuildMetadata();
+            renderBuildMetadata(buildMeta);
 
-        populateProfileDropdown();
-        populatePresetDropdown();
-        populateScorePresetDropdown();
-        loadProfile(getSettings().activeProfile);
-        wireUI();
-        registerCommands();
-        load();
+            populateProfileDropdown();
+            populatePresetDropdown();
+            populateScorePresetDropdown();
+            loadProfile(getSettings().activeProfile);
+            wireUI();
+            registerCommands();
+            load();
 
-        window[`__${extensionName}_unload`] = unload;
-        console.log(`${logPrefix} ${buildMeta?.label || 'dev build'} loaded successfully.`);
-    } catch (error) {
-        console.error(`${logPrefix} failed to initialize:`, error);
-        alert(`Failed to initialize Costume Switcher. Check console (F12) for details.`);
-    }
-});
+            window[`__${extensionName}_unload`] = unload;
+            console.log(`${logPrefix} ${buildMeta?.label || 'dev build'} loaded successfully.`);
+        } catch (error) {
+            console.error(`${logPrefix} failed to initialize:`, error);
+            alert(`Failed to initialize Costume Switcher. Check console (F12) for details.`);
+        }
+    });
+}
