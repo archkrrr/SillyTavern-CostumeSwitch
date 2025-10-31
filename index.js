@@ -34,7 +34,7 @@ import {
 } from "./src/report-utils.js";
 import { loadProfiles, normalizeProfile, normalizeMappingEntry } from "./profile-utils.js";
 
-const extensionName = "SillyTavern-CostumeSwitch-Testing";
+const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const logPrefix = "[CostumeSwitch]";
 
