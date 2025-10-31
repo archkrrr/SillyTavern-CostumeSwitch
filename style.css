@@ -105,6 +105,346 @@
   gap: 20px;
 }
 
+#costume-switcher-settings.cs-theme .cs-experiment-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.5;
+}
+
+#costume-switcher-settings.cs-theme .cs-experiment-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-secondary) 40%, transparent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+#costume-switcher-settings.cs-theme .cs-experiment-banner p {
+  margin: 0;
+  flex: 1;
+  font-size: 0.95rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-experiment-banner--outfits {
+  background: linear-gradient(135deg,
+      color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.2)),
+      color-mix(in srgb, var(--accent-secondary) 18%, rgba(0, 0, 0, 0.24)));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+#costume-switcher-settings.cs-theme .cs-experiment-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-experiment-subcopy {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--accent) 78%, rgba(255, 255, 255, 0.85));
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-disabled-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-disabled-notice strong {
+  display: block;
+  font-weight: 700;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-disabled-notice p {
+  margin: 4px 0 0 0;
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-disabled-notice i {
+  font-size: 1.15rem;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  transition: opacity 0.2s ease;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-editor.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-editor-intro {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-editor-intro code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--accent) 70%, rgba(255, 255, 255, 0.9));
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-character-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-empty {
+  padding: 18px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.26);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-title i {
+  font-size: 1.3rem;
+  color: var(--accent);
+  margin-top: 4px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card-toggle i {
+  transition: transform 0.2s ease;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card.is-collapsed .cs-outfit-card-toggle i {
+    transform: rotate(-90deg);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card.is-collapsed .cs-outfit-card-body,
+#costume-switcher-settings.cs-theme .cs-outfit-card .cs-outfit-card-body.is-collapsed {
+    display: none;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card.is-collapsed {
+    gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-card .cs-field label {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-folder-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-folder-row .text_pole {
+  flex: 1 1 220px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-pick-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-pick-folder i {
+  color: var(--accent);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variants {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-empty-variants {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant-header h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-matchkind-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-matchkind-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.9rem;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-matchkind-option input {
+  margin-top: 2px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-matchkind small,
+#costume-switcher-settings.cs-theme .cs-outfit-awareness small {
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-awareness-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+  margin-top: 8px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-awareness-field textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant small {
+  color: var(--text-muted);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-variant-remove {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-add-button,
+#costume-switcher-settings.cs-theme .cs-outfit-add-variant {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-add-button i,
+#costume-switcher-settings.cs-theme .cs-outfit-add-variant i {
+  color: var(--accent);
+}
+
+#costume-switcher-settings.cs-theme .cs-outfit-add-button[disabled],
+#costume-switcher-settings.cs-theme .cs-outfit-add-variant[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 #costume-switcher-settings.cs-theme .cs-card--compact {
   padding: 16px 22px;
 }
