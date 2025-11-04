@@ -32,7 +32,7 @@ import {
     mergeDetectionsForReport,
     summarizeDetections,
 } from "./src/report-utils.js";
-import { loadProfiles, normalizeProfile, normalizeMappingEntry } from "./profile-utils.js";
+import { loadProfiles, normalizeProfile, normalizeMappingEntry, mappingHasIdentity, prepareMappingsForSave } from "./profile-utils.js";
 
 const extensionName = "SillyTavern-CostumeSwitch";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -294,7 +294,7 @@ const PROFILE_DEFAULTS = {
     repeatSuppressMs: 800,
     tokenProcessThreshold: 60,
     mappings: [],
-    enableOutfits: false,
+    enableOutfits: true,
     detectAttribution: true,
     detectAction: true,
     detectVocative: true,
@@ -387,6 +387,7 @@ const state = {
         requiresFocusLockRefresh: false,
         lastNoticeAt: new Map(),
     },
+    draftMappingIds: new Set(),
 };
 
 let nextOutfitCardId = 1;
@@ -602,7 +603,7 @@ function findAllMatches(combined) {
     let lastSubject = null;
     if (profile.detectPronoun && state.perMessageStates.size > 0) {
         const msgState = Array.from(state.perMessageStates.values()).pop();
-        if (msgState && msgState.lastSubject) {
+        if (msgState && msgState.lastSubject && msgState.lastSubjectNormalized) {
             lastSubject = msgState.lastSubject;
         }
     }
@@ -1273,17 +1274,24 @@ function resolveOutfitForMatch(rawName, options = {}) {
     const context = buildOutfitMatchContext(options, normalizedName, profile);
     const matchKind = typeof context.matchKind === "string" ? context.matchKind.trim().toLowerCase() : (typeof options?.matchKind === "string" ? options.matchKind.trim().toLowerCase() : "");
 
-    for (const variant of mapping.outfits) {
-        if (!variant) continue;
+    const matches = [];
+    mapping.outfits.forEach((variant, index) => {
+        if (!variant) {
+            return;
+        }
         const folder = typeof variant.folder === "string" ? variant.folder.trim() : "";
-        if (!folder) continue;
+        if (!folder) {
+            return;
+        }
 
         const rawKinds = variant.matchKinds ?? variant.matchKind ?? variant.kinds ?? variant.kind ?? null;
         const allowedKinds = Array.isArray(rawKinds) ? rawKinds : (rawKinds ? [rawKinds] : []);
-        if (allowedKinds.length) {
-            const loweredKinds = allowedKinds.map(value => String(value ?? "").trim().toLowerCase()).filter(Boolean);
-            if (!matchKind || (loweredKinds.length && !loweredKinds.includes(matchKind))) {
-                continue;
+        const loweredKinds = allowedKinds
+            .map(value => String(value ?? "").trim().toLowerCase())
+            .filter(Boolean);
+        if (loweredKinds.length) {
+            if (!matchKind || !loweredKinds.includes(matchKind)) {
+                return;
             }
         }
 
@@ -1291,20 +1299,33 @@ function resolveOutfitForMatch(rawName, options = {}) {
         if (!triggerResult.matched) {
             const hasTriggers = Array.isArray(variant.triggers) && variant.triggers.length > 0;
             if (hasTriggers) {
-                continue;
+                return;
             }
         }
 
         const awarenessResult = evaluateAwarenessPredicates(variant.awareness, context);
         if (!awarenessResult.ok) {
-            continue;
+            return;
         }
 
         const label = typeof variant.label === "string" && variant.label.trim()
             ? variant.label.trim()
             : (typeof variant.slot === "string" && variant.slot.trim() ? variant.slot.trim() : null);
 
-        return {
+        const triggerCount = Array.isArray(variant.triggers) ? variant.triggers.length : 0;
+        const triggerWeight = triggerResult.matched && triggerCount > 0 ? Math.max(triggerCount, 1) : 0;
+
+        const awarenessConfig = variant.awareness && typeof variant.awareness === "object" ? variant.awareness : {};
+        const awarenessWeight = [
+            Array.isArray(awarenessConfig.requires) ? awarenessConfig.requires.length : 0,
+            Array.isArray(awarenessConfig.requiresAny) ? awarenessConfig.requiresAny.length : 0,
+            Array.isArray(awarenessConfig.excludes) ? awarenessConfig.excludes.length : 0,
+        ].reduce((total, value) => total + value, 0);
+
+        const priorityValue = Number(variant.priority);
+        const priority = Number.isFinite(priorityValue) ? priorityValue : 0;
+
+        const result = {
             folder,
             reason: triggerResult.matched ? "trigger-match" : (awarenessResult.reason !== "no-awareness" ? "awareness-match" : "variant-default"),
             normalizedName,
@@ -1320,9 +1341,38 @@ function resolveOutfitForMatch(rawName, options = {}) {
             label,
             resolvedAt: now,
         };
+
+        matches.push({
+            priority,
+            triggerWeight,
+            awarenessWeight,
+            matchKindWeight: loweredKinds.length,
+            index,
+            result,
+        });
+    });
+
+    if (!matches.length) {
+        return baseResult;
     }
 
-    return baseResult;
+    matches.sort((a, b) => {
+        if (b.priority !== a.priority) {
+            return b.priority - a.priority;
+        }
+        if (b.triggerWeight !== a.triggerWeight) {
+            return b.triggerWeight - a.triggerWeight;
+        }
+        if (b.awarenessWeight !== a.awarenessWeight) {
+            return b.awarenessWeight - a.awarenessWeight;
+        }
+        if (b.matchKindWeight !== a.matchKindWeight) {
+            return b.matchKindWeight - a.matchKindWeight;
+        }
+        return a.index - b.index;
+    });
+
+    return matches[0].result;
 }
 
 function ensureCharacterOutfitCache(runtimeState) {
@@ -1605,7 +1655,6 @@ const uiMapping = {
     detectPossessive: { selector: '#cs-detect-possessive', type: 'checkbox' },
     detectPronoun: { selector: '#cs-detect-pronoun', type: 'checkbox' },
     detectGeneral: { selector: '#cs-detect-general', type: 'checkbox' },
-    enableOutfits: { selector: '#cs-outfits-enable', type: 'checkbox' },
     attributionVerbs: { selector: '#cs-attribution-verbs', type: 'csvTextarea' },
     actionVerbs: { selector: '#cs-action-verbs', type: 'csvTextarea' },
     pronounVocabulary: { selector: '#cs-pronoun-vocabulary', type: 'csvTextarea' },
@@ -2085,19 +2134,10 @@ function saveCurrentProfileData() {
         }
         profileData[key] = value;
     }
-    profileData.mappings = [];
-    $("#cs-mappings-tbody tr").each(function () {
-        const name = $(this).find(".map-name").val().trim();
-        const folder = $(this).find(".map-folder").val().trim();
-        const outfitsData = $(this).data('outfits');
-        const outfits = Array.isArray(outfitsData)
-            ? (typeof structuredClone === 'function' ? structuredClone(outfitsData) : outfitsData.slice())
-            : [];
-        const mapping = normalizeMappingEntry({ name, defaultFolder: folder, outfits });
-        if (mapping.name && mapping.defaultFolder) {
-            profileData.mappings.push(mapping);
-        }
-    });
+    const activeProfile = getActiveProfile();
+    const mappingSource = Array.isArray(activeProfile?.mappings) ? activeProfile.mappings : [];
+    const draftIds = state?.draftMappingIds instanceof Set ? state.draftMappingIds : new Set();
+    profileData.mappings = prepareMappingsForSave(mappingSource, draftIds);
     return profileData;
 }
 
@@ -2110,43 +2150,6 @@ const OUTFIT_MATCH_KIND_OPTIONS = [
     { value: "possessive", label: "Possessive mentions (Alice's staff)" },
     { value: "name", label: "General name hits (any mention)" },
 ];
-
-function cloneOutfitList(outfits) {
-    if (!Array.isArray(outfits)) {
-        return [];
-    }
-
-    const cloned = [];
-    outfits.forEach((entry) => {
-        if (entry == null) {
-            return;
-        }
-        if (typeof entry === 'string') {
-            const trimmed = entry.trim();
-            if (trimmed) {
-                cloned.push(trimmed);
-            }
-            return;
-        }
-        if (typeof structuredClone === 'function') {
-            try {
-                cloned.push(structuredClone(entry));
-                return;
-            } catch (err) {
-                // Fall back to JSON-based cloning
-            }
-        }
-        try {
-            cloned.push(JSON.parse(JSON.stringify(entry)));
-        } catch (err) {
-            if (typeof entry === 'object') {
-                cloned.push({ ...entry });
-            }
-        }
-    });
-
-    return cloned;
-}
 
 function ensureAutoSaveState() {
     if (!state.autoSave) {
@@ -2172,22 +2175,6 @@ function resetAutoSaveState() {
     auto.requiresRecompile = false;
     auto.requiresMappingRebuild = false;
     auto.requiresFocusLockRefresh = false;
-}
-
-function syncMappingRowsWithProfile(profile) {
-    const rows = $("#cs-mappings-tbody tr");
-    if (!rows.length) {
-        return;
-    }
-    rows.each(function(index) {
-        const mapping = Array.isArray(profile?.mappings) ? profile.mappings[index] : null;
-        if (!mapping) {
-            $(this).data('outfits', []);
-            return;
-        }
-        const outfits = cloneOutfitList(mapping.outfits);
-        $(this).data('outfits', outfits);
-    });
 }
 
 function formatAutoSaveReason(key) {
@@ -2307,7 +2294,6 @@ function commitProfileChanges({
     mappings.forEach(ensureMappingCardId);
     Object.assign(profile, normalized);
     profile.mappings = mappings;
-    syncMappingRowsWithProfile(profile);
     if (recompile) {
         recompileRegexes();
         refreshCoverageFromLastReport();
@@ -2489,6 +2475,12 @@ function normalizeOutfitVariant(rawVariant = {}) {
     delete normalized.none;
     delete normalized.forbid;
 
+    const prioritySource = normalized.priority ?? normalized.order ?? normalized.weight ?? 0;
+    const priority = Number(prioritySource);
+    normalized.priority = Number.isFinite(priority) ? priority : 0;
+    delete normalized.order;
+    delete normalized.weight;
+
     return normalized;
 }
 
@@ -2512,7 +2504,7 @@ function extractDirectoryFromFileList(fileList) {
     return '';
 }
 
-function buildVariantFolderPath(characterName, folderPath) {
+function buildVariantFolderPath(mappingOrName, folderPath) {
     const rawFolder = (folderPath || "").trim();
     if (!rawFolder) {
         return "";
@@ -2521,59 +2513,44 @@ function buildVariantFolderPath(characterName, folderPath) {
     if (!normalizedFolder) {
         return "";
     }
-    const rawName = (characterName || "").trim();
-    if (!rawName) {
-        return normalizedFolder;
+    const mapping = mappingOrName && typeof mappingOrName === "object" ? mappingOrName : null;
+    const candidates = [];
+    if (mapping) {
+        const defaultFolder = typeof mapping.defaultFolder === "string" ? mapping.defaultFolder.trim() : "";
+        const name = typeof mapping.name === "string" ? mapping.name.trim() : "";
+        if (defaultFolder) {
+            candidates.push(defaultFolder);
+        }
+        if (name) {
+            candidates.push(name);
+        }
+    } else {
+        const rawName = typeof mappingOrName === "string" ? mappingOrName.trim() : "";
+        if (rawName) {
+            candidates.push(rawName);
+        }
     }
-    const normalizedName = rawName.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
-    if (!normalizedName) {
-        return normalizedFolder;
-    }
-    if (normalizedFolder === normalizedName || normalizedFolder.startsWith(`${normalizedName}/`)) {
-        return normalizedFolder;
-    }
-    return `${normalizedName}/${normalizedFolder}`;
-}
 
-function getMappingRow(idx) {
-    const rows = $("#cs-mappings-tbody tr");
-    const row = rows.eq(idx);
-    return row.length ? row : $();
-}
+    const normalizedCandidates = candidates
+        .map((candidate) => candidate.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, ""))
+        .filter(Boolean)
+        .map((normalized) => ({
+            original: normalized,
+            lower: normalized.toLowerCase(),
+        }));
 
-function syncMappingRowName(idx, name) {
-    const row = getMappingRow(idx);
-    if (!row.length) return;
-    row.find('.map-name').val(name);
-}
-
-function syncMappingRowFolder(idx, folder) {
-    const row = getMappingRow(idx);
-    if (!row.length) return;
-    row.find('.map-folder').val(folder);
-}
-
-function syncMappingRowOutfits(idx, outfits) {
-    const row = getMappingRow(idx);
-    if (!row.length) return;
-    row.data('outfits', cloneOutfitList(outfits));
-}
-
-function updateOutfitLabEnabledState(enabled) {
-    const editor = $('#cs-outfit-editor');
-    const notice = $('#cs-outfit-disabled-notice');
-    const addButton = $('#cs-outfit-add-character');
-    const isEnabled = Boolean(enabled);
-    if (editor.length) {
-        editor.toggleClass('is-disabled', !isEnabled);
-        editor.attr('aria-disabled', String(!isEnabled));
+    const folderLower = normalizedFolder.toLowerCase();
+    for (const candidate of normalizedCandidates) {
+        if (folderLower === candidate.lower || folderLower.startsWith(`${candidate.lower}/`)) {
+            return normalizedFolder;
+        }
     }
-    if (notice.length) {
-        notice.prop('hidden', isEnabled);
+
+    if (normalizedCandidates.length) {
+        return `${normalizedCandidates[0].original}/${normalizedFolder}`;
     }
-    if (addButton.length) {
-        addButton.prop('disabled', !isEnabled);
-    }
+
+    return normalizedFolder;
 }
 
 function createOutfitVariantElement(profile, mapping, mappingIdx, variant, variantIndex) {
@@ -2643,7 +2620,7 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
     folderPicker.on('change', function() {
         const folderPath = extractDirectoryFromFileList(this.files || []);
         if (folderPath) {
-            const combinedPath = buildVariantFolderPath(mapping?.name, folderPath);
+            const combinedPath = buildVariantFolderPath(mapping, folderPath);
             folderInput.val(combinedPath);
             folderInput.trigger('input');
         }
@@ -2652,7 +2629,20 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
     folderRow.append(folderInput, folderButton, folderPicker);
     folderField.append(folderRow);
 
-    grid.append(labelField, folderField);
+    const priorityId = `cs-outfit-variant-priority-${mappingIdx}-${variantIndex}`;
+    const priorityField = $('<div>').addClass('cs-field')
+        .append($('<label>', { for: priorityId, text: 'Priority' }));
+    const priorityValue = Number.isFinite(Number(normalized.priority)) ? Number(normalized.priority) : 0;
+    const priorityInput = $('<input>', {
+        id: priorityId,
+        type: 'number',
+        step: '1',
+    }).addClass('text_pole cs-outfit-variant-priority')
+        .val(priorityValue);
+    priorityField.append(priorityInput);
+    priorityField.append($('<small>').text('Higher numbers take precedence when multiple variants match.'));
+
+    grid.append(labelField, folderField, priorityField);
     variantEl.append(grid);
 
     const triggerId = `cs-outfit-variant-triggers-${mappingIdx}-${variantIndex}`;
@@ -2690,7 +2680,6 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
             } else {
                 delete normalized.matchKinds;
             }
-            syncMappingRowOutfits(mappingIdx, mapping.outfits);
             markVariantDirty(checkbox[0]);
         });
     });
@@ -2767,7 +2756,6 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
         } else {
             delete normalized.awareness;
         }
-        syncMappingRowOutfits(mappingIdx, mapping.outfits);
     };
 
     const handleAwarenessInput = function() {
@@ -2786,14 +2774,23 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
         } else {
             delete normalized.label;
         }
-        syncMappingRowOutfits(mappingIdx, mapping.outfits);
         markVariantDirty(labelInput[0]);
     });
 
     folderInput.on('input', () => {
         normalized.folder = folderInput.val().trim();
-        syncMappingRowOutfits(mappingIdx, mapping.outfits);
         markVariantDirty(folderInput[0]);
+    });
+
+    priorityInput.on('input', () => {
+        const raw = priorityInput.val();
+        const value = Number(raw);
+        if (Number.isFinite(value)) {
+            normalized.priority = value;
+        } else {
+            normalized.priority = 0;
+        }
+        markVariantDirty(priorityInput[0]);
     });
 
     triggerTextarea.on('input', () => {
@@ -2802,7 +2799,6 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
             .map(value => value.trim())
             .filter(Boolean);
         normalized.triggers = triggers;
-        syncMappingRowOutfits(mappingIdx, mapping.outfits);
         markVariantDirty(triggerTextarea[0]);
     });
 
@@ -2813,7 +2809,6 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
             return;
         }
         activeProfile.mappings[mappingIdx].outfits.splice(variantIndex, 1);
-        syncMappingRowOutfits(mappingIdx, activeProfile.mappings[mappingIdx].outfits);
         variantEl.remove();
         const card = $(`.cs-outfit-card[data-idx="${mappingIdx}"]`);
         const variantContainer = card.find('.cs-outfit-variants');
@@ -2879,6 +2874,9 @@ function createOutfitCard(profile, mapping, idx) {
             announceAutoSaveIntent(removeButton[0], 'character mappings', removeButton[0].dataset.changeNotice, removeButton[0].dataset.changeNoticeKey);
             if (!profile?.mappings) return;
             state.outfitCardCollapse?.delete(cardId);
+            if (cardId && state?.draftMappingIds instanceof Set) {
+                state.draftMappingIds.delete(cardId);
+            }
             profile.mappings.splice(idx, 1);
             renderMappings(profile);
             rebuildMappingLookup(profile);
@@ -2953,7 +2951,6 @@ function createOutfitCard(profile, mapping, idx) {
             variantsContainer.find('.cs-outfit-empty-variants').remove();
             const variantEl = createOutfitVariantElement(profile, mapping, idx, newVariant, variantIndex);
             variantsContainer.append(variantEl);
-            syncMappingRowOutfits(idx, mapping.outfits);
             setCollapsed(false);
             variantEl.find('.cs-outfit-variant-folder').trigger('focus');
             scheduleProfileAutoSave({
@@ -3005,7 +3002,6 @@ function createOutfitCard(profile, mapping, idx) {
 
     nameInput.on('input', () => {
         mapping.name = nameInput.val().trim();
-        syncMappingRowName(idx, nameInput.val());
         scheduleProfileAutoSave({
             reason: 'character mappings',
             element: nameInput[0],
@@ -3025,7 +3021,6 @@ function createOutfitCard(profile, mapping, idx) {
         const value = defaultInput.val().trim();
         mapping.defaultFolder = value;
         mapping.folder = value;
-        syncMappingRowFolder(idx, defaultInput.val());
         scheduleProfileAutoSave({
             reason: 'character mappings',
             element: defaultInput[0],
@@ -3054,7 +3049,6 @@ function createOutfitCard(profile, mapping, idx) {
             mapping.__startCollapsed = undefined;
         }
     }
-    syncMappingRowOutfits(idx, mapping.outfits);
 
     return card;
 }
@@ -3084,26 +3078,20 @@ function renderOutfitLab(profile) {
             container.append(createOutfitCard(profile, normalized, idx));
         });
     }
-
-    updateOutfitLabEnabledState(profile?.enableOutfits);
 }
 
 function renderMappings(profile) {
-    const tbody = $("#cs-mappings-tbody");
-    tbody.empty();
-    (profile.mappings || []).forEach((m, idx) => {
-        const normalized = normalizeMappingEntry(m);
-        profile.mappings[idx] = normalized;
-        const row = $("<tr>").attr("data-idx", idx);
-        const outfits = Array.isArray(normalized.outfits)
-            ? (typeof structuredClone === 'function' ? structuredClone(normalized.outfits) : normalized.outfits.slice())
-            : [];
-        row.data('outfits', outfits);
-        row.append($("<td>").append($("<input>").addClass("map-name text_pole").val(normalized.name || "")));
-        row.append($("<td>").append($("<input>").addClass("map-folder text_pole").val(normalized.defaultFolder || normalized.folder || "")));
-        row.append($("<td>").append($("<button>").addClass("map-remove menu_button interactable").html('<i class="fa-solid fa-trash-can"></i>')));
-        tbody.append(row);
-    });
+    if (!profile || typeof profile !== 'object') {
+        renderOutfitLab({ mappings: [] });
+        return;
+    }
+
+    if (!Array.isArray(profile.mappings)) {
+        profile.mappings = [];
+    } else {
+        profile.mappings = profile.mappings.map((entry) => normalizeMappingEntry(entry));
+    }
+
     renderOutfitLab(profile);
 }
 
@@ -3796,19 +3784,21 @@ function adjustWindowForTrim(msgState, trimmedChars, combinedLength) {
         return;
     }
 
+    if (!Number.isFinite(msgState.bufferOffset)) {
+        msgState.bufferOffset = 0;
+    }
+
     if (!Number.isFinite(msgState.processedLength)) {
         msgState.processedLength = 0;
     }
 
     if (Number.isFinite(trimmedChars) && trimmedChars > 0) {
-        if (Number.isFinite(msgState.lastAcceptedIndex) && msgState.lastAcceptedIndex >= 0) {
-            msgState.lastAcceptedIndex = Math.max(-1, msgState.lastAcceptedIndex - trimmedChars);
-        }
-        msgState.processedLength = Math.max(0, msgState.processedLength - trimmedChars);
+        msgState.bufferOffset += trimmedChars;
     }
 
-    if (Number.isFinite(combinedLength)) {
-        msgState.processedLength = Math.min(msgState.processedLength, combinedLength);
+    if (Number.isFinite(combinedLength) && combinedLength >= 0) {
+        const absoluteTail = msgState.bufferOffset + combinedLength;
+        msgState.processedLength = Math.max(msgState.processedLength, absoluteTail);
     }
 }
 
@@ -3818,11 +3808,16 @@ function createTesterMessageState(profile) {
         lastAcceptedTs: 0,
         vetoed: false,
         lastSubject: null,
+        lastSubjectNormalized: null,
+        pendingSubject: null,
+        pendingSubjectNormalized: null,
         sceneRoster: new Set(),
         rosterTTL: profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL,
         outfitRoster: new Map(),
         outfitTTL: profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL,
         processedLength: 0,
+        lastAcceptedIndex: -1,
+        bufferOffset: 0,
     };
 }
 
@@ -3842,7 +3837,6 @@ function simulateTesterStream(combined, profile, bufKey) {
         characterOutfits: new Map(),
     };
 
-    const threshold = Math.max(0, Number(profile.tokenProcessThreshold) || 0);
     const maxBuffer = resolveMaxBufferChars(profile);
     const rosterTTL = profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL;
     const repeatSuppress = Number(profile.repeatSuppressMs) || 0;
@@ -3857,22 +3851,42 @@ function simulateTesterStream(combined, profile, bufKey) {
         adjustWindowForTrim(msgState, trimmedChars, buffer.length);
         state.perMessageBuffers.set(bufKey, buffer);
 
+        const bufferOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
+        const newestAbsoluteIndex = buffer.length > 0 ? bufferOffset + buffer.length - 1 : bufferOffset;
+        const lastProcessedIndex = Number.isFinite(msgState.lastAcceptedIndex) ? msgState.lastAcceptedIndex : -1;
+
+        if (newestAbsoluteIndex <= lastProcessedIndex) {
+            continue;
+        }
+
         if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(buffer)) {
             const vetoMatch = buffer.match(state.compiledRegexes.vetoRegex)?.[0];
             if (vetoMatch) {
-                events.push({ type: 'veto', match: vetoMatch, charIndex: i });
+                events.push({ type: 'veto', match: vetoMatch, charIndex: newestAbsoluteIndex });
             }
             msgState.vetoed = true;
             break;
         }
 
-        if (buffer.length < msgState.processedLength + threshold) {
-            continue;
+        let minIndexRelative = null;
+        if (lastProcessedIndex >= bufferOffset) {
+            minIndexRelative = lastProcessedIndex - bufferOffset;
         }
 
-        msgState.processedLength = buffer.length;
-        const bestMatch = findBestMatch(buffer);
+        const matchOptions = {};
+        if (Number.isFinite(minIndexRelative) && minIndexRelative >= 0) {
+            matchOptions.minIndex = minIndexRelative;
+        }
+
+        const bestMatch = findBestMatch(buffer, null, matchOptions);
         if (!bestMatch) continue;
+
+        const absoluteIndex = Number.isFinite(bestMatch.matchIndex)
+            ? bufferOffset + bestMatch.matchIndex
+            : newestAbsoluteIndex;
+
+        msgState.lastAcceptedIndex = absoluteIndex;
+        msgState.processedLength = Math.max(msgState.processedLength || 0, absoluteIndex + 1);
 
         if (profile.enableSceneRoster) {
             const normalized = String(bestMatch.name || '').toLowerCase();
@@ -3887,20 +3901,20 @@ function simulateTesterStream(combined, profile, bufKey) {
                 type: wasPresent ? 'refresh' : 'join',
                 name: bestMatch.name,
                 matchKind: bestMatch.matchKind,
-                charIndex: i,
-                timestamp: i * 50,
+                charIndex: absoluteIndex,
+                timestamp: absoluteIndex * 50,
                 rosterSize: msgState.sceneRoster.size,
             });
         }
 
         if (bestMatch.matchKind !== 'pronoun') {
-            msgState.lastSubject = bestMatch.name;
+            confirmMessageSubject(msgState, bestMatch.name);
         }
 
-        const virtualNow = i * 50;
+        const virtualNow = absoluteIndex * 50;
         if (msgState.lastAcceptedName?.toLowerCase() === bestMatch.name.toLowerCase() &&
             (virtualNow - msgState.lastAcceptedTs < repeatSuppress)) {
-            events.push({ type: 'skipped', name: bestMatch.name, matchKind: bestMatch.matchKind, reason: 'repeat-suppression', charIndex: i });
+            events.push({ type: 'skipped', name: bestMatch.name, matchKind: bestMatch.matchKind, reason: 'repeat-suppression', charIndex: absoluteIndex });
             continue;
         }
 
@@ -3920,7 +3934,7 @@ function simulateTesterStream(combined, profile, bufKey) {
                 folder: decision.folder,
                 matchKind: bestMatch.matchKind,
                 score: Math.round(bestMatch.score ?? 0),
-                charIndex: i,
+                charIndex: absoluteIndex,
                 outfit: decision.outfit ? {
                     folder: decision.outfit.folder,
                     label: decision.outfit.label || null,
@@ -3953,7 +3967,7 @@ function simulateTesterStream(combined, profile, bufKey) {
                     trigger: decision.outfit.trigger || null,
                     awareness: decision.outfit.awareness || null,
                 } : null,
-                charIndex: i,
+                charIndex: absoluteIndex,
             });
         }
     }
@@ -3968,7 +3982,7 @@ function simulateTesterStream(combined, profile, bufKey) {
         outfitRoster: Array.from(msgState.outfitRoster || []),
         outfitTTL: msgState.outfitTTL,
         vetoed: Boolean(msgState.vetoed),
-        virtualDurationMs: combined.length > 0 ? Math.max(0, (combined.length - 1) * 50) : 0,
+        virtualDurationMs: msgState.processedLength > 0 ? Math.max(0, (msgState.processedLength - 1) * 50) : 0,
     };
 
     if (profile.enableSceneRoster && msgState.sceneRoster.size > 0) {
@@ -4600,44 +4614,6 @@ function wireUI() {
     });
     $(document).on('input', '#cs-detection-bias', function() { $("#cs-detection-bias-value").text($(this).val()); });
     $(document).on('click', '#cs-reset', manualReset);
-    $(document).on('click', '#cs-mapping-add', () => {
-        const profile = getActiveProfile();
-        if (profile) {
-            const button = document.getElementById('cs-mapping-add');
-            if (button) {
-                announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-mapping-add');
-            }
-            profile.mappings.push(markMappingForInitialCollapse(normalizeMappingEntry({ name: "", defaultFolder: "", outfits: [] })));
-            renderMappings(profile);
-            rebuildMappingLookup(profile);
-        }
-    });
-    $(document).on('click', '#cs-mappings-tbody .map-remove', function() {
-        const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
-        const profile = getActiveProfile();
-        if (profile && !isNaN(idx)) {
-            const mapping = profile.mappings?.[idx];
-            if (mapping && Object.prototype.hasOwnProperty.call(mapping, '__cardId')) {
-                state.outfitCardCollapse?.delete(mapping.__cardId);
-            }
-            profile.mappings.splice(idx, 1);
-            renderMappings(profile); // Re-render to update indices
-            rebuildMappingLookup(profile);
-            scheduleProfileAutoSave({
-                reason: 'character mappings',
-                element: this,
-                requiresMappingRebuild: true,
-            });
-        }
-    });
-    $(document).on('change', '#cs-outfits-enable', function() {
-        const profile = getActiveProfile();
-        const enabled = $(this).prop('checked');
-        if (profile) {
-            profile.enableOutfits = enabled;
-        }
-        updateOutfitLabEnabledState(enabled);
-    });
     $(document).on('click', '#cs-outfit-add-character', () => {
         const profile = getActiveProfile();
         if (!profile) {
@@ -4648,8 +4624,16 @@ function wireUI() {
             announceAutoSaveIntent(button, 'character mappings', button.dataset.changeNotice, button.dataset.changeNoticeKey || 'cs-outfit-add-character');
         }
         profile.mappings.push(markMappingForInitialCollapse(normalizeMappingEntry({ name: '', defaultFolder: '', outfits: [] })));
+        const newIndex = profile.mappings.length - 1;
         renderMappings(profile);
         rebuildMappingLookup(profile);
+        if (newIndex >= 0) {
+            const addedMapping = profile.mappings[newIndex];
+            const cardId = ensureMappingCardId(addedMapping);
+            if (cardId && state?.draftMappingIds instanceof Set) {
+                state.draftMappingIds.add(cardId);
+            }
+        }
         const newCard = $('#cs-outfit-character-list .cs-outfit-card').last();
         if (newCard.length) {
             const toggle = newCard.find('.cs-outfit-card-toggle');
@@ -4662,63 +4646,6 @@ function wireUI() {
         scheduleProfileAutoSave({
             reason: 'character mappings',
             element: button || null,
-            requiresMappingRebuild: true,
-        });
-    });
-    $(document).on('input', '#cs-mappings-tbody .map-name', function() {
-        const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
-        if (Number.isNaN(idx)) {
-            return;
-        }
-        const value = String($(this).val() ?? '');
-        const profile = getActiveProfile();
-        if (profile?.mappings?.[idx]) {
-            profile.mappings[idx].name = value.trim();
-        }
-        $(`.cs-outfit-card[data-idx="${idx}"]`).find('.cs-outfit-character-name').val(value);
-        scheduleProfileAutoSave({
-            reason: 'character mappings',
-            element: this,
-            requiresMappingRebuild: true,
-        });
-    });
-    $(document).on('change', '#cs-mappings-tbody .map-name', function() {
-        const profile = getActiveProfile();
-        if (profile) {
-            rebuildMappingLookup(profile);
-        }
-        scheduleProfileAutoSave({
-            reason: 'character mappings',
-            element: this,
-            requiresMappingRebuild: true,
-        });
-    });
-    $(document).on('input', '#cs-mappings-tbody .map-folder', function() {
-        const idx = parseInt($(this).closest('tr').attr('data-idx'), 10);
-        if (Number.isNaN(idx)) {
-            return;
-        }
-        const value = String($(this).val() ?? '');
-        const profile = getActiveProfile();
-        if (profile?.mappings?.[idx]) {
-            profile.mappings[idx].defaultFolder = value.trim();
-            profile.mappings[idx].folder = value.trim();
-        }
-        $(`.cs-outfit-card[data-idx="${idx}"]`).find('.cs-outfit-default-folder').val(value);
-        scheduleProfileAutoSave({
-            reason: 'character mappings',
-            element: this,
-            requiresMappingRebuild: true,
-        });
-    });
-    $(document).on('change', '#cs-mappings-tbody .map-folder', function() {
-        const profile = getActiveProfile();
-        if (profile) {
-            rebuildMappingLookup(profile);
-        }
-        scheduleProfileAutoSave({
-            reason: 'character mappings',
-            element: this,
             requiresMappingRebuild: true,
         });
     });
@@ -5090,22 +5017,81 @@ function registerCommands() {
 // EVENT HANDLERS
 // ======================================================================
 
+function normalizeSubjectForComparison(name) {
+    if (!name && name !== "") {
+        return null;
+    }
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) {
+        return null;
+    }
+    const normalized = normalizeCostumeName(trimmed) || trimmed;
+    const lowered = String(normalized).trim().toLowerCase();
+    return lowered || null;
+}
+
+function confirmMessageSubject(msgState, matchedName) {
+    if (!msgState) {
+        return;
+    }
+
+    const trimmed = String(matchedName ?? "").trim();
+    const normalized = normalizeSubjectForComparison(trimmed);
+
+    if (!normalized) {
+        msgState.lastSubject = null;
+        msgState.lastSubjectNormalized = null;
+        msgState.pendingSubject = null;
+        msgState.pendingSubjectNormalized = null;
+        return;
+    }
+
+    const pendingNormalized = msgState.pendingSubjectNormalized || null;
+    if (pendingNormalized && normalized === pendingNormalized) {
+        const pendingTrimmed = typeof msgState.pendingSubject === "string"
+            ? msgState.pendingSubject.trim()
+            : "";
+        msgState.lastSubject = pendingTrimmed || trimmed;
+    } else {
+        msgState.lastSubject = trimmed;
+    }
+
+    msgState.lastSubjectNormalized = normalized;
+    msgState.pendingSubject = null;
+    msgState.pendingSubjectNormalized = null;
+}
+
 function createMessageState(profile, bufKey) {
     if (!profile || !bufKey) return null;
 
     const oldState = state.perMessageStates.size > 0 ? Array.from(state.perMessageStates.values()).pop() : null;
 
+    let pendingSubject = null;
+    let pendingSubjectNormalized = null;
+    if (oldState?.lastSubject) {
+        const inherited = String(oldState.lastSubject).trim();
+        const normalized = normalizeSubjectForComparison(inherited);
+        if (normalized) {
+            pendingSubject = inherited;
+            pendingSubjectNormalized = normalized;
+        }
+    }
+
     const newState = {
         lastAcceptedName: null,
         lastAcceptedTs: 0,
         vetoed: false,
-        lastSubject: oldState?.lastSubject || null,
+        lastSubject: null,
+        lastSubjectNormalized: null,
+        pendingSubject,
+        pendingSubjectNormalized,
         sceneRoster: new Set(oldState?.sceneRoster || []),
         outfitRoster: new Map(oldState?.outfitRoster || []),
         rosterTTL: profile.sceneRosterTTL,
         outfitTTL: profile.sceneRosterTTL,
         processedLength: 0,
         lastAcceptedIndex: -1,
+        bufferOffset: 0,
     };
 
     if (newState.sceneRoster.size > 0) {
@@ -5242,15 +5228,28 @@ const handleStream = (...args) => {
         adjustWindowForTrim(msgState, trimmedChars, combined.length);
         state.perMessageBuffers.set(bufKey, combined);
 
-        const rosterSet = msgState?.sceneRoster instanceof Set ? msgState.sceneRoster : null;
-        const analytics = updateMessageAnalytics(bufKey, combined, { rosterSet, assumeNormalized: true });
+        const bufferOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
+        const newestAbsoluteIndex = combined.length > 0 ? bufferOffset + combined.length - 1 : bufferOffset;
+        const lastProcessedIndex = Number.isFinite(msgState.lastAcceptedIndex) ? msgState.lastAcceptedIndex : -1;
 
-        if (combined.length < msgState.processedLength + profile.tokenProcessThreshold) {
+        if (newestAbsoluteIndex <= lastProcessedIndex) {
             return;
         }
 
-        msgState.processedLength = combined.length;
-        const bestMatch = findBestMatch(combined, analytics?.matches, { minIndex: msgState.lastAcceptedIndex });
+        const rosterSet = msgState?.sceneRoster instanceof Set ? msgState.sceneRoster : null;
+        const analytics = updateMessageAnalytics(bufKey, combined, { rosterSet, assumeNormalized: true });
+
+        let minIndexRelative = null;
+        if (lastProcessedIndex >= bufferOffset) {
+            minIndexRelative = lastProcessedIndex - bufferOffset;
+        }
+
+        const matchOptions = {};
+        if (Number.isFinite(minIndexRelative) && minIndexRelative >= 0) {
+            matchOptions.minIndex = minIndexRelative;
+        }
+
+        const bestMatch = findBestMatch(combined, analytics?.matches, matchOptions);
         debugLog(`[STREAM] Buffer len: ${combined.length}. Match:`, bestMatch ? `${bestMatch.name} (${bestMatch.matchKind})` : 'None');
 
         if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(combined)) {
@@ -5263,13 +5262,19 @@ const handleStream = (...args) => {
             const now = Date.now();
             const suppressMs = profile.repeatSuppressMs;
 
+            const absoluteIndex = Number.isFinite(bestMatch.matchIndex)
+                ? bufferOffset + bestMatch.matchIndex
+                : newestAbsoluteIndex;
+            msgState.lastAcceptedIndex = absoluteIndex;
+            msgState.processedLength = Math.max(msgState.processedLength || 0, absoluteIndex + 1);
+
             if (profile.enableSceneRoster) {
                 msgState.sceneRoster.add(matchedName.toLowerCase());
                 msgState.rosterTTL = profile.sceneRosterTTL;
                 msgState.outfitTTL = profile.sceneRosterTTL;
             }
             if (matchKind !== 'pronoun') {
-                msgState.lastSubject = matchedName;
+                confirmMessageSubject(msgState, matchedName);
             }
 
             if (msgState.lastAcceptedName?.toLowerCase() === matchedName.toLowerCase() && (now - msgState.lastAcceptedTs < suppressMs)) {
@@ -5278,9 +5283,6 @@ const handleStream = (...args) => {
 
             msgState.lastAcceptedName = matchedName;
             msgState.lastAcceptedTs = now;
-            if (Number.isFinite(bestMatch.matchIndex)) {
-                msgState.lastAcceptedIndex = bestMatch.matchIndex;
-            }
             issueCostumeForName(matchedName, {
                 matchKind,
                 bufKey,
@@ -5359,6 +5361,7 @@ const resetGlobalState = () => {
         latestTopRanking: { bufKey: null, ranking: [], fullRanking: [], updatedAt: Date.now() },
         currentGenerationKey: null,
         messageKeyQueue: [],
+        draftMappingIds: new Set(),
     });
     clearSessionTopCharacters();
 };
@@ -5374,6 +5377,8 @@ export {
     getWinner,
     findBestMatch,
     adjustWindowForTrim,
+    simulateTesterStream,
+    buildVariantFolderPath,
 };
 
 function load() {
