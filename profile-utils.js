@@ -133,6 +133,8 @@ export function normalizeProfile(profile = {}, defaults = {}) {
         merged.mappings = [];
     }
 
+    merged.enableOutfits = true;
+
     return merged;
 }
 
@@ -147,4 +149,59 @@ export function loadProfiles(rawProfiles = {}, defaults = {}) {
     }
 
     return normalized;
+}
+
+export function prepareMappingsForSave(mappings = [], draftIds = new Set()) {
+    if (!Array.isArray(mappings)) {
+        return [];
+    }
+
+    const drafts = draftIds instanceof Set ? draftIds : new Set();
+
+    return mappings
+        .map((entry) => {
+            const normalized = normalizeMappingEntry(entry);
+            const cardId = typeof normalized?.__cardId === 'string'
+                ? normalized.__cardId
+                : typeof entry?.__cardId === 'string'
+                    ? entry.__cardId
+                    : null;
+            const hasIdentity = mappingHasIdentity(normalized, { normalized: true });
+
+            if (!hasIdentity) {
+                if (cardId && drafts.has(cardId)) {
+                    normalized.outfits = cloneOutfits(normalized.outfits);
+                    return normalized;
+                }
+                if (cardId) {
+                    drafts.delete(cardId);
+                }
+                return null;
+            }
+
+            if (cardId) {
+                drafts.delete(cardId);
+            }
+
+            normalized.outfits = cloneOutfits(normalized.outfits);
+            return normalized;
+        })
+        .filter(Boolean);
+}
+
+export function mappingHasIdentity(entry = {}, { normalized = false } = {}) {
+    if (!entry || typeof entry !== 'object') {
+        return false;
+    }
+
+    const source = normalized ? entry : normalizeMappingEntry(entry);
+    if (!source || typeof source !== 'object') {
+        return false;
+    }
+
+    const name = typeof source.name === 'string' ? source.name.trim() : '';
+    const defaultFolder = typeof source.defaultFolder === 'string' ? source.defaultFolder.trim() : '';
+    const folder = typeof source.folder === 'string' ? source.folder.trim() : '';
+
+    return Boolean(name || defaultFolder || folder);
 }

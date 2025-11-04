@@ -37,7 +37,7 @@
       </button>
       <button class="cs-tab-button" id="cs-tab-outfits" type="button" role="tab" aria-selected="false" aria-controls="cs-panel-outfits" data-tab="outfits">
         <i class="fa-solid fa-shirt"></i>
-        <span>Outfits (Preview)</span>
+        <span>Outfits</span>
       </button>
       <button class="cs-tab-button" id="cs-tab-detection" type="button" role="tab" aria-selected="false" aria-controls="cs-panel-detection" data-tab="detection">
         <i class="fa-solid fa-sliders"></i>
@@ -168,28 +168,6 @@
               </div>
             </section>
           </div>
-          <div class="cs-column cs-column--wide">
-            <section class="cs-card">
-              <header class="cs-card-header">
-                <div class="cs-card-title">
-                  <i class="fa-solid fa-layer-group"></i>
-                  <div>
-                    <h3>Costume Mappings</h3>
-                    <p>Map detected names to specific costume folders.</p>
-                  </div>
-                </div>
-              </header>
-              <div class="cs-card-body">
-                <table id="cs-mappings" class="text_pole">
-                  <thead>
-                    <tr><th>Character Name</th><th>Costume Folder</th><th>Action</th></tr>
-                  </thead>
-                  <tbody id="cs-mappings-tbody"></tbody>
-                </table>
-                <button id="cs-mapping-add" class="menu_button interactable" style="margin-top: 12px;" data-change-notice="Adding a row will be saved once details are filled in.">Add Mapping</button>
-              </div>
-            </section>
-          </div>
         </div>
       </section>
 
@@ -202,40 +180,14 @@
                   <i class="fa-solid fa-user-astronaut"></i>
                   <div>
                     <h3>Outfit Lab</h3>
-                    <p>Preview controls for outfit-aware detection. Variants you configure here run in the live detector once enabled.</p>
+                    <p>Manage per-character outfit automation. Variants you configure here run in the live detector as soon as they're saved.</p>
                   </div>
                 </div>
               </header>
               <div class="cs-card-body cs-card-body--stacked">
-                <div class="cs-experiment-banner cs-experiment-banner--outfits" role="note" aria-live="polite">
-                  <span class="cs-experiment-badge">Experimental</span>
-                  <div class="cs-experiment-copy">
-                    <p>
-                      Outfit awareness is an early preview feature. Expect rough edges, limited functionality, and breaking changes as the system evolves.
-                    </p>
-                    <p class="cs-experiment-subcopy">
-                      Use this lab to stage per-character wardrobes, configure trigger filters, and test scene-aware variants before the feature graduates into the main Characters tab.
-                    </p>
-                  </div>
-                </div>
-                <label class="cs-master-toggle" for="cs-outfits-enable">
-                  <input id="cs-outfits-enable" type="checkbox" />
-                  <span class="cs-switch-thumb" aria-hidden="true"></span>
-                  <div class="cs-switch-copy">
-                    <strong>Enable Experimental Outfits</strong>
-                    <small>Turns on the lab features and activates outfit-aware detection for this profile. Leave disabled if you need today&rsquo;s stable behaviour.</small>
-                  </div>
-                </label>
-                <div id="cs-outfit-disabled-notice" class="cs-outfit-disabled-notice" role="alert" hidden>
-                  <i class="fa-solid fa-flask"></i>
-                  <div>
-                    <strong>Flip the switch above to explore the Outfit Lab.</strong>
-                    <p>When disabled the editor remains read-only so your current profile stays stable. All data will be wiped if disabled.</p>
-                  </div>
-                </div>
                 <div id="cs-outfit-editor" class="cs-outfit-editor" aria-live="polite" aria-busy="false">
                   <p class="cs-helper-text cs-outfit-editor-intro">
-                    Add characters to prototype nested outfit mappings. Variations can include triggers (one per line, supports <code>/regex/</code>), match-type filters, and scene awareness requirements before falling back to the default folder.
+                    Add characters to manage nested outfit mappings. Variations can include triggers (one per line, supports <code>/regex/</code>), match-type filters, awareness requirements, and priority values before falling back to the default folder.
                   </p>
                   <div id="cs-outfit-character-list" class="cs-outfit-character-list" data-empty-text="No characters have outfit variations yet."></div>
                   <button id="cs-outfit-add-character" class="menu_button interactable cs-outfit-add-button" type="button" data-change-notice="Adds a new character slot and auto-saves your mappings.">
