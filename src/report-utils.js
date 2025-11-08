@@ -127,3 +127,22 @@ export function summarizeDetections(matches = []) {
         return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
 }
+
+export function summarizeSkipReasonsForReport(events = []) {
+    const counts = new Map();
+
+    events.forEach((event) => {
+        if (!event || event.type !== "skipped") {
+            return;
+        }
+        const code = event.reason || "unknown";
+        counts.set(code, (counts.get(code) || 0) + 1);
+    });
+
+    return Array.from(counts.entries()).map(([code, count]) => ({ code, count })).sort((a, b) => {
+        if (b.count !== a.count) {
+            return b.count - a.count;
+        }
+        return a.code.localeCompare(b.code);
+    });
+}
