@@ -153,9 +153,22 @@
               </header>
               <div class="cs-card-body cs-card-body--stacked">
                 <div class="cs-field">
+                  <label for="cs-pattern-search">Search Character Slots</label>
+                  <input id="cs-pattern-search" class="text_pole" type="search" placeholder="Search by name, alias, or folder…" title="Filter character slots by name, alias, or folder." />
+                </div>
+                <div class="cs-field">
                   <label for="cs-patterns">Active Characters</label>
-                  <textarea id="cs-patterns" class="text_pole" rows="3" placeholder="Character One&#10;Character Two&#10;/Regular Expression/" title="Enter character names or /regex/, one per line."></textarea>
-                  <small class="cs-tip"><strong>Tip:</strong> List longer names before shorter ones that are part of them (e.g., put “Arthur” before “Art”).</small>
+                  <div id="cs-patterns" class="cs-pattern-editor" aria-live="polite" aria-busy="false">
+                    <p class="cs-helper-text">Create character slots with primary names, alternate detection patterns, and optional folder overrides.</p>
+                    <div class="cs-pattern-slot-scroll">
+                      <div id="cs-pattern-slot-list" class="cs-pattern-slot-list" data-empty-text="No characters have been added yet."></div>
+                    </div>
+                    <button id="cs-pattern-add-slot" class="menu_button interactable cs-pattern-add-button" type="button" data-change-notice="Adds a new character slot and auto-saves your patterns.">
+                      <i class="fa-solid fa-user-plus"></i>
+                      <span>Add Character Slot</span>
+                    </button>
+                  </div>
+                  <small class="cs-tip"><strong>Tip:</strong> Order matters—list slots with longer or more specific patterns above shorter ones.</small>
                 </div>
                 <div class="cs-field">
                   <label for="cs-ignore-patterns">Ignored Characters</label>
@@ -226,12 +239,17 @@
                     <span class="cs-toggle-indicator"></span>
                     <span><i class="fa-solid fa-person-running"></i>Detect Action</span>
                   </label>
+                  <label class="cs-toggle" title="Let the action and attribution detectors explore quoted dialogue, helpful for transcripts or nested narration.">
+                    <input id="cs-scan-dialogue-actions" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-quote-right"></i>Scan Actions Inside Dialogue</span>
+                  </label>
                   <label class="cs-toggle" title="Finds when a character is addressed by name within dialogue.">
                     <input id="cs-detect-vocative" type="checkbox" />
                     <span class="cs-toggle-indicator"></span>
                     <span><i class="fa-solid fa-bullhorn"></i>Detect Vocative</span>
                   </label>
-                  <label class="cs-toggle" title="Finds ownership, like Her eyes widened or Merlin's staff.">
+                  <label class="cs-toggle" title="Finds ownership, like Her eyes widened or a mage's staff.">
                     <input id="cs-detect-possessive" type="checkbox" />
                     <span class="cs-toggle-indicator"></span>
                     <span><i class="fa-solid fa-hand-holding"></i>Detect Possessive</span>
@@ -247,6 +265,7 @@
                     <span><i class="fa-solid fa-magnifying-glass"></i>Detect General Mentions</span>
                   </label>
                 </div>
+                <small class="cs-helper-text">Enable the dialogue scan toggle if you work with transcripts that embed narration inside quoted speech, such as “the squad leader recounted, ‘Form up.’”.</small>
                 <div class="cs-field-group">
                   <label class="cs-inline-label" for="cs-scene-roster-enable">Scene Awareness</label>
                   <label class="cs-toggle cs-toggle--inline" title="Improves group scenario accuracy by tracking recently active characters.">
@@ -344,7 +363,7 @@
                   </div>
                   <div class="cs-field-group">
                     <label for="cs-priority-possessive">Possessive Priority</label>
-                    <input id="cs-priority-possessive" class="text_pole" type="number" step="0.1" min="0" title="Weight for possessive mentions like Merlin's staff." />
+                    <input id="cs-priority-possessive" class="text_pole" type="number" step="0.1" min="0" title="Weight for possessive mentions like a mage's staff." />
                   </div>
                   <div class="cs-field-group">
                     <label for="cs-priority-name">General Name Priority</label>
@@ -433,22 +452,27 @@
                   </ol>
                 </div>
                 <div id="cs-regex-test-output-container" class="text_pole cs-tester-output-container">
-                  <div class="cs-tester-summary-grid">
-                    <div class="cs-summary-card">
-                      <span class="cs-summary-label">Top Characters</span>
-                      <div id="cs-test-top-characters" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
-                      <p>Highest scoring matches from the last run.</p>
+                    <div class="cs-tester-summary-grid">
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Top Characters</span>
+                            <div id="cs-test-top-characters" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
+                            <p>Highest scoring matches from the last run.</p>
+                        </div>
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Veto Status</span>
+                            <div id="cs-test-veto-result" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
+                            <p>Explains whether a cooldown or lock blocked the switch.</p>
+                        </div>
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Recent Skip Reasons</span>
+                            <div id="cs-test-skip-reasons" class="cs-summary-value cs-tester-list-placeholder">None recorded</div>
+                            <p>Counts from the latest tester events.</p>
+                        </div>
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Quick Tip</span>
+                            <p class="cs-summary-help">Use the score, roster, and coverage panes below to focus your next tweaks.</p>
+                        </div>
                     </div>
-                    <div class="cs-summary-card">
-                      <span class="cs-summary-label">Veto Status</span>
-                      <div id="cs-test-veto-result" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
-                      <p>Explains whether a cooldown or lock blocked the switch.</p>
-                    </div>
-                    <div class="cs-summary-card">
-                      <span class="cs-summary-label">Quick Tip</span>
-                      <p class="cs-summary-help">Use the score, roster, and coverage panes below to focus your next tweaks.</p>
-                    </div>
-                  </div>
                   <div class="cs-tester-panels">
                     <section class="cs-tester-panel cs-tester-panel--flow">
                       <header class="cs-tester-panel-header">
