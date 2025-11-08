@@ -79,6 +79,59 @@ function buildAlternation(list) {
         .join("|");
 }
 
+function gatherProfilePatterns(profile) {
+    const result = [];
+    const seen = new Set();
+
+    const add = (value) => {
+        const trimmed = String(value ?? "").trim();
+        if (!trimmed || seen.has(trimmed)) {
+            return;
+        }
+        seen.add(trimmed);
+        result.push(trimmed);
+    };
+
+    if (profile && Array.isArray(profile.patternSlots)) {
+        profile.patternSlots.forEach((slot) => {
+            if (!slot) {
+                return;
+            }
+            if (typeof slot === "string") {
+                add(slot);
+                return;
+            }
+            const name = typeof slot.name === "string" ? slot.name : null;
+            if (name) {
+                add(name);
+            }
+            const aliasSources = [
+                slot.aliases,
+                slot.patterns,
+                slot.alternateNames,
+                slot.names,
+                slot.variants,
+            ];
+            aliasSources.forEach((source) => {
+                if (!source) {
+                    return;
+                }
+                if (Array.isArray(source)) {
+                    source.forEach(add);
+                } else {
+                    add(source);
+                }
+            });
+        });
+    }
+
+    if (profile && Array.isArray(profile.patterns)) {
+        profile.patterns.forEach(add);
+    }
+
+    return result;
+}
+
 export function getQuoteRanges(text) {
     if (!text) {
         return [];
@@ -216,8 +269,42 @@ export function compileProfileRegexes(profile = {}, options = {}) {
         ? options.defaultPronouns
         : ["he", "she", "they"];
 
+    const honorificParticles = [
+        "san",
+        "sama",
+        "chan",
+        "kun",
+        "dono",
+        "sensei",
+        "senpai",
+        "shi",
+        "씨",
+        "さま",
+        "さん",
+        "くん",
+        "ちゃん",
+        "様",
+        "殿",
+        "先輩",
+    ];
+    const honorificAlternation = honorificParticles.map(particle => escapeRegex(particle)).join("|");
+    const honorificPattern = honorificAlternation
+        ? `(?:\\s*[-‐‑–—―~]?\\s*(?:${honorificAlternation}))?`
+        : "";
+    const punctuationSegment = "(?:\\s*[，,、‧·\\u2013\\u2014\\u2026]+\\s*)";
+    const punctuationSpacer = `(?:${punctuationSegment})*`;
+    const compoundTokenPattern = `(?:(?:\\s+|[-‐‑–—―]\\s*)(?=[\\p{Lu}\\p{Lt}\\p{Lo}])(?:${unicodeWordPattern}+))`;
+    const compoundBridge = `(?:${punctuationSpacer}${compoundTokenPattern})?`;
+    const descriptorWordPattern = `(?:${unicodeWordPattern}+(?:[-‐‑–—―]${unicodeWordPattern}+)*)`;
+    const descriptorSequence = `(?:${descriptorWordPattern}(?:\\s+${descriptorWordPattern}){0,7})`;
+    const commaDescriptor = `(?:,\\s*(?:${descriptorSequence}))`;
+    const parentheticalDescriptor = `(?:\\s*\\(\\s*(?:${descriptorSequence})\\s*\\))`;
+    const descriptorPattern = `(?:${commaDescriptor}|${parentheticalDescriptor}){0,3}`;
+    const separatorPattern = `(?:${punctuationSegment}|\\s+)+`;
+    const nameTailPattern = `${honorificPattern}(?:['’]s)?${compoundBridge}${descriptorPattern}${separatorPattern}`;
+
     const ignored = (profile.ignorePatterns || []).map(value => String(value ?? "").trim().toLowerCase()).filter(Boolean);
-    const effectivePatterns = (profile.patterns || [])
+    const effectivePatterns = gatherProfilePatterns(profile)
         .map(value => String(value ?? "").trim())
         .filter(value => value && !ignored.includes(value.toLowerCase()));
 
@@ -229,20 +316,23 @@ export function compileProfileRegexes(profile = {}, options = {}) {
     const pronounPattern = buildAlternation(pronounVocabulary);
 
     const speakerTemplate = "(?:^|[\\r\\n]+|[>\\]]\\s*)({{PATTERNS}})\\s*:";
+    const fillerRunupPattern = `(?:${unicodeWordPattern}+\\s+){0,7}?`;
     const attributionTemplate = attributionVerbsPattern
-        ? `${boundaryLookbehind}({{PATTERNS}})\\s+(?:${attributionVerbsPattern})`
+        ? `${boundaryLookbehind}({{PATTERNS}})${nameTailPattern}${fillerRunupPattern}(?:${attributionVerbsPattern})`
         : null;
     const actionTemplate = actionVerbsPattern
-        ? `${boundaryLookbehind}({{PATTERNS}})(?:['’]s)?\\s+(?:${unicodeWordPattern}+\\s+){0,3}?(?:${actionVerbsPattern})`
+        ? `${boundaryLookbehind}({{PATTERNS}})${nameTailPattern}${fillerRunupPattern}(?:${actionVerbsPattern})`
         : null;
+
+    const pronounLeadBoundary = `(?<!${unicodeWordPattern})\\b`;
 
     const regexes = {
         speakerRegex: buildRegex(effectivePatterns, speakerTemplate),
-        attributionRegex: attributionTemplate ? buildRegex(effectivePatterns, attributionTemplate) : null,
+        attributionRegex: attributionTemplate ? buildRegex(effectivePatterns, attributionTemplate, { extraFlags: "u" }) : null,
         actionRegex: actionTemplate ? buildRegex(effectivePatterns, actionTemplate, { extraFlags: "u" }) : null,
         pronounRegex: (actionVerbsPattern && pronounPattern)
             ? new RegExp(
-                `(?:^|[\\r\\n]+)\\s*(?:${pronounPattern})(?:['’]s)?\\s+(?:${unicodeWordPattern}+\\s+){0,3}?(?:${actionVerbsPattern})`,
+                `${pronounLeadBoundary}(?:${pronounPattern})(?:['’]s)?\\s+(?:${unicodeWordPattern}+\\s+){0,3}?(?:${actionVerbsPattern})`,
                 "iu",
             )
             : null,
@@ -265,6 +355,7 @@ export function collectDetections(text, profile = {}, regexes = {}, options = {}
     }
     const quoteRanges = options.quoteRanges || getQuoteRanges(text);
     const priorityWeights = options.priorityWeights || {};
+    const scanDialogueActions = Boolean(options.scanDialogueActions);
     const matches = [];
 
     const addMatch = (name, matchKind, index, priority) => {
@@ -288,22 +379,26 @@ export function collectDetections(text, profile = {}, regexes = {}, options = {}
     }
 
     if (profile.detectAttribution !== false && regexes.attributionRegex) {
-        findMatches(text, regexes.attributionRegex, quoteRanges).forEach(match => {
+        findMatches(text, regexes.attributionRegex, quoteRanges, { searchInsideQuotes: scanDialogueActions }).forEach(match => {
             const name = match.groups?.find(group => group)?.trim();
             addMatch(name, "attribution", match.index, priorityWeights.attribution);
         });
     }
 
     if (profile.detectAction !== false && regexes.actionRegex) {
-        findMatches(text, regexes.actionRegex, quoteRanges).forEach(match => {
+        findMatches(text, regexes.actionRegex, quoteRanges, { searchInsideQuotes: scanDialogueActions }).forEach(match => {
             const name = match.groups?.find(group => group)?.trim();
             addMatch(name, "action", match.index, priorityWeights.action);
         });
     }
 
-    if (profile.detectPronoun && regexes.pronounRegex && options.lastSubject) {
+    const validatedSubject = typeof options.lastSubject === "string"
+        ? options.lastSubject.trim()
+        : "";
+
+    if (profile.detectPronoun && regexes.pronounRegex && validatedSubject) {
         findMatches(text, regexes.pronounRegex, quoteRanges).forEach(match => {
-            addMatch(options.lastSubject, "pronoun", match.index, priorityWeights.pronoun);
+            addMatch(validatedSubject, "pronoun", match.index, priorityWeights.pronoun);
         });
     }
 
