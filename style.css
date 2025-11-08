@@ -412,6 +412,134 @@
   cursor: not-allowed;
 }
 
+#costume-switcher-settings.cs-theme .cs-pattern-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-slot-scroll {
+    max-height:360px;
+    overflow-y: auto;
+    padding-right: 6px;
+    margin-right: -6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-editor .cs-helper-text {
+    color: var(--text-color-soft);
+    font-size: 0.95rem;
+    margin: 0;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-slot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-empty {
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    text-align: center;
+    font-style: italic;
+    color: var(--text-color-soft);
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.26);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-title i {
+    font-size: 1.2rem;
+    color: var(--accent);
+    margin-top: 2px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-title-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-title h4 {
+    margin: 0;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-summary,
+#costume-switcher-settings.cs-theme .cs-pattern-card-folder {
+    color: var(--text-color-soft);
+    font-size: 0.85rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-card-body {
+    display: grid;
+    gap: 12px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-folder-row {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-folder-row .text_pole {
+    flex: 1 1 auto;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-pick-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-pick-folder i {
+    font-size: 0.9rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-add-button {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-add-button i {
+    font-size: 0.9rem;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-add-button[disabled] {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+#costume-switcher-settings.cs-theme .cs-pattern-remove-slot {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 #costume-switcher-settings.cs-theme .cs-card--compact {
   padding: 16px 22px;
 }
