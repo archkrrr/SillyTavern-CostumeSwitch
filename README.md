@@ -71,7 +71,7 @@ Under the hood the extension listens to streaming output from your model, scores
 1. Open **Settings → Extensions → Extension Manager** in SillyTavern.
 2. Click **Install from URL** and paste the repository address:
    ```
-   https://github.com/archkrrr/SillyTavern-CostumeSwitch
+   https://github.com/archkr/SillyTavern-CostumeSwitch
    ```
 3. Press **Install**. SillyTavern downloads the extension and refreshes the page.
 4. Enable **Costume Switcher** from the Extensions list if it is not activated automatically.
