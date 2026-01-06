@@ -226,16 +226,16 @@ Keep your prototypes in an `Outfit Lab` subdirectory under the character’s mai
 ```
 SillyTavern/data/default-user/characters/Mythic Frontier/
 └── Ranger Elowen/
-    ├── portrait.png
+    ├── default.png
     ├── determined.png
     ├── surprised.png
     └── Outfit Lab/
         ├── Emberwatch Patrol/
-        │   ├── portrait.png
+        │   ├── default.png
         │   ├── determined.png
         │   └── surprised.png
         └── Midnight Vanguard/
-            ├── portrait.png
+            ├── default.png
             ├── determined.png
             └── surprised.png
 ```
