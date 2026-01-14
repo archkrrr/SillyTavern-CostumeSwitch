@@ -4302,6 +4302,28 @@ async function issueCostumeForName(name, opts = {}) {
     const rawFolder = typeof decision.folder === "string" ? decision.folder.trim() : "";
     const hasLeadingSlash = /^[\\/]/.test(rawFolder);
     const sanitizedFolder = rawFolder.replace(/^[\\/]+/, "");
+
+    let finalFolder = sanitizedFolder;
+    try {
+        const ctx = getContext();
+        if (ctx && Array.isArray(ctx.characters) && typeof ctx.characterId !== "undefined" && ctx.characterId !== null) {
+            const charId = Number(ctx.characterId);
+            if (!Number.isNaN(charId) && ctx.characters[charId]) {
+                const char = ctx.characters[charId];
+                const mainName = char.avatar || char.name;
+                if (mainName) {
+                    const normMain = String(mainName).trim().replace(/\\/g, '/').toLowerCase();
+                    const normFolder = String(finalFolder).trim().replace(/\\/g, '/').toLowerCase();
+                    if (!normFolder.startsWith(normMain + '/')) {
+                        finalFolder = `${mainName}/${finalFolder}`;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        // Silently fail to modify folder if context is unavailable
+    }
+
     const normalizedCandidates = [targetName, fallbackName]
         .map(candidate => {
             if (!candidate) {
@@ -4311,7 +4333,7 @@ async function issueCostumeForName(name, opts = {}) {
             return normalized.trim().toLowerCase();
         })
         .filter(Boolean);
-    const folderSegments = sanitizedFolder.split(/[\\/]+/).filter(Boolean);
+    const folderSegments = finalFolder.split(/[\\/]+/).filter(Boolean);
     const hasCharacterPrefix = folderSegments.some((segment) => {
         const normalizedSegment = normalizeCostumeName(segment) || segment;
         const loweredSegment = normalizedSegment.trim().toLowerCase();
@@ -4320,8 +4342,8 @@ async function issueCostumeForName(name, opts = {}) {
     const useFullPath = !hasLeadingSlash && hasCharacterPrefix;
     const escapedName = targetName ? targetName.replace(/"/g, '\\"') : "";
     const command = useFullPath
-        ? `/costume ${sanitizedFolder}`
-        : `/costume${escapedName ? ` name="${escapedName}"` : ""} \\${sanitizedFolder}`;
+        ? `/costume ${finalFolder}`
+        : `/costume${escapedName ? ` name="${escapedName}"` : ""} \\${finalFolder}`;
     debugLog("Executing command:", command, "kind:", opts.matchKind || 'N/A');
     try {
         await executeSlashCommandsOnChatInput(command);
