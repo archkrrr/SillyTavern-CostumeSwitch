@@ -1,0 +1,680 @@
+<div id="costume-switcher-settings" class="extension_container cs-theme">
+  <div class="inline-drawer is-open">
+    <div class="inline-drawer-toggle inline-drawer-header">
+      <b>Character Visuals</b>
+      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+      <div class="cs-shell">
+    <section class="cs-card cs-header-card">
+      <div class="cs-header-ambient organic-flow" aria-hidden="true"></div>
+      <div class="cs-header-intro">
+        <h2 class="cs-title">Character Visuals</h2>
+      </div>
+      <div class="cs-header-meta">
+        <div class="cs-build-meta" role="status" aria-live="polite">
+          <span class="cs-build-pill" id="cs-build-version">Loading…</span>
+          <span class="cs-build-note" id="cs-build-updated">Fetching build details…</span>
+        </div>
+        <label class="cs-master-toggle">
+          <input id="cs-enable" type="checkbox" />
+          <span class="cs-switch-thumb" aria-hidden="true"></span>
+          <div class="cs-switch-copy">
+            <strong>Enable Switching</strong>
+            <small>Master toggle to pause detection without changing your settings.</small>
+          </div>
+        </label>
+      </div>
+    </section>
+
+    <div class="cs-tabs" role="tablist">
+      <button class="cs-tab-button is-active" id="cs-tab-profiles" type="button" role="tab" aria-selected="true" aria-controls="cs-panel-profiles" data-tab="profiles">
+        <i class="fa-solid fa-id-badge"></i>
+        <span>Profiles</span>
+      </button>
+      <button class="cs-tab-button" id="cs-tab-characters" type="button" role="tab" aria-selected="false" aria-controls="cs-panel-characters" data-tab="characters">
+        <i class="fa-solid fa-users"></i>
+        <span>Characters</span>
+      </button>
+      <button class="cs-tab-button" id="cs-tab-outfits" type="button" role="tab" aria-selected="false" aria-controls="cs-panel-outfits" data-tab="outfits">
+        <i class="fa-solid fa-shirt"></i>
+        <span>Outfits</span>
+      </button>
+      <button class="cs-tab-button" id="cs-tab-detection" type="button" role="tab" aria-selected="false" aria-controls="cs-panel-detection" data-tab="detection">
+        <i class="fa-solid fa-sliders"></i>
+        <span>Detection &amp; Timing</span>
+      </button>
+      <button class="cs-tab-button" id="cs-tab-tester" type="button" role="tab" aria-selected="false" aria-controls="cs-panel-tester" data-tab="tester">
+        <i class="fa-solid fa-flask"></i>
+        <span>Tester &amp; Logs</span>
+      </button>
+    </div>
+
+    <div class="cs-tab-panels">
+      <section class="cs-tab-panel is-active" id="cs-panel-profiles" role="tabpanel" aria-labelledby="cs-tab-profiles" data-tab="profiles">
+        <div class="cs-layout">
+          <div class="cs-column">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-address-card"></i>
+                  <div>
+                    <h3>Profiles</h3>
+                    <p>Organize different configurations for varied chats or characters.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body">
+                <div class="cs-toolbar">
+                  <select id="cs-profile-select" class="text_pole" title="Select a saved profile to load it." data-change-notice="Switching profiles auto-saves any pending edits."></select>
+                  <button id="cs-profile-save" class="menu_button interactable cs-button-primary" title="Save changes to the active profile." data-change-notice="Saves your current tweaks immediately.">Save</button>
+                </div>
+                <div class="cs-toolbar">
+                  <input id="cs-profile-name" class="text_pole" type="text" placeholder="Enter a name…" title="Enter a name to rename the active profile or create a new one." />
+                  <button id="cs-profile-saveas" class="menu_button interactable" title="Save the active profile's settings under a new name." data-change-notice="Creates a new profile with your current auto-saved settings.">Save As</button>
+                  <button id="cs-profile-rename" class="menu_button interactable" title="Rename the active profile to the entered name." data-change-notice="Renaming applies instantly to the active profile.">Rename</button>
+                </div>
+                <p class="cs-helper-text">Use the name field above to create or rename profiles. Leave it blank when simply saving edits to the current profile.</p>
+                <div class="cs-toolbar cs-toolbar--wrap">
+                  <button id="cs-profile-new" class="menu_button interactable" title="Create a fresh profile using default settings." data-change-notice="Creates a fresh profile right away.">New (Defaults)</button>
+                  <button id="cs-profile-duplicate" class="menu_button interactable" title="Duplicate the active profile to a new name." data-change-notice="Duplicates the current profile immediately.">Duplicate Current</button>
+                  <button id="cs-profile-delete" class="menu_button interactable cs-button-danger" title="Delete the active profile." data-change-notice="Deletes the profile immediately after confirmation.">Delete</button>
+                </div>
+                <div class="cs-toolbar cs-toolbar--wrap">
+                  <button id="cs-profile-import" class="menu_button interactable" title="Import a profile from a .json file." data-change-notice="Importing will auto-save the new profile.">Import Profile</button>
+                  <button id="cs-profile-export" class="menu_button interactable" title="Export the current profile to a .json file." data-change-notice="Exports the latest auto-saved data.">Export Profile</button>
+                  <input type="file" id="cs-profile-file-input" accept=".json" hidden />
+                </div>
+              </div>
+            </section>
+          </div>
+          <div class="cs-column">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-wand-magic-sparkles"></i>
+                  <div>
+                    <h3>Quick Presets</h3>
+                    <p>Apply a curated detector setup to the current profile.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <div class="cs-toolbar">
+                  <select id="cs-preset-select" class="text_pole" style="flex: 1 1 auto;" title="Pick a preset to review its settings before applying."></select>
+                  <button id="cs-preset-load" class="menu_button interactable cs-button-primary" title="Apply the selected preset to this profile." data-change-notice="Applying a preset saves your profile immediately.">Apply Preset</button>
+                </div>
+                <p id="cs-preset-description" class="cs-helper-text">Load a recommended configuration into the current profile.</p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="cs-tab-panel" id="cs-panel-characters" role="tabpanel" aria-labelledby="cs-tab-characters" data-tab="characters" hidden>
+        <div class="cs-layout">
+          <div class="cs-column">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-lock"></i>
+                  <div>
+                    <h3>Manual Overrides</h3>
+                    <p>Lock to a character or pick a fallback costume.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <div class="cs-field">
+                  <label for="cs-focus-lock-select">Focus Lock</label>
+                  <small>Force the switcher to stay on a specific character until you unlock it.</small>
+                  <div class="cs-toolbar">
+                    <select id="cs-focus-lock-select" class="text_pole" style="flex: 1 1 auto;" title="Select a character from your patterns to lock onto."></select>
+                    <button id="cs-focus-lock-toggle" class="menu_button interactable" title="Lock or unlock the focus on the selected character." data-change-notice="Focus lock changes save right away.">Lock</button>
+                  </div>
+                </div>
+                <div class="cs-field">
+                  <label for="cs-default">Default Costume</label>
+                  <input id="cs-default" class="text_pole" type="text" placeholder="e.g., neutral" title="The costume folder to use when no character is detected. Leave blank for the main avatar." />
+                  <small>The costume used when no character is detected. Leave blank to fall back to the main avatar.</small>
+                </div>
+              </div>
+            </section>
+          </div>
+          <div class="cs-column">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-address-card"></i>
+                  <div>
+                    <h3>Character Patterns</h3>
+                    <p>Teach the switcher which characters to watch for.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <div class="cs-field">
+                  <label for="cs-pattern-search">Search Character Slots</label>
+                  <input id="cs-pattern-search" class="text_pole" type="search" placeholder="Search by name, alias, or folder…" title="Filter character slots by name, alias, or folder." />
+                </div>
+                <div class="cs-field">
+                  <label for="cs-patterns">Active Characters</label>
+                  <div id="cs-patterns" class="cs-pattern-editor" aria-live="polite" aria-busy="false">
+                    <p class="cs-helper-text">Create character slots with primary names, alternate detection patterns, and optional folder overrides.</p>
+                    <div class="cs-pattern-slot-scroll">
+                      <div id="cs-pattern-slot-list" class="cs-pattern-slot-list" data-empty-text="No characters have been added yet."></div>
+                    </div>
+                    <button id="cs-pattern-add-slot" class="menu_button interactable cs-pattern-add-button" type="button" data-change-notice="Adds a new character slot and auto-saves your patterns.">
+                      <i class="fa-solid fa-user-plus"></i>
+                      <span>Add Character Slot</span>
+                    </button>
+                  </div>
+                  <small class="cs-tip"><strong>Tip:</strong> Order matters—list slots with longer or more specific patterns above shorter ones.</small>
+                </div>
+                <div class="cs-field">
+                  <label for="cs-ignore-patterns">Ignored Characters</label>
+                  <textarea id="cs-ignore-patterns" class="text_pole" rows="2" placeholder="Char A&#10;/Narrator/" title="Any character pattern on this list will be ignored during detection."></textarea>
+                </div>
+                <div class="cs-field">
+                  <label for="cs-veto-patterns">Veto Phrases</label>
+                  <textarea id="cs-veto-patterns" class="text_pole" rows="2" placeholder="OOC:&#10;(OOC)" title="If any of these phrases or /regex/ are found, the entire message will be ignored."></textarea>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="cs-tab-panel" id="cs-panel-outfits" role="tabpanel" aria-labelledby="cs-tab-outfits" data-tab="outfits" hidden>
+        <div class="cs-layout">
+          <div class="cs-column cs-column--wide">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-user-astronaut"></i>
+                  <div>
+                    <h3>Outfit Lab</h3>
+                    <p>Manage per-character outfit automation. Variants you configure here run in the live detector as soon as they're saved.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <div id="cs-outfit-editor" class="cs-outfit-editor" aria-live="polite" aria-busy="false">
+                  <p class="cs-helper-text cs-outfit-editor-intro">
+                    Add characters to manage nested outfit mappings. Variations can include triggers (one per line, supports <code>/regex/</code>), match-type filters, awareness requirements, and priority values before falling back to the default folder.
+                  </p>
+                  <div id="cs-outfit-character-list" class="cs-outfit-character-list" data-empty-text="No characters have outfit variations yet."></div>
+                  <button id="cs-outfit-add-character" class="menu_button interactable cs-outfit-add-button" type="button" data-change-notice="Adds a new character slot and auto-saves your mappings.">
+                    <i class="fa-solid fa-user-plus"></i>
+                    <span>Add Character Slot</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="cs-tab-panel" id="cs-panel-detection" role="tabpanel" aria-labelledby="cs-tab-detection" data-tab="detection" hidden>
+        <div class="cs-layout">
+          <div class="cs-column">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-sliders"></i>
+                  <div>
+                    <h3>Detection Strategy</h3>
+                    <p>Fine-tune how the extension interprets each scene.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <div class="cs-detection-grid">
+                  <label class="cs-toggle" title="Finds dialogue tags, like 'Hello,' she said.">
+                    <input id="cs-detect-attribution" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-quote-left"></i>Detect Attribution</span>
+                  </label>
+                  <label class="cs-toggle" title="Finds character actions, like He nodded.">
+                    <input id="cs-detect-action" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-person-running"></i>Detect Action</span>
+                  </label>
+                  <label class="cs-toggle" title="Let the action and attribution detectors explore quoted dialogue, helpful for transcripts or nested narration.">
+                    <input id="cs-scan-dialogue-actions" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-quote-right"></i>Scan Actions Inside Dialogue</span>
+                  </label>
+                  <label class="cs-toggle" title="Finds when a character is addressed by name within dialogue.">
+                    <input id="cs-detect-vocative" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-bullhorn"></i>Detect Vocative</span>
+                  </label>
+                  <label class="cs-toggle" title="Finds ownership, like Her eyes widened or a mage's staff.">
+                    <input id="cs-detect-possessive" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-hand-holding"></i>Detect Possessive</span>
+                  </label>
+                  <label class="cs-toggle" title="EXPERIMENTAL: Resolves pronouns based on the last mentioned character.">
+                    <input id="cs-detect-pronoun" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-user-friends"></i>Detect Pronoun</span>
+                  </label>
+                  <label class="cs-toggle" title="USE WITH CAUTION: Triggers on any mention of a character's name anywhere in the text. Can cause flickering.">
+                    <input id="cs-detect-general" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span><i class="fa-solid fa-magnifying-glass"></i>Detect General Name Mentions</span>
+                  </label>
+                </div>
+                <small class="cs-helper-text">Enable the dialogue scan toggle if you work with transcripts that embed narration inside quoted speech, such as “the squad leader recounted, ‘Form up.’”. Use the Regex Preprocessor options below to opt into allowed script collections when you need extra cleanup or translation guards.</small>
+                <div class="cs-field-group">
+                  <label class="cs-inline-label">Regex Preprocessor</label>
+                  <label class="cs-toggle cs-toggle--inline" title="Apply global cleanup scripts that normalize punctuation, honorifics, and spacing across every chat.">
+                    <input id="cs-script-collection-global" type="checkbox" class="cs-script-collection-toggle" data-script-collection="global" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>
+                      <strong>Global Scripts</strong>
+                      <small>Universal cleanup for punctuation fixes, diacritics, and stray honorifics.</small>
+                    </span>
+                  </label>
+                  <label class="cs-toggle cs-toggle--inline" title="Enable curated presets provided by SillyTavern or bundles you trust.">
+                    <input id="cs-script-collection-preset" type="checkbox" class="cs-script-collection-toggle" data-script-collection="preset" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>
+                      <strong>Preset Scripts</strong>
+                      <small>Host-curated bundles for common RP or stream formats.</small>
+                    </span>
+                  </label>
+                  <label class="cs-toggle cs-toggle--inline" title="Allow scoped scripts defined by characters or profiles for niche cleanup.">
+                    <input id="cs-script-collection-scoped" type="checkbox" class="cs-script-collection-toggle" data-script-collection="scoped" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>
+                      <strong>Scoped Scripts</strong>
+                      <small>Profile or character-specific filters for translations or custom markup.</small>
+                    </span>
+                  </label>
+                  <div class="cs-helper-text">
+                    <p><strong>When to toggle each tier:</strong></p>
+                    <ul>
+                      <li><strong>Global</strong> keeps every chat readable by stripping stray honorifics, punctuation glitches, and streamer transcript noise.</li>
+                      <li><strong>Preset</strong> borrows curated bundles for common RP formats so you do not have to maintain regex rules by hand.</li>
+                      <li><strong>Scoped</strong> activates only when a profile or character ships custom guards (kana → romaji swaps, sci-fi call signs, etc.).</li>
+                    </ul>
+                    <p>The preprocessor runs in live streams before detections score, and the Live Tester simply mirrors what already happened.</p>
+                  </div>
+                </div>
+                <div class="cs-field-group">
+                  <label class="cs-inline-label" for="cs-scene-roster-enable">Scene Awareness</label>
+                  <label class="cs-toggle cs-toggle--inline" title="Improves group scenario accuracy by tracking recently active characters.">
+                    <input id="cs-scene-roster-enable" type="checkbox" />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>Enable Scene Roster</span>
+                  </label>
+                  <div class="cs-number-field">
+                    <label for="cs-scene-roster-ttl">Scene Roster TTL (messages)</label>
+                    <input id="cs-scene-roster-ttl" class="text_pole" type="number" min="1" title="How many messages a character stays 'active' in the scene without being mentioned." />
+                  </div>
+                </div>
+                <div class="cs-field-group">
+                  <label class="cs-inline-label">Scene Panel</label>
+                  <label class="cs-toggle cs-toggle--inline" title="Show or hide the scene roster panel beside chat.">
+                    <input id="cs-scene-panel-enable" type="checkbox" data-change-notice="Scene panel visibility will update immediately." />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>Show scene panel</span>
+                  </label>
+                  <label class="cs-toggle cs-toggle--inline" title="Automatically expand the scene panel when a live stream begins.">
+                    <input id="cs-scene-auto-open" type="checkbox" data-change-notice="Scene panel will auto-open when streaming starts." />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>Auto-open panel on stream</span>
+                  </label>
+                  <label class="cs-toggle cs-toggle--inline" title="Automatically expand the panel when a new detection result is saved.">
+                    <input id="cs-scene-auto-open-results" type="checkbox" data-change-notice="Scene panel will pop open when new results are captured." />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>Auto-open on new results</span>
+                  </label>
+                  <label class="cs-toggle cs-toggle--inline" title="Display roster avatars alongside names in the scene panel.">
+                    <input id="cs-scene-show-avatars" type="checkbox" data-change-notice="Roster avatars will be shown in the scene panel." />
+                    <span class="cs-toggle-indicator"></span>
+                    <span>Show roster avatars</span>
+                  </label>
+                  <div class="cs-toggle-row">
+                    <span class="cs-toggle-row__label">Sections</span>
+                    <label class="cs-toggle cs-toggle--inline" title="Show or hide the roster section inside the scene panel.">
+                      <input id="cs-scene-section-roster" type="checkbox" data-change-notice="Scene roster section will be toggled in the panel." />
+                      <span class="cs-toggle-indicator"></span>
+                      <span>Roster</span>
+                    </label>
+                    <label class="cs-toggle cs-toggle--inline" title="Show or hide the active characters cards inside the scene panel.">
+                      <input id="cs-scene-section-active" type="checkbox" data-change-notice="Active characters section will be toggled in the panel." />
+                      <span class="cs-toggle-indicator"></span>
+                      <span>Active</span>
+                    </label>
+                    <label class="cs-toggle cs-toggle--inline" title="Show or hide the live result log inside the scene panel.">
+                      <input id="cs-scene-section-log" type="checkbox" data-change-notice="Live log section will be toggled in the panel." />
+                      <span class="cs-toggle-indicator"></span>
+                      <span>Live log</span>
+                    </label>
+                    <label class="cs-toggle cs-toggle--inline" title="Show or hide the coverage suggestions inside the scene panel.">
+                      <input id="cs-scene-section-coverage" type="checkbox" data-change-notice="Coverage suggestions section will be toggled in the panel." />
+                      <span class="cs-toggle-indicator"></span>
+                      <span>Coverage</span>
+                    </label>
+                  </div>
+                  <small class="cs-helper-text">Experimental: The scene panel mirrors the live tester timeline for actual chat replies and may evolve as we refine it.</small>
+                  <small class="cs-helper-text">Tip: Use the Extensions (magic wand) menu in chat to open the Scene Control Center popup, handy for mobile layouts.</small>
+                </div>
+                <div class="cs-field-group">
+                  <label for="cs-attribution-verbs">Attribution Verbs</label>
+                  <small>Comma-separated list used by the attribution detector.</small>
+                  <textarea id="cs-attribution-verbs" class="text_pole" rows="3"></textarea>
+                </div>
+                <div class="cs-field-group">
+                  <label for="cs-action-verbs">Action Verbs</label>
+                  <small>Comma-separated list used by the action detector.</small>
+                  <textarea id="cs-action-verbs" class="text_pole" rows="3"></textarea>
+                </div>
+                <div class="cs-field-group">
+                  <label for="cs-pronoun-vocabulary">Pronoun Vocabulary</label>
+                  <small>Comma-separated list of pronouns the pronoun detector should recognize. Supports custom neopronouns.</small>
+                  <textarea id="cs-pronoun-vocabulary" class="text_pole" rows="2"></textarea>
+                </div>
+              </div>
+            </section>
+          </div>
+          <div class="cs-column">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-gauge-high"></i>
+                  <div>
+                    <h3>Performance &amp; Bias</h3>
+                    <p>Control responsiveness and tie-breaking behaviour.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <div class="cs-grid">
+                  <label for="cs-global-cooldown">Global Cooldown (ms)</label>
+                  <input id="cs-global-cooldown" class="text_pole" type="number" min="0" title="Minimum time between ANY two switches to prevent flickering." />
+                  <label for="cs-repeat-suppress">Repeat Suppression (ms)</label>
+                  <input id="cs-repeat-suppress" class="text_pole" type="number" min="0" title="Minimum time before the SAME character can trigger another switch." />
+                  <label for="cs-per-trigger-cooldown">Per-Trigger Cooldown (ms)</label>
+                  <input id="cs-per-trigger-cooldown" class="text_pole" type="number" min="0" title="How long to wait before the same detection type can fire again." />
+                  <label for="cs-failed-trigger-cooldown">Failed Trigger Cooldown (ms)</label>
+                  <input id="cs-failed-trigger-cooldown" class="text_pole" type="number" min="0" title="Backoff delay after a failed switch attempt before trying again." />
+                  <label for="cs-max-buffer-chars">Stream Buffer Safety (chars)</label>
+                  <input id="cs-max-buffer-chars" class="text_pole" type="number" min="0" title="Full streamed messages are kept; this value only caps extremely long outputs to protect memory usage." />
+                  <small class="cs-helper-text">Raise this if long replies mention characters early; lower it on low-end devices to conserve memory.</small>
+                </div>
+                <div class="cs-slider-field">
+                  <label for="cs-detection-bias">Detection Bias <span id="cs-detection-bias-value">0</span></label>
+                  <input id="cs-detection-bias" type="range" min="-200" max="200" value="0" class="cs-slider" title="Balances accuracy. Positive values favor action/dialogue tags. Negative values favor the most recently mentioned character." />
+                </div>
+              </div>
+            </section>
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-ranking-star"></i>
+                  <div>
+                    <h3>Scoring Weights</h3>
+                    <p>Fine-tune how detections are ranked and how strongly recency matters.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <small>Increase a priority to make that detection type more influential when breaking ties.</small>
+                <div class="cs-grid">
+                  <div class="cs-field-group">
+                    <label for="cs-priority-speaker">Speaker Priority</label>
+                    <input id="cs-priority-speaker" class="text_pole" type="number" step="0.1" min="0" title="Weight for explicit speaker labels such as Name: &quot;Dialogue&quot;." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-attribution">Attribution Priority</label>
+                    <input id="cs-priority-attribution" class="text_pole" type="number" step="0.1" min="0" title="Weight for narration like '...,' she said." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-action">Action Priority</label>
+                    <input id="cs-priority-action" class="text_pole" type="number" step="0.1" min="0" title="Weight for action detections such as He nodded." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-pronoun">Pronoun Priority</label>
+                    <input id="cs-priority-pronoun" class="text_pole" type="number" step="0.1" min="0" title="Weight applied when resolving pronouns to the last subject." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-vocative">Vocative Priority</label>
+                    <input id="cs-priority-vocative" class="text_pole" type="number" step="0.1" min="0" title="Weight for names called out inside dialogue." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-possessive">Possessive Priority</label>
+                    <input id="cs-priority-possessive" class="text_pole" type="number" step="0.1" min="0" title="Weight for possessive mentions like a mage's staff." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-priority-name">General Name Priority</label>
+                    <input id="cs-priority-name" class="text_pole" type="number" step="0.1" min="0" title="Weight for general name detections when enabled." />
+                  </div>
+                </div>
+                <div class="cs-grid">
+                  <div class="cs-field-group">
+                    <label for="cs-roster-bonus">Roster Bonus</label>
+                    <input id="cs-roster-bonus" class="text_pole" type="number" step="1" min="0" title="Bonus score applied when the character is already in the scene roster." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-roster-dropoff">Roster Priority Drop-off</label>
+                    <input id="cs-roster-dropoff" class="text_pole" type="number" step="0.1" min="0" title="How quickly the roster bonus decays for lower-priority detections." />
+                  </div>
+                  <div class="cs-field-group">
+                    <label for="cs-distance-penalty">Distance Penalty Weight</label>
+                    <input id="cs-distance-penalty" class="text_pole" type="number" step="0.1" min="0" title="Penalty per character of distance from the end of the message." />
+                  </div>
+                </div>
+                <div class="cs-score-presets">
+                  <div class="cs-score-presets-header">
+                    <h4>Scoring Presets</h4>
+                    <p class="cs-helper-text">Save and compare weight profiles for different scenes.</p>
+                  </div>
+                  <div class="cs-score-presets-guide" aria-live="polite">
+                    <ol>
+                      <li><strong>Preview:</strong> Pick a preset to see how its priorities compare with yours.</li>
+                      <li><strong>Inspect:</strong> Bars show the preset emphasis; the middle column shows your live values.</li>
+                      <li><strong>Apply or Tweak:</strong> Apply the preset or adjust individual weights before saving.</li>
+                    </ol>
+                  </div>
+                  <div class="cs-toolbar">
+                    <select id="cs-score-preset-select" class="text_pole" style="flex: 1 1 auto;" title="Select a saved scoring preset to preview its weights.">
+                      <option value="">Select a scoring preset…</option>
+                    </select>
+                    <button id="cs-score-preset-apply" class="menu_button interactable cs-button-primary" title="Apply the selected scoring preset to this profile." data-change-notice="Applying a scoring preset saves instantly.">Apply</button>
+                  </div>
+                  <div class="cs-toolbar cs-toolbar--wrap">
+                    <input id="cs-score-preset-name" class="text_pole" type="text" placeholder="Enter a name…" title="Enter a name to save or rename a scoring preset." />
+                    <button id="cs-score-preset-save" class="menu_button interactable" title="Overwrite the selected preset with the current weights." data-change-notice="Saving overwrites the preset immediately.">Save</button>
+                    <button id="cs-score-preset-saveas" class="menu_button interactable" title="Save the current weights as a new preset." data-change-notice="Creates a new scoring preset instantly.">Save As</button>
+                    <button id="cs-score-preset-rename" class="menu_button interactable" title="Rename the selected custom preset." data-change-notice="Renaming presets happens instantly.">Rename</button>
+                    <button id="cs-score-preset-delete" class="menu_button interactable cs-button-danger" title="Delete the selected custom preset." data-change-notice="Deleting presets takes effect immediately.">Delete</button>
+                  </div>
+                  <p id="cs-score-preset-message" class="cs-helper-text">Select a preset to preview how it stacks against your active profile.</p>
+                  <div id="cs-score-preset-preview" class="cs-score-preview">
+                      <table class="cs-score-preview-table">
+                        <tbody>
+                          <tr><td colspan="4" class="cs-tester-list-placeholder">Select a preset to see weight comparisons.</td></tr>
+                        </tbody>
+                      </table>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="cs-tab-panel" id="cs-panel-tester" role="tabpanel" aria-labelledby="cs-tab-tester" data-tab="tester" hidden>
+        <div class="cs-layout">
+          <div class="cs-column cs-column--wide">
+            <section class="cs-card">
+              <header class="cs-card-header">
+                <div class="cs-card-title">
+                  <i class="fa-solid fa-vial"></i>
+                  <div>
+                    <h3>Live Pattern Tester</h3>
+                    <p>Paste text to see detections with your current settings.</p>
+                  </div>
+                </div>
+              </header>
+              <div class="cs-card-body cs-card-body--stacked">
+                <textarea id="cs-regex-test-input" class="text_pole" rows="4" placeholder="Paste a message here…"></textarea>
+                <div class="cs-toolbar cs-toolbar--wrap">
+                  <button id="cs-regex-test-button" class="menu_button interactable">Test Pattern</button>
+                  <button id="cs-regex-test-copy" class="menu_button interactable" disabled title="Copy the latest live tester report to your clipboard.">Copy Report</button>
+                </div>
+                <div class="cs-tester-guide">
+                  <h4>Live Tester Walkthrough</h4>
+                  <ol>
+                    <li>Paste a recent chat message or narration chunk, then run <strong>Test Pattern</strong>.</li>
+                    <li>Check the summary cards to see which characters ranked highest and whether a switch fired.</li>
+                    <li>Drill into the panels below to inspect detections, winners, roster health, and vocabulary tips.</li>
+                  </ol>
+                </div>
+                <div id="cs-regex-test-output-container" class="text_pole cs-tester-output-container">
+                    <div class="cs-tester-summary-grid">
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Top Characters</span>
+                            <div id="cs-test-top-characters" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
+                            <p>Highest scoring matches from the last run.</p>
+                        </div>
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Veto Status</span>
+                            <div id="cs-test-veto-result" class="cs-summary-value cs-tester-list-placeholder">N/A</div>
+                            <p>Explains whether a cooldown or lock blocked the switch.</p>
+                        </div>
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Recent Skip Reasons</span>
+                            <div id="cs-test-skip-reasons" class="cs-summary-value cs-tester-list-placeholder">None recorded</div>
+                            <p>Counts from the latest tester events.</p>
+                        </div>
+                        <div class="cs-summary-card">
+                            <span class="cs-summary-label">Quick Tip</span>
+                            <p class="cs-summary-help">Use the score, roster, and coverage panes below to focus your next tweaks.</p>
+                        </div>
+                    </div>
+                <div class="cs-tester-panels">
+                    <section class="cs-tester-panel cs-tester-panel--flow">
+                        <header class="cs-tester-panel-header">
+                            <h4>Match Flow</h4>
+                            <p>Follow detections through to the costume decision.</p>
+                        </header>
+                        <div class="cs-tester-preprocessed">
+                            <div class="cs-tester-title">Preprocessed Text</div>
+                            <p class="cs-helper-text">Buffer after running allowed regex scripts.</p>
+                            <pre id="cs-test-preprocessed" class="cs-tester-preprocessed__output cs-tester-list-placeholder" data-placeholder="No scripts applied yet.">No scripts applied yet.</pre>
+                            <div class="cs-preprocessor-meta">
+                                <div class="cs-preprocessor-column">
+                                    <div class="cs-tester-title cs-tester-title--sub">Applied Scripts</div>
+                                    <ul id="cs-preprocessor-script-list" class="cs-script-list">
+                                        <li class="cs-tester-list-placeholder">No scripts executed.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="cs-tester-split">
+                            <div class="cs-tester-pane">
+                                <div class="cs-tester-title">All Detections</div>
+                                <p class="cs-helper-text">Every detection we spotted, in order.</p>
+                                <ul id="cs-test-all-detections" class="cs-tester-list">
+                                    <li class="cs-tester-list-placeholder">Results will appear here.</li>
+                                </ul>
+                            </div>
+                            <div class="cs-tester-pane">
+                                <div class="cs-tester-title">Live Switch Decisions</div>
+                                <p class="cs-helper-text">Who would have received the costume change.</p>
+                                <ul id="cs-test-winner-list" class="cs-tester-list">
+                                    <li class="cs-tester-list-placeholder">Stream results will appear here.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--roster">
+                        <header class="cs-tester-panel-header">
+                            <h4>Scene Roster</h4>
+                            <p>Check for churn or TTL gaps that could impact switching.</p>
+                        </header>
+                        <div class="cs-tester-stack">
+                            <ul id="cs-test-roster-timeline" class="cs-tester-list">
+                                <li class="cs-tester-list-placeholder">Run the tester to see roster events.</li>
+                            </ul>
+                            <div class="cs-roster-health">
+                                <div class="cs-tester-title cs-tester-title--sub">Roster Health</div>
+                                <div id="cs-test-roster-warning" class="cs-roster-warning">No tester warnings triggered.</div>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--score">
+                        <header class="cs-tester-panel-header">
+                            <h4>Score Breakdown</h4>
+                            <p>Scroll to compare how each detection contributed.</p>
+                        </header>
+                        <div class="cs-score-scroll">
+                            <table id="cs-test-score-breakdown" class="cs-score-table">
+                                <tbody>
+                                    <tr><td colspan="3" class="cs-tester-list-placeholder">Run the tester to see weighted scores.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--coverage">
+                      <header class="cs-tester-panel-header">
+                        <h4>Coverage Suggestions</h4>
+                        <p>Click to add helpful pronouns or verbs to your lists.</p>
+                      </header>
+                      <div class="cs-coverage-panel">
+                        <div>
+                          <h5>Pronouns</h5>
+                          <div id="cs-coverage-pronouns" class="cs-coverage-list"><span class="cs-tester-list-placeholder">Run the tester to see suggestions.</span></div>
+                        </div>
+                        <div>
+                          <h5>Attribution Verbs</h5>
+                          <div id="cs-coverage-attribution" class="cs-coverage-list"><span class="cs-tester-list-placeholder">Run the tester to see suggestions.</span></div>
+                        </div>
+                        <div>
+                          <h5>Action Verbs</h5>
+                          <div id="cs-coverage-action" class="cs-coverage-list"><span class="cs-tester-list-placeholder">Run the tester to see suggestions.</span></div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="cs-tester-panel cs-tester-panel--logs">
+                      <header class="cs-tester-panel-header">
+                        <h4>Debug Tools</h4>
+                        <p>Mirror the tester output to the browser console.</p>
+                      </header>
+                      <label class="cs-toggle cs-toggle--inline" title="Logs detailed decision-making to the browser console (F12) for troubleshooting.">
+                        <input id="cs-debug" type="checkbox" />
+                        <span class="cs-toggle-indicator"></span>
+                        <span><strong>Enable Debug Logging</strong></span>
+                      </label>
+                    </section>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+
+      <div class="cs-footer">
+        <div class="cs-toolbar cs-toolbar--wrap">
+          <button id="cs-save" class="menu_button interactable cs-button-primary" data-change-notice="Manual save snapshots the latest auto-saved settings.">Save Current Profile</button>
+          <button id="cs-reset" class="menu_button interactable" title="Switch back to your default costume, or the main avatar if none is set." data-change-notice="Resets your costume immediately.">Manual Reset</button>
+        </div>
+        <div id="cs-status" class="cs-status-message" aria-live="polite">
+          <i class="fa-solid fa-circle-info"></i>
+          <span class="cs-status-text">Ready</span>
+        </div>
+        <div id="cs-error" class="cs-error-message" role="alert" aria-live="assertive" hidden>
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <span class="cs-status-text"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
