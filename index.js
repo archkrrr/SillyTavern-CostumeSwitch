@@ -1,5 +1,12 @@
 import { extension_settings, getContext, renderExtensionTemplateAsync } from "../../../extensions.js";
-import { saveSettingsDebounced, saveChatDebounced, event_types, eventSource, system_message_types } from "../../../../script.js";
+import { callGenericPopup, POPUP_TYPE } from "../../../popup.js";
+import {
+    saveSettingsDebounced,
+    saveChatDebounced,
+    event_types,
+    eventSource,
+    system_message_types,
+} from "../../../../script.js";
 import { executeSlashCommandsOnChatInput, registerSlashCommand } from "../../../slash-commands.js";
 import {
     DEFAULT_ACTION_VERBS_PRESENT,
@@ -24,12 +31,13 @@ import {
     EXTENDED_ATTRIBUTION_VERBS_PRESENT_PARTICIPLE,
     buildVerbSlices,
 } from "./verbs.js";
+import { getTokenCountAsync } from "./tokenizers.js";
 import {
     compileProfileRegexes,
     collectDetections,
 } from "./src/detector-core.js";
 import { collectProfilePreprocessorScripts, applyPreprocessorScripts } from "./src/core/script-preprocessor.js";
-import { createNamePreprocessor, resolveFuzzyTolerance } from "./src/core/name-preprocessor.js";
+import { createNamePreprocessor } from "./src/core/name-preprocessor.js";
 import {
     mergeDetectionsForReport,
     summarizeDetections,
@@ -84,15 +92,33 @@ import {
 } from "./src/ui/scenePanelState.js";
 import { renderScenePanel, createScenePanelRefreshHandler } from "./src/ui/render/panel.js";
 import { formatRelativeTime } from "./src/ui/render/utils.js";
+import { registerAutoSaveGuards } from "./src/ui/autoSaveGuards.js";
 
-const extensionName = "SillyTavern-CostumeSwitch";
+// Detect usage of either "SillyTavern-CharacterVisuals" or "SillyTavern-CostumeSwitch"
+// based on the script load path, defaulting to the new standard if ambiguous.
+const extensionName = (() => {
+    try {
+        const url = import.meta.url;
+        if (url.includes("SillyTavern-CostumeSwitch")) {
+            return "SillyTavern-CostumeSwitch";
+        }
+    } catch (e) { /* ignore */ }
+    return "SillyTavern-CharacterVisuals";
+})();
 const extensionTemplateNamespace = `third-party/${extensionName}`;
 const extensionFolderPath = `scripts/extensions/${extensionTemplateNamespace}`;
-const logPrefix = "[CostumeSwitch]";
+const logPrefix = "[CharacterVisuals]";
 const INCREMENTAL_SCAN_PADDING = 8;
+const STREAM_BUFFER_SAFETY_CHARS = 120000;
+const STREAM_QUEUE_FLUSH_MS = 120;
+const STREAM_QUEUE_MAX_CHARS = 2400;
+const STREAMING_DETECTION_INTERVAL_MS = 250;
+const STREAM_SNAPSHOT_INTERVAL_MS = 1000;
 const NO_EFFECTIVE_PATTERNS_MESSAGE = "All detection patterns were filtered out by ignored names. No detectors can run until you restore at least one allowed pattern.";
 const FOCUS_LOCK_NOTICE_INTERVAL = 2500;
 const MESSAGE_OUTCOME_STORAGE_KEY = "cs_scene_outcomes";
+const SCENE_CONTROL_POPUP_TITLE = "Character Visuals";
+let scenePanelPopupState = null;
 
 function createFocusLockNotice() {
     return { at: 0, character: null, displayName: null, message: null, event: null };
@@ -133,6 +159,112 @@ const EXTENDED_ACTION_VERB_FORMS = buildVerbList(
     EXTENDED_ACTION_VERBS_PAST_PARTICIPLE,
     EXTENDED_ACTION_VERBS_PRESENT_PARTICIPLE,
 );
+
+function getExtensionsMenuContainer() {
+    const selectors = ["#extensionsMenu", "#extensions-menu", "#extensionsList", "#extensionsMenuContainer", "#extensions_menu"];
+    for (const selector of selectors) {
+        const $container = $(selector).first();
+        if ($container.length) {
+            return $container;
+        }
+    }
+    return null;
+}
+
+function restoreScenePanelFromPopup() {
+    if (!scenePanelPopupState) {
+        return;
+    }
+    const { panel, parent, nextSibling, observer, panelSettings, wasEnabled } = scenePanelPopupState;
+    if (observer) {
+        observer.disconnect();
+    }
+    if (panel) {
+        panel.classList.remove("cs-scene-panel--popup");
+        panel.removeAttribute("data-cs-popup");
+        if (parent) {
+            if (nextSibling && nextSibling.parentElement === parent) {
+                parent.insertBefore(panel, nextSibling);
+            } else {
+                parent.appendChild(panel);
+            }
+        }
+    }
+    if (panelSettings && wasEnabled === false) {
+        panelSettings.enabled = false;
+        updateScenePanelSettingControls(panelSettings);
+    }
+    scenePanelPopupState = null;
+    requestScenePanelRender("popup-close", { immediate: true });
+}
+
+async function openSceneControlCenterPopup() {
+    if (scenePanelPopupState?.panel) {
+        return;
+    }
+    await mountScenePanelTemplate();
+    const panel = document.getElementById("cs-scene-panel");
+    if (!panel) {
+        console.warn(`${logPrefix} Scene panel is unavailable; unable to open popup.`);
+        return;
+    }
+    const settings = getSettings?.();
+    const panelSettings = settings ? ensureScenePanelSettings(settings) : null;
+    const wasEnabled = panelSettings ? panelSettings.enabled !== false : true;
+    if (panelSettings && !wasEnabled) {
+        panelSettings.enabled = true;
+        updateScenePanelSettingControls(panelSettings);
+        requestScenePanelRender("popup-force-enable", { immediate: true });
+    }
+    const parent = panel.parentElement;
+    const nextSibling = panel.nextElementSibling;
+    const dialog = $("<div class=\"cs-scene-panel-popup\" aria-live=\"polite\"></div>");
+    panel.classList.add("cs-scene-panel--popup");
+    panel.setAttribute("data-cs-popup", "true");
+    dialog.append(panel);
+    setScenePanelCollapsed(false);
+    requestScenePanelRender("popup-open", { immediate: true });
+    const observer = new MutationObserver(() => {
+        if (!dialog[0]?.isConnected) {
+            restoreScenePanelFromPopup();
+        }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    scenePanelPopupState = {
+        panel,
+        parent,
+        nextSibling,
+        observer,
+        panelSettings,
+        wasEnabled,
+    };
+    callGenericPopup(dialog, POPUP_TYPE.TEXT, SCENE_CONTROL_POPUP_TITLE, {
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
+        transparent: true,
+        okButton: 'Close',
+    });
+}
+
+function addSceneControlCenterMenuButton() {
+    if ($("#cs_scene_panel_menu_button").length) {
+        return;
+    }
+    const $container = getExtensionsMenuContainer();
+    if (!$container) {
+        console.warn(`${logPrefix} Could not find an extensions menu container to attach the Scene Control Center popup.`);
+        return;
+    }
+    const buttonHtml = `
+        <div id="cs_scene_panel_menu_button" class="list-group-item flex-container flexGap5">
+            <div class="fa-solid fa-masks-theater extensionsMenuExtensionButton"></div>
+            <div class="flex1">Character Visuals</div>
+        </div>
+    `;
+    $container.append(buttonHtml);
+    $("#cs_scene_panel_menu_button").on("click", openSceneControlCenterPopup);
+}
 
 // ======================================================================
 // PRESET PROFILES
@@ -232,7 +364,6 @@ const AUTO_SAVE_REASON_OVERRIDES = {
     perTriggerCooldownMs: 'per-trigger cooldown',
     failedTriggerCooldownMs: 'failed trigger cooldown',
     maxBufferChars: 'buffer size',
-    tokenProcessThreshold: 'token processing threshold',
     detectionBias: 'detection bias',
     detectAttribution: 'attribution detection',
     detectAction: 'action detection',
@@ -241,10 +372,6 @@ const AUTO_SAVE_REASON_OVERRIDES = {
     detectPronoun: 'pronoun detection',
     detectGeneral: 'general name detection',
     scanLowercaseFallbackTokens: 'lowercase fallback scanning',
-    fuzzyTolerance: 'name matching tolerance',
-    fuzzyFallbackMaxScore: 'fuzzy fallback score cap',
-    fuzzyFallbackCooldown: 'fuzzy fallback cooldown',
-    translateFuzzyNames: 'accent translation',
     scriptCollections: 'regex preprocessor',
     enableOutfits: 'outfit automation',
     attributionVerbs: 'attribution verbs',
@@ -360,9 +487,8 @@ const PROFILE_DEFAULTS = {
     globalCooldownMs: 1200,
     perTriggerCooldownMs: 250,
     failedTriggerCooldownMs: 10000,
-    maxBufferChars: 3000,
+    maxBufferChars: 5000,
     repeatSuppressMs: 800,
-    tokenProcessThreshold: 60,
     mappings: [],
     enableOutfits: true,
     detectAttribution: true,
@@ -379,10 +505,6 @@ const PROFILE_DEFAULTS = {
     detectionBias: 0,
     enableSceneRoster: true,
     sceneRosterTTL: 5,
-    fuzzyTolerance: "off",
-    fuzzyFallbackMaxScore: null,
-    fuzzyFallbackCooldown: null,
-    translateFuzzyNames: false,
     translateNames: false,
     prioritySpeakerWeight: 5,
     priorityAttributionWeight: 4,
@@ -532,7 +654,6 @@ const state = {
     lastTesterReport: null,
     lastPreprocessedText: "",
     lastPreprocessorScripts: [],
-    lastFuzzyResolution: null,
     lastDetectionCount: 0,
     recentDecisionEvents: [],
     lastVetoMatch: null,
@@ -541,6 +662,7 @@ const state = {
     topSceneRankingUpdatedAt: new Map(),
     latestTopRanking: { bufKey: null, ranking: [], fullRanking: [], updatedAt: 0 },
     currentGenerationKey: null,
+    currentGenerationRole: null,
     mappingLookup: new Map(),
     messageKeyQueue: [],
     activeScorePresetKey: null,
@@ -556,10 +678,21 @@ const state = {
     },
     draftMappingIds: new Set(),
     draftPatternIds: new Set(),
+    autoSaveCleanup: null,
     focusLockNotice: createFocusLockNotice(),
     patternSearchQuery: "",
     lastSceneSwipeId: null,
     lastSceneDigest: null,
+    pendingStreamBuffers: new Map(),
+    pendingStreamRoles: new Map(),
+    pendingStreamTimer: null,
+    streamSnapshotTimer: null,
+    streamingDetectionTimer: null,
+    streamingDetectionKey: null,
+    streamingDetectionRole: null,
+    streamingDetectionLastAt: 0,
+    streamingDetectionLastKey: null,
+    streamingDetectionLastLength: null,
 };
 
 let nextOutfitCardId = 1;
@@ -891,14 +1024,65 @@ function shouldLogMatchEvent(matchKind, reason) {
     return !PRONOUN_SUPPRESS_REASONS.has(normalizedReason);
 }
 
+function buildAvailableOutfitSet(profile, messageState = null) {
+    if (!profile?.enableOutfits) {
+        return new Set();
+    }
+
+    const available = new Set();
+    if (state.mappingLookup instanceof Map) {
+        state.mappingLookup.forEach((_, key) => {
+            if (key) {
+                available.add(key);
+            }
+        });
+    }
+
+    const roster = messageState?.outfitRoster instanceof Map ? messageState.outfitRoster : null;
+    if (roster) {
+        roster.forEach((_, key) => {
+            if (key) {
+                available.add(key);
+            }
+        });
+    }
+
+    return available;
+}
+
+function filterMatchesByAvailability(matches, profile, options = {}) {
+    if (!Array.isArray(matches)) {
+        return { matches, filteredOut: [] };
+    }
+
+    const available = buildAvailableOutfitSet(profile, options.messageState);
+    if (!available.size) {
+        return { matches, filteredOut: [] };
+    }
+
+    const filteredOut = [];
+    const kept = [];
+    // FIX #7: Do not filter out matches based on outfit availability.
+    // We want to detect ALL characters for Roster purposes, even if they don't have a costume folder.
+    // issueCostumeForName will handle the "no folder" case gracefully (Switch Skipped).
+    matches.forEach((match) => {
+        kept.push(match);
+    });
+
+    return { matches: kept, filteredOut };
+}
+
 function findAllMatches(combined, options = {}) {
     const profile = getActiveProfile();
     const { compiledRegexes } = state;
     state.lastDetectionCount = 0;
-    state.lastFuzzyResolution = null;
     if (!profile || !combined) {
         return [];
     }
+
+    const conditioned = conditionDetectionInput(combined, { sampleThreshold: 500 });
+    const trimmedLeading = Number.isFinite(conditioned.trimmedLeading) ? Math.max(0, conditioned.trimmedLeading) : 0;
+    const effectiveText = conditioned.text;
 
     let lastSubject = null;
     if (profile.detectPronoun && state.perMessageStates.size > 0) {
@@ -916,8 +1100,6 @@ function findAllMatches(combined, options = {}) {
         priorityWeights: getPriorityWeights(profile),
         lastSubject,
         scanDialogueActions: Boolean(profile.scanDialogueActions),
-        fuzzyTolerance: profile.fuzzyTolerance,
-        translateFuzzyNames: profile.translateFuzzyNames ?? profile.translateNames ?? PROFILE_DEFAULTS.translateFuzzyNames,
     };
 
     if (Number.isFinite(options?.startIndex) && options.startIndex >= 0) {
@@ -940,15 +1122,46 @@ function findAllMatches(combined, options = {}) {
         detectionOptions.lastIndex = Math.floor(options.lastIndex);
     }
 
-    const matches = collectDetections(combined, profile, compiledRegexes, detectionOptions);
+    if (trimmedLeading > 0) {
+        if (Number.isFinite(detectionOptions.startIndex)) {
+            detectionOptions.startIndex = Math.max(0, detectionOptions.startIndex - trimmedLeading);
+        }
+        if (Number.isFinite(detectionOptions.minIndex)) {
+            detectionOptions.minIndex = Math.max(0, detectionOptions.minIndex - trimmedLeading);
+        }
+        detectionOptions.bufferOffset = (detectionOptions.bufferOffset || 0) + trimmedLeading;
+    }
+
+    const matches = collectDetections(effectiveText, profile, compiledRegexes, {
+        ...detectionOptions,
+        originalText: combined,
+    });
+
+    const { matches: availableMatches, filteredOut } = filterMatchesByAvailability(matches, profile, {
+        messageState: options?.messageState || null,
+    });
+    availableMatches.originalText = matches.originalText;
+    availableMatches.preprocessedText = matches.preprocessedText;
+    availableMatches.preprocessorScripts = matches.preprocessorScripts;
+    availableMatches.tokenizerId = matches.tokenizerId;
+    availableMatches.tokenCount = matches.tokenCount;
+    availableMatches.tokenOffsets = matches.tokenOffsets;
+    availableMatches.tokenCountPromise = matches.tokenCountPromise;
+    availableMatches.startTokenIndex = matches.startTokenIndex;
+    availableMatches.minTokenIndex = matches.minTokenIndex;
+    availableMatches.minTokenIndex = matches.minTokenIndex;
+    availableMatches.vetoMatch = matches.vetoMatch;
+    availableMatches.vetoPhrase = matches.vetoPhrase;
+    availableMatches.filteredOut = filteredOut;
+
+
     const processed = typeof matches?.preprocessedText === "string"
         ? matches.preprocessedText
-        : combined;
+        : effectiveText;
     state.lastPreprocessedText = processed;
     state.lastPreprocessorScripts = clonePreprocessorScripts(matches?.preprocessorScripts || []);
-    state.lastFuzzyResolution = cloneFuzzyResolution(matches?.fuzzyResolution);
-    state.lastDetectionCount = Array.isArray(matches) ? matches.length : 0;
-    return matches;
+    state.lastDetectionCount = Array.isArray(availableMatches) ? availableMatches.length : 0;
+    return availableMatches;
 }
 
 function findBestMatch(combined, precomputedMatches = null, options = {}) {
@@ -963,6 +1176,33 @@ function findBestMatch(combined, precomputedMatches = null, options = {}) {
     }
     if (allMatches.length === 0) return null;
 
+    const messageState = matchOptions?.messageState || null;
+    const pendingSubject = typeof messageState?.pendingSubjectNormalized === "string"
+        ? messageState.pendingSubjectNormalized.trim()
+        : "";
+    const confirmedSubject = typeof messageState?.lastSubjectNormalized === "string"
+        ? messageState.lastSubjectNormalized.trim()
+        : "";
+    let resolvedMatches = allMatches;
+    if (pendingSubject && !confirmedSubject) {
+        const nonPronounMatches = allMatches.filter((match) => match?.matchKind !== "pronoun");
+        if (nonPronounMatches.length > 0) {
+            resolvedMatches = nonPronounMatches;
+            if (resolvedMatches && typeof resolvedMatches === "object") {
+                resolvedMatches.originalText = allMatches.originalText;
+                resolvedMatches.preprocessedText = allMatches.preprocessedText;
+                resolvedMatches.preprocessorScripts = allMatches.preprocessorScripts;
+                resolvedMatches.tokenizerId = allMatches.tokenizerId;
+                resolvedMatches.tokenCount = allMatches.tokenCount;
+                resolvedMatches.tokenOffsets = allMatches.tokenOffsets;
+                resolvedMatches.tokenCountPromise = allMatches.tokenCountPromise;
+                resolvedMatches.startTokenIndex = allMatches.startTokenIndex;
+                resolvedMatches.minTokenIndex = allMatches.minTokenIndex;
+                resolvedMatches.filteredOut = allMatches.filteredOut;
+            }
+        }
+    }
+
     let rosterSet = null;
     if (profile.enableSceneRoster) {
         const msgState = Array.from(state.perMessageStates.values()).pop();
@@ -971,7 +1211,73 @@ function findBestMatch(combined, precomputedMatches = null, options = {}) {
         }
     }
 
+    // Enforce chronological processing:
+    // 1. Sort matches by position.
+    // 2. Find the earliest valid match (after minIndex).
+    // 3. Only consider matches within a small window of that first match.
+    // This prevents future matches (with high Roster Bonus) from skipping over current matches.
+    const sortedMatches = Array.isArray(resolvedMatches) ? [...resolvedMatches] : [];
+    sortedMatches.sort((a, b) => {
+        const aIdx = Number.isFinite(a.matchIndex) ? a.matchIndex : Number.POSITIVE_INFINITY;
+        const bIdx = Number.isFinite(b.matchIndex) ? b.matchIndex : Number.POSITIVE_INFINITY;
+        return aIdx - bIdx;
+    });
+
+    // DEBUG: Trace chronological logic
+    if (sortedMatches.length > 0) {
+        debugLog(`[FIX-DEBUG] Sorted matches: ${sortedMatches.map(m => `${m.name}@${m.matchIndex}`).join(', ')}`);
+        debugLog(`[FIX-DEBUG] MinIndex: ${options?.minIndex}`);
+    }
+
+    // Reassign sorted array back to resolvedMatches AND PRESERVE PROPERTIES
+    const originalProperties = { ...resolvedMatches };
+
+    // Filter candidates
+    const minIndex = (Number.isFinite(options?.minIndex) && options.minIndex >= 0) ? options.minIndex : -1;
+    const firstValidMatch = sortedMatches.find(m => {
+        const end = (m.matchIndex || 0) + (m.matchLength || 0) - 1;
+        return end > minIndex;
+    });
+
+    let candidates = resolvedMatches; // Default to all if no valid match found (let getWinner handle empty/invalid)
+
+    if (firstValidMatch) {
+        const CHRONOLOGICAL_WINDOW = 100; // Look ahead 100 chars max
+        const scanThreshold = firstValidMatch.matchIndex + CHRONOLOGICAL_WINDOW;
+
+        candidates = sortedMatches.filter(m => {
+            const end = (m.matchIndex || 0) + (m.matchLength || 0) - 1;
+            // Must be valid (after minIndex)
+            if (end <= minIndex) return false;
+            // Must be within window
+            return m.matchIndex <= scanThreshold;
+        });
+
+        debugLog(`[FIX-DEBUG] First Valid: ${firstValidMatch.name}@${firstValidMatch.matchIndex}. Threshold: ${scanThreshold}`);
+        debugLog(`[FIX-DEBUG] Candidates: ${candidates.map(m => `${m.name}@${m.matchIndex}`).join(', ')}`);
+
+        // Restore array properties needed for scoringOptions
+        // (tokenCount, minTokenIndex, tokenizerId - referenced in lines 1212-1216)
+        if (resolvedMatches) {
+            if (Number.isFinite(resolvedMatches.tokenCount)) candidates.tokenCount = resolvedMatches.tokenCount;
+            if (Number.isFinite(resolvedMatches.minTokenIndex)) candidates.minTokenIndex = resolvedMatches.minTokenIndex;
+            if (resolvedMatches.tokenizerId) candidates.tokenizerId = resolvedMatches.tokenizerId;
+        }
+    } else {
+        debugLog(`[FIX-DEBUG] No valid matches found after minIndex.`);
+        // If we have matches but NONE are valid (all behind minIndex),
+        // passing them to getWinner will just result in "no winner".
+        // But let's pass the sorted list anyway just in case.
+        candidates = sortedMatches;
+        if (resolvedMatches) {
+            if (Number.isFinite(resolvedMatches.tokenCount)) candidates.tokenCount = resolvedMatches.tokenCount;
+            if (Number.isFinite(resolvedMatches.minTokenIndex)) candidates.minTokenIndex = resolvedMatches.minTokenIndex;
+            if (resolvedMatches.tokenizerId) candidates.tokenizerId = resolvedMatches.tokenizerId;
+        }
+    }
+
     const scoringOptions = {
+
         rosterSet,
         rosterBonus: resolveNumericSetting(profile?.rosterBonus, PROFILE_DEFAULTS.rosterBonus),
         rosterPriorityDropoff: resolveNumericSetting(profile?.rosterPriorityDropoff, PROFILE_DEFAULTS.rosterPriorityDropoff),
@@ -983,16 +1289,17 @@ function findBestMatch(combined, precomputedMatches = null, options = {}) {
         scoringOptions.minIndex = options.minIndex;
     }
 
-    if (Number.isFinite(allMatches?.tokenCount)) {
-        scoringOptions.tokenLength = allMatches.tokenCount;
+    if (Number.isFinite(resolvedMatches?.tokenCount)) {
+        scoringOptions.tokenLength = resolvedMatches.tokenCount;
     }
 
-    if (Number.isFinite(allMatches?.minTokenIndex)) {
-        scoringOptions.minTokenIndex = allMatches.minTokenIndex;
+    if (Number.isFinite(resolvedMatches?.minTokenIndex)) {
+        scoringOptions.minTokenIndex = resolvedMatches.minTokenIndex;
     }
 
-    return getWinner(allMatches, profile.detectionBias, combined.length, scoringOptions);
+    return getWinner(candidates, profile.detectionBias, combined.length, scoringOptions);
 }
+
 
 function getWinner(matches, bias = 0, textLength = 0, options = {}) {
     const rosterSet = options?.rosterSet instanceof Set ? options.rosterSet : null;
@@ -1615,6 +1922,47 @@ function computeAnalyticsUpdatedAt({
     return Math.max(...candidates);
 }
 
+function resolveSceneMessageState(sceneSnapshot) {
+    const states = state.perMessageStates instanceof Map ? state.perMessageStates : null;
+    if (!states) {
+        return { sceneSnapshot, messageState: null };
+    }
+    const streamingKey = normalizeMessageKey(state.currentGenerationKey);
+    if (streamingKey && states.has(streamingKey)) {
+        return {
+            sceneSnapshot: {
+                ...sceneSnapshot,
+                key: streamingKey,
+                messageId: Number.isFinite(sceneSnapshot?.messageId)
+                    ? sceneSnapshot.messageId
+                    : extractMessageIdFromKey(streamingKey),
+            },
+            messageState: states.get(streamingKey),
+        };
+    }
+    const snapshotKey = normalizeMessageKey(sceneSnapshot?.key);
+    if (snapshotKey && states.has(snapshotKey)) {
+        return {
+            sceneSnapshot: { ...sceneSnapshot, key: snapshotKey },
+            messageState: states.get(snapshotKey),
+        };
+    }
+    const sessionKey = normalizeMessageKey(ensureSessionData()?.lastMessageKey);
+    if (!snapshotKey && sessionKey && states.has(sessionKey)) {
+        return {
+            sceneSnapshot: {
+                ...sceneSnapshot,
+                key: sessionKey,
+                messageId: Number.isFinite(sceneSnapshot?.messageId)
+                    ? sceneSnapshot.messageId
+                    : extractMessageIdFromKey(sessionKey),
+            },
+            messageState: states.get(sessionKey),
+        };
+    }
+    return { sceneSnapshot, messageState: null };
+}
+
 function collectScenePanelState(options = {}) {
     if (options?.source === "tester" && lastCollectedScenePanelState) {
         return lastCollectedScenePanelState;
@@ -1622,15 +1970,11 @@ function collectScenePanelState(options = {}) {
     const settings = getSettings?.();
     const panelSettings = ensureScenePanelSettings(settings || {});
     const now = Date.now();
-    const sceneSnapshot = getCurrentSceneSnapshot();
+    let sceneSnapshot = getCurrentSceneSnapshot();
     const testersSnapshot = getLiveTesterOutputsSnapshot();
-    let messageState = null;
-    if (sceneSnapshot?.key && state.perMessageStates instanceof Map) {
-        messageState = state.perMessageStates.get(sceneSnapshot.key) || null;
-    }
-    if (!messageState && state.perMessageStates instanceof Map && state.perMessageStates.size > 0) {
-        messageState = Array.from(state.perMessageStates.values()).pop();
-    }
+    const resolvedScene = resolveSceneMessageState(sceneSnapshot);
+    sceneSnapshot = resolvedScene.sceneSnapshot;
+    const messageState = resolvedScene.messageState;
     const derivedScene = deriveSceneRosterState({
         messageState,
         sceneSnapshot,
@@ -1745,15 +2089,7 @@ function collectScenePanelState(options = {}) {
         testers,
     });
 
-    const profileForCoverage = getActiveProfile();
-    const hasBufferText = typeof buffer === "string" && buffer.trim().length > 0;
-    let coverage;
-    if (hasBufferText) {
-        coverage = analyzeCoverageDiagnostics(buffer, profileForCoverage);
-    } else {
-        const fallbackCoverage = state.lastTesterReport?.coverage || state.coverageDiagnostics;
-        coverage = cloneCoverageDiagnostics(fallbackCoverage);
-    }
+    // FIX #9: Coverage calculation moved to buildSceneLogCopy (Async) for accurate token counts.
 
     const rankingSource = ranking.length ? ranking : rankingForMessage.slice(0, 4);
     const preparedRanking = rankingSource.map((entry) => {
@@ -1793,7 +2129,6 @@ function collectScenePanelState(options = {}) {
         isStreaming: Boolean(state.currentGenerationKey && shouldUseStreamingKey),
         collapsed: isScenePanelCollapsed(),
         testers,
-        coverage,
     };
     lastCollectedScenePanelState = panelState;
     return panelState;
@@ -2410,19 +2745,15 @@ function renderSceneSettingsLayer() {
 
 function syncSceneRosterFromMembership({ message } = {}) {
     const now = Date.now();
-    const sceneSnapshot = typeof getCurrentSceneSnapshot === "function"
+    let sceneSnapshot = typeof getCurrentSceneSnapshot === "function"
         ? getCurrentSceneSnapshot()
         : null;
     const testersSnapshot = typeof getLiveTesterOutputsSnapshot === "function"
         ? getLiveTesterOutputsSnapshot()
         : null;
-    let messageState = null;
-    if (sceneSnapshot?.key && state.perMessageStates instanceof Map) {
-        messageState = state.perMessageStates.get(sceneSnapshot.key) || null;
-    }
-    if (!messageState && state.perMessageStates instanceof Map && state.perMessageStates.size > 0) {
-        messageState = Array.from(state.perMessageStates.values()).pop();
-    }
+    const resolvedScene = resolveSceneMessageState(sceneSnapshot);
+    sceneSnapshot = resolvedScene.sceneSnapshot;
+    const messageState = resolvedScene.messageState;
     const derived = deriveSceneRosterState({
         messageState,
         sceneSnapshot,
@@ -2445,11 +2776,24 @@ function syncSceneRosterFromMembership({ message } = {}) {
     }
 }
 
-function buildSceneLogCopy(panelState = collectScenePanelState()) {
+async function buildSceneLogCopy(panelState = collectScenePanelState()) {
     if (!panelState || typeof panelState !== "object") {
         return "No live events recorded yet.";
     }
     const analytics = panelState.analytics || {};
+
+    // FIX #9: Calculate accurate coverage stats on demand (async)
+    const bufferForCoverage = typeof analytics.buffer === "string" ? analytics.buffer : "";
+    let coverage = panelState.coverage;
+    if (!coverage) {
+        if (bufferForCoverage && bufferForCoverage.trim().length > 0) {
+            const profile = getActiveProfile();
+            coverage = await analyzeCoverageDiagnostics(bufferForCoverage, profile);
+        } else {
+            const fallback = state.lastTesterReport?.coverage || state.coverageDiagnostics;
+            coverage = cloneCoverageDiagnostics(fallback);
+        }
+    }
     const events = Array.isArray(analytics.events) ? analytics.events : [];
     const matches = Array.isArray(analytics.matches) ? analytics.matches : [];
     const stats = analytics.stats instanceof Map ? analytics.stats : null;
@@ -2629,6 +2973,19 @@ function buildSceneLogCopy(panelState = collectScenePanelState()) {
         lines.push("");
     }
 
+    // DEBUG EXTENSION: Inject detailed diagnostics for user debugging
+    lines.push("");
+    lines.push("Debug Info:");
+    const profile = getActiveProfile();
+    const regexSrc = state.compiledRegexes?.nameRegex?.source || "N/A";
+    lines.push(`Name Regex: ${regexSrc}`);
+    try {
+        const slotsStr = profile?.patternSlots ? JSON.stringify(profile.patternSlots) : "N/A";
+        lines.push(`Pattern Slots: ${slotsStr}`);
+    } catch (e) {
+        lines.push(`Pattern Slots: (error) ${e.message}`);
+    }
+
     return lines.join("\n");
 }
 
@@ -2636,7 +2993,7 @@ async function copyScenePanelLog() {
     if (typeof document === "undefined") {
         return false;
     }
-    const text = buildSceneLogCopy();
+    const text = await buildSceneLogCopy();
     if (!text) {
         return false;
     }
@@ -2956,6 +3313,69 @@ function escapeHtml(str) {
     return p.innerHTML;
 }
 function normalizeStreamText(s) { return s ? String(s).replace(/[\uFEFF\u200B\u200C\u200D]/g, "").replace(/[\u2018\u2019\u201A\u201B]/g, "'").replace(/[\u201C\u201D\u201E\u201F]/g, '"').replace(/(\*\*|__|~~|`{1,3})/g, "").replace(/\u00A0/g, " ") : ""; }
+function escapeRegex(text) {
+    return String(text ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function resolveMessageSpeakerName(message) {
+    if (!message || typeof message !== "object") {
+        return "";
+    }
+    if (message.is_user || isSystemOrNarratorMessage(message)) {
+        return "";
+    }
+    const name = typeof message.name === "string" ? message.name.trim() : "";
+    return name;
+}
+function shouldPrefixSpeaker(text, speaker) {
+    if (!text || !speaker) {
+        return false;
+    }
+    const trimmed = text.trimStart();
+    if (!trimmed) {
+        return false;
+    }
+    const escaped = escapeRegex(speaker);
+    const prefixPattern = new RegExp(`^(?:[>\\]]\\s*)?${escaped}\\s*[:：\\-—]`, "i");
+    if (prefixPattern.test(trimmed)) {
+        return false;
+    }
+    const leadingNamePattern = new RegExp(`^${escaped}\\b`, "i");
+    return !leadingNamePattern.test(trimmed);
+}
+function applySpeakerPrefix(text, speaker) {
+    if (typeof text !== "string") {
+        return "";
+    }
+    if (!speaker) {
+        return text;
+    }
+    if (!shouldPrefixSpeaker(text, speaker)) {
+        return text;
+    }
+    return `${speaker}: ${text}`;
+}
+function substituteParamsSafe(text) {
+    const fn = typeof globalThis.substituteParams === "function" ? globalThis.substituteParams : null;
+    return fn ? fn(text) : text;
+}
+function conditionDetectionInput(text, options = {}) {
+    const normalized = normalizeStreamText(text);
+    const substituted = substituteParamsSafe(normalized);
+    const cleaned = substituted.replace(/[*"]/g, "");
+    const sampleThreshold = Number.isFinite(options.sampleThreshold) && options.sampleThreshold > 0
+        ? Math.floor(options.sampleThreshold)
+        : 500;
+
+    if (cleaned.length <= sampleThreshold) {
+        return { text: cleaned.trim(), trimmedLeading: 0 };
+    }
+
+    const trimmedLeading = cleaned.length - sampleThreshold;
+    return {
+        text: cleaned.slice(-sampleThreshold).trim(),
+        trimmedLeading,
+    };
+}
 function normalizeCostumeName(n) {
     if (!n) return "";
     let s = String(n).trim();
@@ -2965,6 +3385,18 @@ function normalizeCostumeName(n) {
     const segments = s.split(/[\\/]+/).filter(Boolean);
     const base = segments.length ? segments[segments.length - 1] : s;
     return String(base).replace(/[-_](?:sama|san)$/i, "").trim();
+}
+
+function normalizeCostumeFolder(folder) {
+    if (folder == null) {
+        return "";
+    }
+    const trimmed = String(folder).trim();
+    if (!trimmed) {
+        return "";
+    }
+    const sanitized = trimmed.replace(/[\\/]+$/, "");
+    return sanitized;
 }
 function normalizeRosterKey(value) {
     if (typeof value !== "string") {
@@ -3193,7 +3625,7 @@ function rebuildMappingLookup(profile) {
             if (!entry) continue;
             const normalized = normalizeCostumeName(entry.name);
             if (!normalized) continue;
-            const folder = String(entry.defaultFolder ?? entry.folder ?? '').trim();
+            const folder = normalizeCostumeFolder(entry.defaultFolder ?? entry.folder ?? "");
             map.set(normalized.toLowerCase(), folder || normalized);
         }
     }
@@ -3412,14 +3844,12 @@ function resolveOutfitForMatch(rawName, options = {}) {
     const rawInput = typeof options?.rawName === "string" && options.rawName.trim()
         ? options.rawName.trim()
         : rawName;
-    const baseToleranceSetting = options?.fuzzyTolerance ?? profile?.fuzzyTolerance ?? null;
-    const baseTranslate = Boolean(options?.translateFuzzyNames ?? profile?.translateFuzzyNames ?? profile?.translateNames ?? false);
+    const baseTranslate = Boolean(options?.translateNames ?? profile?.translateNames ?? false);
     const candidates = Array.isArray(profile?.mappings)
         ? profile.mappings.map(entry => entry?.name).filter(Boolean)
         : [];
     const basePreprocessor = createNamePreprocessor({
         candidates,
-        tolerance: resolveFuzzyTolerance(baseToleranceSetting),
         translate: baseTranslate,
     });
     let resolution = options?.nameResolution || null;
@@ -3431,8 +3861,9 @@ function resolveOutfitForMatch(rawName, options = {}) {
     const now = Number.isFinite(options?.now) ? options.now : Date.now();
 
     if (!normalizedName || !profile) {
+        const fallbackFolder = normalizeCostumeFolder(options?.fallbackFolder ?? normalizedName ?? "");
         return {
-            folder: String(options?.fallbackFolder || normalizedName || "").trim(),
+            folder: fallbackFolder,
             reason: profile ? "no-name" : "no-profile",
             normalizedName,
             rawName: rawInput,
@@ -3447,14 +3878,10 @@ function resolveOutfitForMatch(rawName, options = {}) {
     }
 
     let mapping = findMappingForName(profile, normalizedName);
-    if (mapping && (mapping.fuzzyTolerance != null || mapping.translateFuzzyNames != null || mapping.translateNames != null)) {
-        const overrideToleranceSetting = mapping.fuzzyTolerance ?? baseToleranceSetting;
-        const overrideTranslate = mapping.translateFuzzyNames != null
-            ? Boolean(mapping.translateFuzzyNames)
-            : (mapping.translateNames != null ? Boolean(mapping.translateNames) : baseTranslate);
+    if (mapping && mapping.translateNames != null) {
+        const overrideTranslate = Boolean(mapping.translateNames);
         const overridePreprocessor = createNamePreprocessor({
             candidates,
-            tolerance: resolveFuzzyTolerance(overrideToleranceSetting),
             translate: overrideTranslate,
         });
         const remapped = overridePreprocessor(rawName, { priority: options?.priority ?? null });
@@ -3463,7 +3890,6 @@ function resolveOutfitForMatch(rawName, options = {}) {
             normalizedName = normalizeCostumeName(canonicalName);
             resolution = {
                 ...remapped,
-                tolerance: resolveFuzzyTolerance(overrideToleranceSetting),
                 translateNames: overrideTranslate,
             };
             const remappedEntry = findMappingForName(profile, normalizedName);
@@ -3472,7 +3898,7 @@ function resolveOutfitForMatch(rawName, options = {}) {
             }
         }
     }
-    const defaultFolder = String(options?.fallbackFolder || mapping?.defaultFolder || mapping?.folder || normalizedName).trim();
+    const defaultFolder = normalizeCostumeFolder(options?.fallbackFolder || mapping?.defaultFolder || mapping?.folder || normalizedName) || normalizedName;
     const baseResult = {
         folder: defaultFolder || normalizedName,
         reason: "default-folder",
@@ -3500,7 +3926,7 @@ function resolveOutfitForMatch(rawName, options = {}) {
         if (!variant) {
             return;
         }
-        const folder = typeof variant.folder === "string" ? variant.folder.trim() : "";
+        const folder = normalizeCostumeFolder(variant.folder);
         if (!folder) {
             return;
         }
@@ -3709,6 +4135,7 @@ function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOver
     const lookupKey = normalizedKey;
     const mapped = state.mappingLookup instanceof Map ? state.mappingLookup.get(lookupKey) : null;
     let mappedFolder = String(mapped ?? decision.name).trim();
+    mappedFolder = normalizeCostumeFolder(mappedFolder) || decision.name;
     if (!mappedFolder) {
         mappedFolder = decision.name;
     }
@@ -3746,7 +4173,13 @@ function evaluateSwitchDecision(rawName, opts = {}, contextState = null, nowOver
         const cached = outfitCache.get(normalizedKey);
         const cachedFolder = typeof cached?.folder === "string" ? cached.folder.trim() : null;
         const normalizedMapped = mappedFolder ? mappedFolder.trim() : "";
-        if (cachedFolder && normalizedMapped && cachedFolder.toLowerCase() === normalizedMapped.toLowerCase()) {
+        // FIX #8: Only return 'outfit-unchanged' if the character matches the current active character.
+        // Otherwise, if we are switching characters (e.g. Miku -> Nia) and Nia is already wearing default,
+        // we MUST still switch to bring Nia to screen.
+        if (cachedFolder && normalizedMapped &&
+            cachedFolder.toLowerCase() === normalizedMapped.toLowerCase() &&
+            currentName.toLowerCase() === decision.name.toLowerCase()
+        ) {
             const outfitInfo = decision.outfit || { folder: mappedFolder, reason: 'outfit-unchanged', resolvedAt: now };
             outfitInfo.folder = mappedFolder;
             outfitInfo.reason = outfitInfo.reason || 'outfit-unchanged';
@@ -3871,7 +4304,57 @@ async function issueCostumeForName(name, opts = {}) {
         return;
     }
 
-    const command = `/costume \\${decision.folder}`;
+    const chatLog = resolveChatLog();
+    const latestAssistant = Array.isArray(chatLog) ? findAssistantMessageBeforeIndex(chatLog.length - 1, chatLog) : null;
+    const latestName = typeof latestAssistant?.name === "string" ? latestAssistant.name.trim() : "";
+    const fallbackName = typeof decision?.name === "string" ? decision.name.trim() : "";
+    const targetName = latestName || fallbackName;
+    const rawFolder = typeof decision.folder === "string" ? decision.folder.trim() : "";
+    const hasLeadingSlash = /^[\\/]/.test(rawFolder);
+    const sanitizedFolder = rawFolder.replace(/^[\\/]+/, "");
+
+    let finalFolder = sanitizedFolder;
+    try {
+        const ctx = getContext();
+        if (ctx && Array.isArray(ctx.characters) && typeof ctx.characterId !== "undefined" && ctx.characterId !== null) {
+            const charId = Number(ctx.characterId);
+            if (!Number.isNaN(charId) && ctx.characters[charId]) {
+                const char = ctx.characters[charId];
+                let mainName = char.avatar || char.name;
+                if (mainName) {
+                    mainName = mainName.replace(/\.[^/.]+$/, "");
+                    const normMain = String(mainName).trim().replace(/\\/g, '/').toLowerCase();
+                    const normFolder = String(finalFolder).trim().replace(/\\/g, '/').toLowerCase();
+                    if (!normFolder.startsWith(normMain + '/')) {
+                        finalFolder = `${mainName}/${finalFolder}`;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        // Silently fail to modify folder if context is unavailable
+    }
+
+    const normalizedCandidates = [targetName, fallbackName]
+        .map(candidate => {
+            if (!candidate) {
+                return "";
+            }
+            const normalized = normalizeCostumeName(candidate) || candidate;
+            return normalized.trim().toLowerCase();
+        })
+        .filter(Boolean);
+    const folderSegments = finalFolder.split(/[\\/]+/).filter(Boolean);
+    const hasCharacterPrefix = folderSegments.some((segment) => {
+        const normalizedSegment = normalizeCostumeName(segment) || segment;
+        const loweredSegment = normalizedSegment.trim().toLowerCase();
+        return normalizedCandidates.includes(loweredSegment);
+    });
+    const useFullPath = !hasLeadingSlash && hasCharacterPrefix;
+    const escapedName = targetName ? targetName.replace(/"/g, '\\"') : "";
+    const command = useFullPath
+        ? `/costume ${finalFolder}`
+        : `/costume${escapedName ? ` name="${escapedName}"` : ""} \\${finalFolder}`;
     debugLog("Executing command:", command, "kind:", opts.matchKind || 'N/A');
     try {
         await executeSlashCommandsOnChatInput(command);
@@ -3931,149 +4414,6 @@ async function issueCostumeForName(name, opts = {}) {
 // ======================================================================
 // UI MANAGEMENT
 // ======================================================================
-const FUZZY_TOLERANCE_PRESETS = new Set(['off', 'auto', 'accent', 'always', 'low', 'custom']);
-const DEFAULT_FUZZY_TOLERANCE_PRESET = PROFILE_DEFAULTS.fuzzyTolerance || 'off';
-
-function interpretFuzzyToleranceSetting(value) {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-        return { preset: 'custom', customValue: Math.max(0, Math.floor(value)) };
-    }
-    if (typeof value === 'string') {
-        const normalized = value.trim().toLowerCase();
-        switch (normalized) {
-            case 'off':
-            case 'disabled':
-                return { preset: 'off', customValue: '' };
-            case 'auto':
-            case 'default':
-                return { preset: 'auto', customValue: '' };
-            case 'accent':
-            case 'accented':
-            case 'accent-only':
-                return { preset: 'accent', customValue: '' };
-            case 'always':
-            case 'on':
-                return { preset: 'always', customValue: '' };
-            case 'low':
-            case 'low-confidence':
-            case 'lowconfidence':
-                return { preset: 'low', customValue: '' };
-            case 'custom':
-                return { preset: 'custom', customValue: '' };
-            default:
-                return { preset: DEFAULT_FUZZY_TOLERANCE_PRESET, customValue: '' };
-        }
-    }
-    if (value && typeof value === 'object') {
-        const resolved = resolveFuzzyTolerance(value);
-        if (!resolved || !resolved.enabled) {
-            return { preset: 'off', customValue: '' };
-        }
-        const accentSensitive = resolved.accentSensitive !== false;
-        const threshold = Number.isFinite(resolved.lowConfidenceThreshold)
-            ? Math.max(0, Math.floor(resolved.lowConfidenceThreshold))
-            : null;
-        if (threshold == null) {
-            return accentSensitive
-                ? { preset: 'accent', customValue: '' }
-                : { preset: 'always', customValue: '' };
-        }
-        if (accentSensitive && threshold === 2) {
-            return { preset: 'auto', customValue: '' };
-        }
-        if (!accentSensitive && threshold === 2) {
-            return { preset: 'low', customValue: '' };
-        }
-        return { preset: 'custom', customValue: threshold };
-    }
-    if (value === true) {
-        return { preset: 'auto', customValue: '' };
-    }
-    return { preset: DEFAULT_FUZZY_TOLERANCE_PRESET, customValue: '' };
-}
-
-function sanitizeCustomFuzzyToleranceValue(rawValue) {
-    if (rawValue == null) {
-        return null;
-    }
-    const normalized = String(rawValue).trim();
-    if (!normalized) {
-        return null;
-    }
-    const parsed = Number(normalized);
-    if (!Number.isFinite(parsed)) {
-        return null;
-    }
-    return Math.max(0, Math.floor(parsed));
-}
-
-function updateFuzzyToleranceCustomVisibility(preset) {
-    const wrapper = document.getElementById('cs-fuzzy-tolerance-custom-wrapper');
-    if (!wrapper) {
-        return;
-    }
-    wrapper.hidden = preset !== 'custom';
-}
-
-function setFuzzyToleranceUI(value) {
-    const { preset, customValue } = interpretFuzzyToleranceSetting(value);
-    const select = document.querySelector('#cs-fuzzy-tolerance');
-    const normalizedPreset = FUZZY_TOLERANCE_PRESETS.has(preset)
-        ? preset
-        : DEFAULT_FUZZY_TOLERANCE_PRESET;
-    if (select) {
-        select.value = normalizedPreset;
-    }
-    const customField = document.querySelector('#cs-fuzzy-tolerance-custom');
-    if (customField) {
-        if (normalizedPreset === 'custom' && customValue !== '' && customValue != null) {
-            customField.value = customValue;
-        } else {
-            customField.value = '';
-        }
-        customField.removeAttribute('aria-invalid');
-    }
-    updateFuzzyToleranceCustomVisibility(select ? select.value : normalizedPreset);
-}
-
-function sanitizeFuzzyToleranceInputField(input) {
-    if (!input) {
-        return;
-    }
-    const sanitized = sanitizeCustomFuzzyToleranceValue(input.value);
-    if (sanitized == null) {
-        if (String(input.value || '').trim()) {
-            input.setAttribute('aria-invalid', 'true');
-        } else {
-            input.removeAttribute('aria-invalid');
-        }
-        return;
-    }
-    input.value = sanitized;
-    input.removeAttribute('aria-invalid');
-}
-
-function readFuzzyToleranceSettingFromUI() {
-    const select = document.querySelector('#cs-fuzzy-tolerance');
-    const preset = select?.value || DEFAULT_FUZZY_TOLERANCE_PRESET;
-    if (preset !== 'custom') {
-        return preset;
-    }
-    const customField = document.querySelector('#cs-fuzzy-tolerance-custom');
-    const sanitized = sanitizeCustomFuzzyToleranceValue(customField?.value);
-    if (sanitized == null) {
-        if (customField && String(customField.value || '').trim()) {
-            customField.setAttribute('aria-invalid', 'true');
-        }
-        return DEFAULT_FUZZY_TOLERANCE_PRESET;
-    }
-    if (customField) {
-        customField.value = sanitized;
-        customField.removeAttribute('aria-invalid');
-    }
-    return sanitized;
-}
-
 const uiMapping = {
     patterns: { selector: '#cs-patterns', type: 'patternEditor' },
     ignorePatterns: { selector: '#cs-ignore-patterns', type: 'textarea' },
@@ -4085,7 +4425,6 @@ const uiMapping = {
     perTriggerCooldownMs: { selector: '#cs-per-trigger-cooldown', type: 'number' },
     failedTriggerCooldownMs: { selector: '#cs-failed-trigger-cooldown', type: 'number' },
     maxBufferChars: { selector: '#cs-max-buffer-chars', type: 'number' },
-    tokenProcessThreshold: { selector: '#cs-token-process-threshold', type: 'number' },
     detectionBias: { selector: '#cs-detection-bias', type: 'range' },
     detectAttribution: { selector: '#cs-detect-attribution', type: 'checkbox' },
     detectAction: { selector: '#cs-detect-action', type: 'checkbox' },
@@ -4095,10 +4434,6 @@ const uiMapping = {
     detectPronoun: { selector: '#cs-detect-pronoun', type: 'checkbox' },
     detectGeneral: { selector: '#cs-detect-general', type: 'checkbox' },
     scanLowercaseFallbackTokens: { selector: '#cs-scan-lowercase-fallback', type: 'checkbox' },
-    fuzzyTolerance: { selector: '#cs-fuzzy-tolerance', type: 'fuzzyTolerance' },
-    fuzzyFallbackMaxScore: { selector: '#cs-fuzzy-fallback-max-score', type: 'optionalNumber' },
-    fuzzyFallbackCooldown: { selector: '#cs-fuzzy-fallback-cooldown', type: 'optionalNumber' },
-    translateFuzzyNames: { selector: '#cs-translate-fuzzy-names', type: 'checkbox' },
     attributionVerbs: { selector: '#cs-attribution-verbs', type: 'csvTextarea' },
     actionVerbs: { selector: '#cs-action-verbs', type: 'csvTextarea' },
     pronounVocabulary: { selector: '#cs-pronoun-vocabulary', type: 'csvTextarea' },
@@ -4277,22 +4612,6 @@ function resolveMaxBufferChars(profile) {
 function resolveNumericSetting(value, fallback) {
     const num = Number(value);
     return Number.isFinite(num) ? num : fallback;
-}
-
-function resolveOptionalScoreLimit(value, fallback = null) {
-    const num = Number(value);
-    if (!Number.isFinite(num)) {
-        return fallback;
-    }
-    return Math.min(1, Math.max(0, num));
-}
-
-function resolveFallbackCooldown(value, fallback = null) {
-    const num = Number(value);
-    if (!Number.isFinite(num)) {
-        return fallback;
-    }
-    return Math.max(0, Math.floor(num));
 }
 
 function populateProfileDropdown() {
@@ -4614,10 +4933,6 @@ function syncProfileFieldsToUI(profile, fields = []) {
     fields.forEach((key) => {
         const mapping = uiMapping[key];
         if (!mapping) return;
-        if (mapping.type === 'fuzzyTolerance') {
-            setFuzzyToleranceUI(getValue(key));
-            return;
-        }
         const field = $(mapping.selector);
         if (!field.length) return;
         const value = getValue(key);
@@ -4647,24 +4962,6 @@ function syncProfileFieldsToUI(profile, fields = []) {
 function getProfileValueForUI(profile, key) {
     if (!profile || typeof profile !== 'object') {
         return PROFILE_DEFAULTS[key];
-    }
-    if (key === 'translateFuzzyNames') {
-        if (profile.translateFuzzyNames != null) {
-            return profile.translateFuzzyNames;
-        }
-        if (profile.translateNames != null) {
-            return profile.translateNames;
-        }
-        return PROFILE_DEFAULTS.translateFuzzyNames;
-    }
-    if (key === 'fuzzyTolerance') {
-        return profile.fuzzyTolerance ?? PROFILE_DEFAULTS.fuzzyTolerance;
-    }
-    if (key === 'fuzzyFallbackMaxScore') {
-        return resolveOptionalScoreLimit(profile?.fuzzyFallbackMaxScore, PROFILE_DEFAULTS.fuzzyFallbackMaxScore);
-    }
-    if (key === 'fuzzyFallbackCooldown') {
-        return resolveFallbackCooldown(profile?.fuzzyFallbackCooldown, PROFILE_DEFAULTS.fuzzyFallbackCooldown);
     }
     return profile[key];
 }
@@ -4714,7 +5011,6 @@ function loadProfile(profileName) {
             case 'textarea': $(selector).val((value || []).join('\n')); break;
             case 'csvTextarea': $(selector).val((value || []).join(', ')); break;
             case 'patternEditor': renderPatternEditor(profile); break;
-            case 'fuzzyTolerance': setFuzzyToleranceUI(value); break;
             case 'optionalNumber': $(selector).val(value ?? ''); break;
             default: $(selector).val(value); break;
         }
@@ -4731,13 +5027,10 @@ function loadProfile(profileName) {
 function saveCurrentProfileData() {
     const profileData = {};
     const activeProfile = getActiveProfile();
+    syncOutfitLabMappingsFromUI(activeProfile);
     for (const key in uiMapping) {
         const { selector, type } = uiMapping[key];
         if (type === 'patternEditor') {
-            continue;
-        }
-        if (type === 'fuzzyTolerance') {
-            profileData[key] = readFuzzyToleranceSettingFromUI();
             continue;
         }
         const field = $(selector);
@@ -4782,14 +5075,6 @@ function saveCurrentProfileData() {
                     break;
                 }
                 const parsed = Number(raw);
-                if (key === 'fuzzyFallbackMaxScore') {
-                    value = resolveOptionalScoreLimit(parsed, PROFILE_DEFAULTS[key] ?? null);
-                    break;
-                }
-                if (key === 'fuzzyFallbackCooldown') {
-                    value = resolveFallbackCooldown(parsed, PROFILE_DEFAULTS[key] ?? null);
-                    break;
-                }
                 value = Number.isFinite(parsed) ? parsed : (PROFILE_DEFAULTS[key] ?? null);
                 break;
             }
@@ -4809,11 +5094,6 @@ function saveCurrentProfileData() {
     const mappingSource = Array.isArray(activeProfile?.mappings) ? activeProfile.mappings : [];
     const draftIds = state?.draftMappingIds instanceof Set ? state.draftMappingIds : new Set();
     profileData.mappings = prepareMappingsForSave(mappingSource, draftIds);
-    if (profileData.translateFuzzyNames == null) {
-        profileData.translateNames = PROFILE_DEFAULTS.translateNames;
-    } else {
-        profileData.translateNames = Boolean(profileData.translateFuzzyNames);
-    }
     return profileData;
 }
 
@@ -5041,6 +5321,13 @@ function gatherVariantStringList(value) {
     };
     visit(value);
     return [...new Set(results)];
+}
+
+function parseOutfitListInput(value) {
+    return String(value ?? "")
+        .split(/\r?\n|,/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
 }
 
 function normalizeOutfitVariant(rawVariant = {}) {
@@ -5353,7 +5640,7 @@ function createPatternSlotCard(profile, slot, index) {
     })
         .append($('<i>').addClass('fa-solid fa-folder-open'), $('<span>').text('Pick Folder'))
         .on('click', () => folderPicker.trigger('click'));
-    folderPicker.on('change', function() {
+    folderPicker.on('change', function () {
         const folderPath = extractDirectoryFromFileList(this.files || []);
         if (folderPath) {
             folderInput.val(folderPath);
@@ -5590,7 +5877,7 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
         class: 'menu_button interactable cs-outfit-pick-folder',
     }).append($('<i>').addClass('fa-solid fa-folder-open'), $('<span>').text('Pick Folder'))
         .on('click', () => folderPicker.trigger('click'));
-    folderPicker.on('change', function() {
+    folderPicker.on('change', function () {
         const folderPath = extractDirectoryFromFileList(this.files || []);
         if (folderPath) {
             const combinedPath = buildVariantFolderPath(mapping, folderPath);
@@ -5705,15 +5992,10 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
     awarenessField.append($('<small>').text('Scene awareness relies on the Scene Roster detector setting. Names are matched case-insensitively.'));
     variantEl.append(awarenessField);
 
-    const parseListInput = (value) => value
-        .split(/\r?\n|,/)
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-
     const updateAwarenessState = () => {
-        const requiresList = parseListInput(requiresTextarea.val());
-        const anyList = parseListInput(anyTextarea.val());
-        const excludesList = parseListInput(excludesTextarea.val());
+        const requiresList = parseOutfitListInput(requiresTextarea.val());
+        const anyList = parseOutfitListInput(anyTextarea.val());
+        const excludesList = parseOutfitListInput(excludesTextarea.val());
         const next = {};
         if (requiresList.length) {
             next.requires = requiresList;
@@ -5731,7 +6013,7 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
         }
     };
 
-    const handleAwarenessInput = function() {
+    const handleAwarenessInput = function () {
         updateAwarenessState();
         markVariantDirty(this);
     };
@@ -5785,7 +6067,7 @@ function createOutfitVariantElement(profile, mapping, mappingIdx, variant, varia
         variantEl.remove();
         const card = $(`.cs-outfit-card[data-idx="${mappingIdx}"]`);
         const variantContainer = card.find('.cs-outfit-variants');
-        variantContainer.find('.cs-outfit-variant').each(function(index) {
+        variantContainer.find('.cs-outfit-variant').each(function (index) {
             $(this).attr('data-variant-index', index);
             $(this).find('.cs-outfit-variant-header h4').text(`Variation ${index + 1}`);
         });
@@ -5882,7 +6164,7 @@ function createOutfitCard(profile, mapping, idx) {
         class: 'menu_button interactable cs-outfit-pick-folder',
     }).append($('<i>').addClass('fa-solid fa-folder-open'), $('<span>').text('Pick Folder'))
         .on('click', () => defaultPicker.trigger('click'));
-    defaultPicker.on('change', function() {
+    defaultPicker.on('change', function () {
         const folderPath = extractDirectoryFromFileList(this.files || []);
         if (folderPath) {
             defaultInput.val(folderPath);
@@ -6071,6 +6353,93 @@ function renderMappings(profile) {
     renderOutfitLab(profile);
 }
 
+function syncOutfitLabMappingsFromUI(profile) {
+    if (!profile || typeof profile !== "object") {
+        return;
+    }
+    if (!Array.isArray(profile.mappings)) {
+        return;
+    }
+    const container = $("#cs-outfit-character-list");
+    if (!container.length) {
+        return;
+    }
+
+    container.find(".cs-outfit-card").each(function () {
+        const card = $(this);
+        const idx = Number(card.data("idx"));
+        if (!Number.isFinite(idx) || !profile.mappings[idx]) {
+            return;
+        }
+        const mapping = profile.mappings[idx];
+
+        const nameInput = card.find(".cs-outfit-character-name");
+        if (nameInput.length) {
+            mapping.name = String(nameInput.val() ?? "").trim();
+        }
+
+        const defaultInput = card.find(".cs-outfit-default-folder");
+        if (defaultInput.length) {
+            const value = String(defaultInput.val() ?? "").trim();
+            mapping.defaultFolder = value;
+            if (value) {
+                mapping.folder = value;
+            } else if (typeof mapping.folder === "string") {
+                mapping.folder = mapping.folder.trim();
+            }
+        }
+
+        const outfits = [];
+        card.find(".cs-outfit-variant").each(function () {
+            const variantEl = $(this);
+            const labelValue = String(variantEl.find(".cs-outfit-variant-label").val() ?? "").trim();
+            const folderValue = String(variantEl.find(".cs-outfit-variant-folder").val() ?? "").trim();
+            const priorityRaw = variantEl.find(".cs-outfit-variant-priority").val();
+            const priority = Number(priorityRaw);
+            const triggers = String(variantEl.find(".cs-outfit-variant-triggers").val() ?? "")
+                .split(/\r?\n/)
+                .map((value) => value.trim())
+                .filter(Boolean);
+            const matchKinds = variantEl.find(".cs-outfit-matchkind-options input:checked")
+                .map((_, el) => String(el.value ?? "").trim())
+                .get()
+                .filter(Boolean);
+            const awarenessInputs = variantEl.find(".cs-outfit-awareness-input");
+            const requires = parseOutfitListInput(awarenessInputs.eq(0).val());
+            const requiresAny = parseOutfitListInput(awarenessInputs.eq(1).val());
+            const excludes = parseOutfitListInput(awarenessInputs.eq(2).val());
+            const awareness = {};
+            if (requires.length) {
+                awareness.requires = requires;
+            }
+            if (requiresAny.length) {
+                awareness.requiresAny = requiresAny;
+            }
+            if (excludes.length) {
+                awareness.excludes = excludes;
+            }
+
+            const variant = {
+                folder: folderValue,
+                triggers,
+                priority: Number.isFinite(priority) ? priority : 0,
+            };
+            if (labelValue) {
+                variant.label = labelValue;
+            }
+            if (matchKinds.length) {
+                variant.matchKinds = matchKinds;
+            }
+            if (Object.keys(awareness).length) {
+                variant.awareness = awareness;
+            }
+
+            outfits.push(normalizeOutfitVariant(variant));
+        });
+        mapping.outfits = outfits;
+    });
+}
+
 async function fetchBuildMetadata() {
     const meta = {
         version: null,
@@ -6158,6 +6527,7 @@ function describeSkipReason(code) {
         'no-profile': 'profile unavailable',
         'no-name': 'no name detected',
         'focus-lock': 'focus lock active',
+        'outfit-unavailable': 'no mapped outfit available',
     };
     return messages[code] || 'not eligible to switch yet';
 }
@@ -6200,6 +6570,13 @@ function trimDecisionEvents(events, max = MAX_RECENT_DECISION_EVENTS) {
 const __testables = {
     trimDecisionEvents,
     recordDecisionEvent,
+    buildStreamingBuffers,
+    STREAM_BUFFER_SAFETY_CHARS,
+    resolveStreamSnapshotSource,
+    resolveMessageSpeakerName,
+    applySpeakerPrefix,
+    shouldPrefixSpeaker,
+    processStreamChunk,
 };
 
 function recordLastVetoMatch(match, { source = 'live', persist = true } = {}) {
@@ -6549,13 +6926,15 @@ function normalizeVerbCandidate(word) {
     return base;
 }
 
-function analyzeCoverageDiagnostics(text, profile = getActiveProfile()) {
+async function analyzeCoverageDiagnostics(text, profile = getActiveProfile()) {
     if (!text) {
         return { missingPronouns: [], missingAttributionVerbs: [], missingActionVerbs: [], totalTokens: 0 };
     }
 
     const normalized = normalizeStreamText(text).toLowerCase();
     const tokens = normalized.match(COVERAGE_TOKEN_REGEX) || [];
+    // FIX #9: Use accurate async tokenizer for total count
+    const accurateCount = await getTokenCountAsync(text);
     const pronounSet = new Set((profile?.pronounVocabulary || DEFAULT_PRONOUNS).map(value => String(value).toLowerCase()));
     const attributionSet = new Set((profile?.attributionVerbs || []).map(value => String(value).toLowerCase()));
     const actionSet = new Set((profile?.actionVerbs || []).map(value => String(value).toLowerCase()));
@@ -6582,7 +6961,7 @@ function analyzeCoverageDiagnostics(text, profile = getActiveProfile()) {
         missingPronouns: Array.from(missingPronouns).sort(),
         missingAttributionVerbs: Array.from(missingAttribution).sort(),
         missingActionVerbs: Array.from(missingAction).sort(),
-        totalTokens: tokens.length,
+        totalTokens: accurateCount,
     };
 }
 
@@ -6625,11 +7004,11 @@ function renderCoverageDiagnostics(result) {
     state.coverageDiagnostics = data;
 }
 
-function refreshCoverageFromLastReport() {
+async function refreshCoverageFromLastReport() {
     const text = state.lastTesterReport?.normalizedInput;
     const profile = getActiveProfile();
     if (text) {
-        const coverage = analyzeCoverageDiagnostics(text, profile);
+        const coverage = await analyzeCoverageDiagnostics(text, profile);
         renderCoverageDiagnostics(coverage);
         if (state.lastTesterReport) {
             state.lastTesterReport.coverage = coverage;
@@ -6712,28 +7091,6 @@ function clonePreprocessorScripts(scripts = []) {
     }));
 }
 
-function cloneFuzzyResolution(value) {
-    if (!value || typeof value !== "object") {
-        return null;
-    }
-    const tolerance = value.tolerance && typeof value.tolerance === "object"
-        ? { ...value.tolerance }
-        : null;
-    const fallbackMode = tolerance?.enabled
-        ? tolerance.accentSensitive
-            ? "auto"
-            : "always"
-        : "off";
-    return {
-        tolerance,
-        translateNames: Boolean(value.translateNames),
-        candidateCount: Number.isFinite(value.candidateCount) ? value.candidateCount : 0,
-        used: Boolean(value.used),
-        aliasCount: Number.isFinite(value.aliasCount) ? value.aliasCount : 0,
-        mode: typeof value.mode === "string" ? value.mode : fallbackMode,
-    };
-}
-
 function renderTesterScriptList(scriptsInput) {
     const list = $("#cs-preprocessor-script-list");
     if (!list.length) {
@@ -6782,41 +7139,9 @@ function renderTesterScriptList(scriptsInput) {
     });
 }
 
-function renderTesterFuzzySummary(resolution) {
-    const pill = $("#cs-fuzzy-summary");
-    if (!pill.length) {
-        return;
-    }
-    const effective = resolution && typeof resolution === "object" ? resolution : null;
-    if (!effective || !effective.tolerance) {
-        pill.text('Fuzzy: Off');
-        pill.removeClass('is-active');
-        pill.attr('title', 'Fuzzy normalization disabled.');
-        return;
-    }
-    const modeLabel = effective.mode || (effective.tolerance.enabled ? (effective.tolerance.accentSensitive ? 'auto' : 'always') : 'off');
-    const aliasCount = Number.isFinite(effective.aliasCount) ? effective.aliasCount : 0;
-    const candidateCount = Number.isFinite(effective.candidateCount) ? effective.candidateCount : 0;
-    const summaryParts = [
-        `Mode: ${modeLabel}`,
-        `Translate names: ${effective.translateNames ? 'yes' : 'no'}`,
-        `Aliases loaded: ${aliasCount}`,
-        `Candidates tracked: ${candidateCount}`,
-        `Fuzzy used: ${effective.used ? 'yes' : 'no'}`,
-        `Accent sensitive: ${effective.tolerance.accentSensitive ? 'yes' : 'no'}`,
-        `Low-confidence threshold: ${effective.tolerance.lowConfidenceThreshold ?? 'n/a'}`,
-        `Max fuzzy score: ${effective.tolerance.maxScore ?? 'n/a'}`,
-    ];
-    pill.text(`Fuzzy ${modeLabel} • ${effective.used ? 'matched' : 'idle'} • Aliases ${aliasCount}`);
-    pill.attr('title', summaryParts.join('\n'));
-    pill.toggleClass('is-active', Boolean(effective.used));
-}
-
-function renderTesterPreprocessorMeta({ scripts, fuzzy } = {}) {
+function renderTesterPreprocessorMeta({ scripts } = {}) {
     const scriptsToRender = scripts !== undefined ? scripts : state.lastPreprocessorScripts;
     renderTesterScriptList(scriptsToRender);
-    const fuzzySummary = fuzzy !== undefined ? fuzzy : state.lastFuzzyResolution;
-    renderTesterFuzzySummary(fuzzySummary);
 }
 
 function mergeUniqueList(target = [], additions = []) {
@@ -6897,7 +7222,7 @@ function summarizeSwitchesForReport(events = []) {
 function formatTesterReport(report) {
     const lines = [];
     const created = new Date(report.generatedAt || Date.now());
-    lines.push('Costume Switcher – Live Pattern Tester Report');
+    lines.push('Character Visuals – Live Pattern Tester Report');
     lines.push('---------------------------------------------');
     lines.push(`Profile: ${report.profileName || 'Unknown profile'}`);
     lines.push(`Generated: ${created.toLocaleString()}`);
@@ -6929,29 +7254,7 @@ function formatTesterReport(report) {
     }
     lines.push('');
 
-    const fuzzySummary = report.fuzzyResolution;
-    const toleranceInfo = fuzzySummary?.tolerance || null;
-    lines.push('Name Normalization:');
-    if (fuzzySummary) {
-        const fallbackMode = toleranceInfo?.enabled
-            ? toleranceInfo.accentSensitive
-                ? 'auto'
-                : 'always'
-            : 'off';
-        lines.push(`  Mode: ${fuzzySummary.mode || fallbackMode}`);
-        lines.push(`  Translate names: ${fuzzySummary.translateNames ? 'yes' : 'no'}`);
-        lines.push(`  Fuzzy used: ${fuzzySummary.used ? 'yes' : 'no'}`);
-        lines.push(`  Aliases loaded: ${fuzzySummary.aliasCount ?? 0}`);
-        lines.push(`  Candidates tracked: ${fuzzySummary.candidateCount ?? 0}`);
-        lines.push(`  Accent sensitive: ${toleranceInfo?.accentSensitive ? 'yes' : 'no'}`);
-        lines.push(`  Low-confidence threshold: ${toleranceInfo?.lowConfidenceThreshold ?? 'n/a'}`);
-        lines.push(`  Max fuzzy score: ${toleranceInfo?.maxScore ?? 'n/a'}`);
-    } else {
-        lines.push('  Mode: off');
-        lines.push('  Fuzzy used: no');
-        lines.push('  Aliases loaded: 0');
-        lines.push('  Candidates tracked: 0');
-    }
+    lines.push('Name Normalization: Not tracked (fuzzy matching removed).');
     lines.push('');
 
     const mergedDetections = mergeDetectionsForReport(report);
@@ -7168,7 +7471,7 @@ function formatTesterReport(report) {
     }
 
     if (report.profileSnapshot) {
-        const summaryKeys = ['globalCooldownMs', 'perTriggerCooldownMs', 'repeatSuppressMs', 'tokenProcessThreshold'];
+        const summaryKeys = ['globalCooldownMs', 'perTriggerCooldownMs', 'repeatSuppressMs'];
         lines.push('');
         lines.push('Key Settings:');
         summaryKeys.forEach(key => {
@@ -7226,6 +7529,26 @@ function adjustWindowForTrim(msgState, trimmedChars, combinedLength) {
     }
 }
 
+function buildStreamingBuffers(previousBuffer, nextChunk, profile, msgState) {
+    const priorText = typeof previousBuffer === "string" ? previousBuffer : "";
+    const appended = priorText + (typeof nextChunk === "string" ? nextChunk : "");
+    const safetyLimit = Math.max(resolveMaxBufferChars(profile), STREAM_BUFFER_SAFETY_CHARS);
+    const trimmedChars = safetyLimit > 0 && appended.length > safetyLimit
+        ? appended.length - safetyLimit
+        : 0;
+    const detectionBuffer = trimmedChars > 0 ? appended.slice(-safetyLimit) : appended;
+    const appendedWindow = detectionBuffer;
+    const baseBufferOffset = Number.isFinite(msgState?.bufferOffset) ? msgState.bufferOffset : 0;
+    const bufferOffset = baseBufferOffset + trimmedChars;
+
+    return {
+        appended: appendedWindow,
+        detectionBuffer,
+        trimmedChars,
+        bufferOffset,
+    };
+}
+
 function createTesterMessageState(profile) {
     const defaultRosterTTL = sanitizeRosterTurnValue(profile?.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
     return {
@@ -7244,6 +7567,7 @@ function createTesterMessageState(profile) {
         processedLength: 0,
         lastAcceptedIndex: -1,
         bufferOffset: 0,
+        speakerPrefixLength: 0,
         detectionContext: createDetectionContext(0),
     };
 }
@@ -7360,32 +7684,35 @@ function simulateTesterStream(combined, profile, bufKey, options = {}) {
         characterOutfits: new Map(),
     };
 
-    const maxBuffer = resolveMaxBufferChars(profile);
     const defaultRosterTTL = sanitizeRosterTurnValue(profile?.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
     const repeatSuppress = Number(profile.repeatSuppressMs) || 0;
     let buffer = "";
     const rosterTimeline = [];
     const rosterWarnings = [];
-    let lastFuzzySnapshot = null;
-    let detectedAnyCandidates = false;
 
     for (let i = 0; i < combined.length; i++) {
-        const appended = buffer + combined[i];
-        buffer = appended.slice(-maxBuffer);
-        const trimmedChars = appended.length - buffer.length;
-        adjustWindowForTrim(msgState, trimmedChars, buffer.length);
-        state.perMessageBuffers.set(bufKey, buffer);
-
-        const bufferOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
-        const newestAbsoluteIndex = buffer.length > 0 ? bufferOffset + buffer.length - 1 : bufferOffset;
+        const { appended, detectionBuffer, trimmedChars, bufferOffset } = buildStreamingBuffers(buffer, combined[i], profile, msgState);
+        const combinedLength = detectionBuffer.length;
+        const newestAbsoluteIndex = combinedLength > 0 ? bufferOffset + combinedLength - 1 : bufferOffset;
         const lastProcessedIndex = Number.isFinite(msgState.lastAcceptedIndex) ? msgState.lastAcceptedIndex : -1;
+        let windowUpdated = false;
+        const flushWindow = () => {
+            if (windowUpdated) {
+                return;
+            }
+            adjustWindowForTrim(msgState, trimmedChars, combinedLength);
+            state.perMessageBuffers.set(bufKey, appended);
+            windowUpdated = true;
+        };
+        buffer = appended;
 
         if (newestAbsoluteIndex <= lastProcessedIndex) {
+            flushWindow();
             continue;
         }
 
-        if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(buffer)) {
-            const vetoMatch = buffer.match(state.compiledRegexes.vetoRegex)?.[0];
+        if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(detectionBuffer)) {
+            const vetoMatch = detectionBuffer.match(state.compiledRegexes.vetoRegex)?.[0];
             const recordedVeto = recordLastVetoMatch(vetoMatch, { source: 'tester', persist: false });
             if (typeof globalThis.$ === 'function') {
                 showStatus(`Detection halted. Veto phrase <b>${escapeHtml(recordedVeto.phrase)}</b> matched in tester.`, 'error', 5000);
@@ -7394,6 +7721,7 @@ function simulateTesterStream(combined, profile, bufKey, options = {}) {
                 events.push({ type: 'veto', match: vetoMatch, charIndex: newestAbsoluteIndex });
             }
             msgState.vetoed = true;
+            flushWindow();
             break;
         }
 
@@ -7406,16 +7734,27 @@ function simulateTesterStream(combined, profile, bufKey, options = {}) {
         if (Number.isFinite(minIndexRelative) && minIndexRelative >= 0) {
             matchOptions.minIndex = minIndexRelative;
         }
+        matchOptions.messageState = msgState;
 
-        const matches = findAllMatches(buffer, matchOptions);
-        if (Array.isArray(matches) && matches.length) {
-            detectedAnyCandidates = true;
-        }
-        if (matches?.fuzzyResolution) {
-            lastFuzzySnapshot = cloneFuzzyResolution(matches.fuzzyResolution);
-        }
-        const bestMatch = findBestMatch(buffer, matches, matchOptions);
+        const matches = findAllMatches(detectionBuffer, matchOptions);
+        const bestMatch = findBestMatch(detectionBuffer, matches, matchOptions);
         if (!bestMatch) {
+            if (Array.isArray(matches.filteredOut) && matches.filteredOut.length) {
+                matches.filteredOut.forEach((entry) => {
+                    events.push({
+                        type: 'skipped',
+                        name: entry.name,
+                        rawName: entry.rawName || entry.name,
+                        matchKind: entry.matchKind,
+                        reason: entry.reason || 'outfit-unavailable',
+                        charIndex: newestAbsoluteIndex,
+                        tokenIndex: entry.tokenIndex ?? null,
+                        tokenLength: entry.tokenLength ?? null,
+                        nameResolution: entry.nameResolution || null,
+                    });
+                });
+            }
+            flushWindow();
             continue;
         }
 
@@ -7485,6 +7824,7 @@ function simulateTesterStream(combined, profile, bufKey, options = {}) {
                     nameResolution: bestMatch.nameResolution || null,
                 });
             }
+            flushWindow();
             continue;
         }
 
@@ -7495,7 +7835,7 @@ function simulateTesterStream(combined, profile, bufKey, options = {}) {
             matchKind: bestMatch.matchKind,
             bufKey,
             messageState: msgState,
-            context: { text: buffer, matchKind: bestMatch.matchKind, roster: msgState.sceneRoster },
+            context: { text: detectionBuffer, matchKind: bestMatch.matchKind, roster: msgState.sceneRoster },
             rawName: bestMatch.rawName || bestMatch.name,
             nameResolution: bestMatch.nameResolution || null,
         }, simulationState, virtualNow);
@@ -7591,20 +7931,10 @@ function simulateTesterStream(combined, profile, bufKey, options = {}) {
             });
             requestScenePanelRender("stream-roster");
         }
+        flushWindow();
     }
 
     const finalState = buildSimulationFinalState(msgState);
-    const fuzzySnapshot = lastFuzzySnapshot || cloneFuzzyResolution(state.lastFuzzyResolution);
-    const fuzzyToleranceEnabled = Boolean(fuzzySnapshot?.tolerance?.enabled);
-    const fuzzyCandidates = Number.isFinite(fuzzySnapshot?.candidateCount) ? fuzzySnapshot.candidateCount : 0;
-    const hasInputText = typeof combined === "string" ? Boolean(combined.trim()) : false;
-
-    if (hasInputText && fuzzyToleranceEnabled && !fuzzySnapshot?.used && !detectedAnyCandidates && fuzzyCandidates > 0) {
-        rosterWarnings.push({
-            type: "fuzzy-idle",
-            message: "Fuzzy tolerance is enabled, but no names were normalized. Turn on Detect General Name Mentions or confirm Detect Attribution and Detect Action are enabled so fuzzy matching has candidates.",
-        });
-    }
 
     if (profile.enableSceneRoster && msgState.rosterTurns instanceof Map && msgState.rosterTurns.size > 0) {
         const expiring = [];
@@ -7702,15 +8032,14 @@ function renderTesterStream(eventList, events) {
 
 
 
-function testRegexPattern() {
+async function testRegexPattern() {
     clearTesterTimers();
     state.lastTesterReport = null;
     updateTesterCopyButton();
     updateTesterTopCharactersDisplay(null);
     updateTesterPreprocessedDisplay(null);
     state.lastPreprocessorScripts = [];
-    state.lastFuzzyResolution = null;
-    renderTesterPreprocessorMeta({ scripts: [], fuzzy: null });
+    renderTesterPreprocessorMeta({ scripts: [] });
     $("#cs-test-veto-result").text('N/A').css('color', 'var(--text-color-soft)');
     renderTesterScoreBreakdown(null);
     renderTesterRosterTimeline(null, null);
@@ -7761,7 +8090,7 @@ function testRegexPattern() {
         generatedAt: Date.now(),
     };
 
-    const coverage = analyzeCoverageDiagnostics(combined, tempProfile);
+    const coverage = await analyzeCoverageDiagnostics(combined, tempProfile);
 
     if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(combined)) {
         const vetoMatch = combined.match(state.compiledRegexes.vetoRegex)?.[0] || 'unknown veto phrase';
@@ -7794,7 +8123,6 @@ function testRegexPattern() {
             skipSummary,
             preprocessedText: state.lastPreprocessedText,
             preprocessorScripts: clonePreprocessorScripts(state.lastPreprocessorScripts),
-            fuzzyResolution: cloneFuzzyResolution(state.lastFuzzyResolution),
         };
         updateTesterTopCharactersDisplay([]);
         updateTesterCopyButton();
@@ -7806,8 +8134,7 @@ function testRegexPattern() {
             ? state.lastPreprocessedText
             : combined;
         const scriptSnapshot = clonePreprocessorScripts(state.lastPreprocessorScripts);
-        const fuzzySnapshot = cloneFuzzyResolution(state.lastFuzzyResolution);
-        renderTesterPreprocessorMeta({ scripts: scriptSnapshot, fuzzy: fuzzySnapshot });
+        renderTesterPreprocessorMeta({ scripts: scriptSnapshot });
         updateTesterPreprocessedDisplay(preprocessedSnapshot);
         allDetectionsList.empty();
         if (allMatches.length > 0) {
@@ -7817,11 +8144,7 @@ function testRegexPattern() {
                 let resolutionNote = '';
                 if (m.nameResolution?.changed) {
                     const rawSource = m.nameResolution.raw || m.rawName || m.originalName || m.name;
-                    const methodLabel = m.nameResolution.method === 'fuzzy'
-                        ? m.nameResolution.score != null
-                            ? `fuzzy:${m.nameResolution.score.toFixed(2)}`
-                            : 'fuzzy'
-                        : m.nameResolution.method || 'normalized';
+                    const methodLabel = m.nameResolution.method || 'normalized';
                     const safeRaw = typeof rawSource === 'string' && rawSource.trim()
                         ? rawSource.trim()
                         : 'unknown';
@@ -7865,7 +8188,6 @@ function testRegexPattern() {
         updateTesterTopCharactersDisplay(topCharacters);
         state.lastPreprocessedText = preprocessedSnapshot;
         state.lastPreprocessorScripts = clonePreprocessorScripts(scriptSnapshot);
-        state.lastFuzzyResolution = cloneFuzzyResolution(fuzzySnapshot);
 
         state.lastTesterReport = {
             ...reportBase,
@@ -7896,7 +8218,6 @@ function testRegexPattern() {
             coverage,
             preprocessedText: preprocessedSnapshot,
             preprocessorScripts: clonePreprocessorScripts(scriptSnapshot),
-            fuzzyResolution: cloneFuzzyResolution(fuzzySnapshot),
         };
         updateTesterCopyButton();
     }
@@ -7924,23 +8245,14 @@ function wireUI() {
             $(document).on('input', selector, (event) => handleAutoSaveFieldEvent(event, key));
         }
     });
-    $(document).on('change', '#cs-fuzzy-tolerance', function() {
-        updateFuzzyToleranceCustomVisibility($(this).val());
-    });
-    const fuzzyToleranceCustomHandler = function(event) {
-        sanitizeFuzzyToleranceInputField(event.currentTarget);
-        handleAutoSaveFieldEvent(event, 'fuzzyTolerance');
-    };
-    $(document).on('input', '#cs-fuzzy-tolerance-custom', fuzzyToleranceCustomHandler);
-    $(document).on('change', '#cs-fuzzy-tolerance-custom', fuzzyToleranceCustomHandler);
     $(document).on('change', '.cs-script-collection-toggle', handleScriptCollectionCheckboxChange);
-    $(document).on('focusin mouseenter', '[data-change-notice]', function() {
+    $(document).on('focusin mouseenter', '[data-change-notice]', function () {
         if (this?.disabled) {
             return;
         }
         announceAutoSaveIntent(this, null, this.dataset.changeNotice, this.dataset.changeNoticeKey);
     });
-    $(document).on('click', '.cs-script-entry__expand', function() {
+    $(document).on('click', '.cs-script-entry__expand', function () {
         const item = $(this).closest('.cs-script-entry');
         if (!item.length) {
             return;
@@ -7950,7 +8262,7 @@ function wireUI() {
         $(this).attr('aria-expanded', expanded ? 'true' : 'false');
         $(this).text(expanded ? 'Hide Details' : 'Show Details');
     });
-    $(document).on('click', '.cs-script-entry__copy', function() {
+    $(document).on('click', '.cs-script-entry__copy', function () {
         if (this?.disabled) {
             return;
         }
@@ -7963,13 +8275,13 @@ function wireUI() {
             .catch(() => showStatus('Unable to copy script description.', 'error'));
     });
 
-    $(document).on('input', '#cs-pattern-search', function() {
+    $(document).on('input', '#cs-pattern-search', function () {
         state.patternSearchQuery = String($(this).val() ?? "");
         const profile = getActiveProfile();
         renderPatternEditor(profile);
     });
 
-    $(document).on('keydown', '#cs-pattern-search', function(event) {
+    $(document).on('keydown', '#cs-pattern-search', function (event) {
         if (event.key === "Escape" && $(this).val()) {
             event.preventDefault();
             $(this).val("");
@@ -7979,13 +8291,13 @@ function wireUI() {
         }
     });
 
-    $(document).on('change', '#cs-enable', function() {
+    $(document).on('change', '#cs-enable', function () {
         const enabled = $(this).prop('checked');
         announceAutoSaveIntent(this, null, `Extension will ${enabled ? 'enable' : 'disable'} immediately.`, 'cs-enable');
         settings.enabled = enabled;
         persistSettings('Extension ' + (enabled ? 'Enabled' : 'Disabled'), 'info');
     });
-    $(document).on('change', '#cs-scene-panel-enable', function() {
+    $(document).on('change', '#cs-scene-panel-enable', function () {
         const enabled = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Scene panel will ${enabled ? 'appear next to chat.' : 'hide until re-enabled.'}`;
@@ -7994,7 +8306,7 @@ function wireUI() {
             message: enabled ? 'Scene panel enabled.' : 'Scene panel hidden.',
         });
     });
-    $(document).on('change', '#cs-scene-auto-open', function() {
+    $(document).on('change', '#cs-scene-auto-open', function () {
         const autoOpen = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Scene panel will ${autoOpen ? 'auto-open' : 'remain collapsed'} when streaming starts.`;
@@ -8005,7 +8317,7 @@ function wireUI() {
                 : 'Scene panel auto-open disabled.',
         });
     });
-    $(document).on('change', '#cs-scene-auto-open-results', function() {
+    $(document).on('change', '#cs-scene-auto-open-results', function () {
         const autoOpen = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Scene panel will ${autoOpen ? 'pop open' : 'stay collapsed'} when new results are captured.`;
@@ -8016,7 +8328,7 @@ function wireUI() {
                 : 'Scene panel will stay collapsed after new results.',
         });
     });
-    $(document).on('change', '#cs-scene-section-roster', function() {
+    $(document).on('change', '#cs-scene-section-roster', function () {
         const visible = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Scene roster section will ${visible ? 'be shown' : 'be hidden'} in the panel.`;
@@ -8025,7 +8337,7 @@ function wireUI() {
             message: visible ? 'Scene roster section enabled.' : 'Scene roster section hidden.',
         });
     });
-    $(document).on('change', '#cs-scene-section-active', function() {
+    $(document).on('change', '#cs-scene-section-active', function () {
         const visible = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Active characters section will ${visible ? 'be shown' : 'be hidden'} in the panel.`;
@@ -8034,7 +8346,7 @@ function wireUI() {
             message: visible ? 'Active characters section enabled.' : 'Active characters section hidden.',
         });
     });
-    $(document).on('change', '#cs-scene-section-log', function() {
+    $(document).on('change', '#cs-scene-section-log', function () {
         const visible = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Live log section will ${visible ? 'be shown' : 'be hidden'} in the panel.`;
@@ -8043,7 +8355,7 @@ function wireUI() {
             message: visible ? 'Live log section enabled.' : 'Live log section hidden.',
         });
     });
-    $(document).on('change', '#cs-scene-section-coverage', function() {
+    $(document).on('change', '#cs-scene-section-coverage', function () {
         const visible = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Coverage suggestions will ${visible ? 'be shown' : 'be hidden'} in the panel.`;
@@ -8052,7 +8364,7 @@ function wireUI() {
             message: visible ? 'Coverage suggestions section enabled.' : 'Coverage suggestions section hidden.',
         });
     });
-    $(document).on('change', '#cs-scene-show-avatars', function() {
+    $(document).on('change', '#cs-scene-show-avatars', function () {
         const showAvatars = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Roster avatars will ${showAvatars ? 'be shown' : 'be hidden'} in the scene panel.`;
@@ -8061,7 +8373,7 @@ function wireUI() {
             message: showAvatars ? 'Roster avatars enabled.' : 'Roster avatars hidden.',
         });
     });
-    $(document).on('change', '#cs-scene-auto-pin', function() {
+    $(document).on('change', '#cs-scene-auto-pin', function () {
         const enabled = $(this).prop('checked');
         const notice = this?.dataset?.changeNotice
             || `Top active character will ${enabled ? 'stay highlighted' : 'no longer be highlighted'} in the panel.`;
@@ -8070,7 +8382,7 @@ function wireUI() {
             message: enabled ? 'Auto-pin highlight enabled.' : 'Auto-pin highlight disabled.',
         });
     });
-    $(document).on('click', '#cs-scene-panel-summon', function(event) {
+    $(document).on('click', '#cs-scene-panel-summon', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const isEnabled = scenePanelSettings.enabled !== false;
@@ -8085,7 +8397,7 @@ function wireUI() {
             });
         }
     });
-    $(document).on('click', '#cs-scene-panel-toggle', function(event) {
+    $(document).on('click', '#cs-scene-panel-toggle', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const next = !scenePanelSettings.enabled;
@@ -8093,7 +8405,7 @@ function wireUI() {
             message: next ? 'Scene panel enabled.' : 'Scene panel hidden.',
         });
     });
-    $(document).on('click', '#cs-scene-section-toggle-roster', function(event) {
+    $(document).on('click', '#cs-scene-section-toggle-roster', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const current = scenePanelSettings.sections?.roster !== false;
@@ -8102,7 +8414,7 @@ function wireUI() {
             message: next ? 'Scene roster section enabled.' : 'Scene roster section hidden.',
         });
     });
-    $(document).on('click', '#cs-scene-section-toggle-active', function(event) {
+    $(document).on('click', '#cs-scene-section-toggle-active', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const current = scenePanelSettings.sections?.activeCharacters !== false;
@@ -8111,7 +8423,7 @@ function wireUI() {
             message: next ? 'Active characters section enabled.' : 'Active characters section hidden.',
         });
     });
-    $(document).on('click', '#cs-scene-section-toggle-log', function(event) {
+    $(document).on('click', '#cs-scene-section-toggle-log', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const current = scenePanelSettings.sections?.liveLog !== false;
@@ -8120,7 +8432,7 @@ function wireUI() {
             message: next ? 'Live log section enabled.' : 'Live log section hidden.',
         });
     });
-    $(document).on('click', '#cs-scene-section-toggle-coverage', function(event) {
+    $(document).on('click', '#cs-scene-section-toggle-coverage', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const current = scenePanelSettings.sections?.coverage !== false;
@@ -8129,7 +8441,7 @@ function wireUI() {
             message: next ? 'Coverage suggestions section enabled.' : 'Coverage suggestions section hidden.',
         });
     });
-    $(document).on('click', '#cs-scene-panel-toggle-auto-open', function(event) {
+    $(document).on('click', '#cs-scene-panel-toggle-auto-open', function (event) {
         event.preventDefault();
         const scenePanelSettings = ensureScenePanelSettings(settings);
         const next = !scenePanelSettings.autoOpenOnResults;
@@ -8139,13 +8451,13 @@ function wireUI() {
                 : 'Scene panel will stay collapsed after new results.',
         });
     });
-    $(document).on('click', '#cs-scene-panel-settings-open-extension', function(event) {
+    $(document).on('click', '#cs-scene-panel-settings-open-extension', function (event) {
         event.preventDefault();
         if (openExtensionSettingsView()) {
-            showStatus('Opening Costume Switcher settings…', 'info');
-            closeScenePanelLayer();
-        } else {
-            showStatus('Open the Extensions drawer to access the full Costume Switcher settings.', 'warning');
+            showStatus('Opening Character Visuals settings…', 'info');
+            // toastr.info('Opening Costume Switcher settings…');
+            $('#costume-switcher-settings').slideDown(200, "swing");
+            showStatus('Open the Extensions drawer to access the full Character Visuals settings.', 'warning');
         }
     });
     $(document).on('click', '#cs-scene-manage-roster', handleScenePanelManageRoster);
@@ -8159,12 +8471,12 @@ function wireUI() {
     $(document).on('click', '.cs-scene-manager__toggle', handleSceneManagerToggle);
     $(document).on('click', '.cs-scene-manager__remove', handleSceneManagerRemove);
     $(document).on('click', '[data-scene-panel="close-layer"]', () => closeScenePanelLayer());
-    $(document).on('click', '#cs-scene-panel-layer', function(event) {
+    $(document).on('click', '#cs-scene-panel-layer', function (event) {
         if (event.target === this) {
             closeScenePanelLayer();
         }
     });
-    $(document).on('keydown', function(event) {
+    $(document).on('keydown', function (event) {
         if (event.key === "Escape" && isScenePanelLayerOpen()) {
             closeScenePanelLayer();
         }
@@ -8180,7 +8492,7 @@ function wireUI() {
             refreshFocusLock: true,
         });
     });
-    $(document).on('change', '#cs-profile-select', function() {
+    $(document).on('change', '#cs-profile-select', function () {
         announceAutoSaveIntent(this, null, this?.dataset?.changeNotice || 'Switching profiles will auto-save pending edits.', 'cs-profile-select');
         flushScheduledProfileAutoSave({ overrideMessage: null, showStatusMessage: false });
         loadProfile($(this).val());
@@ -8286,7 +8598,7 @@ function wireUI() {
         if (button) {
             announceAutoSaveIntent(button, null, button.dataset.changeNotice, 'cs-profile-export');
         }
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({name: settings.activeProfile, data: getActiveProfile()}, null, 2));
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ name: settings.activeProfile, data: getActiveProfile() }, null, 2));
         const dl = document.createElement('a');
         dl.setAttribute("href", dataStr);
         dl.setAttribute("download", `${settings.activeProfile}_costume_profile.json`);
@@ -8303,7 +8615,7 @@ function wireUI() {
         }
         $('#cs-profile-file-input').click();
     });
-    $(document).on('change', '#cs-profile-file-input', function(event) {
+    $(document).on('change', '#cs-profile-file-input', function (event) {
         const file = event.target.files[0]; if (!file) return;
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -8321,7 +8633,7 @@ function wireUI() {
         reader.readAsText(file);
         $(this).val('');
     });
-    $(document).on('change', '#cs-preset-select', function() {
+    $(document).on('change', '#cs-preset-select', function () {
         const presetKey = $(this).val();
         const descriptionEl = $("#cs-preset-description");
         if (presetKey && PRESETS[presetKey]) {
@@ -8330,7 +8642,7 @@ function wireUI() {
             descriptionEl.text("Load a recommended configuration into the current profile.");
         }
     });
-    $(document).on('change', '#cs-score-preset-select', function() {
+    $(document).on('change', '#cs-score-preset-select', function () {
         const selected = $(this).val();
         if (selected) {
             setActiveScorePreset(selected);
@@ -8524,7 +8836,7 @@ function wireUI() {
             showStatus('Unable to delete preset.', 'error');
         }
     });
-    $(document).on('click', '.cs-coverage-pill', function() {
+    $(document).on('click', '.cs-coverage-pill', function () {
         const profile = getActiveProfile();
         if (!profile) return;
         const type = $(this).data('type');
@@ -8569,7 +8881,7 @@ function wireUI() {
         }
         updateFocusLockUI(); persistSettings("Focus lock " + (settings.focusLock.character ? "set." : "removed."), 'info');
     });
-    $(document).on('input', '#cs-detection-bias', function() { $("#cs-detection-bias-value").text($(this).val()); });
+    $(document).on('input', '#cs-detection-bias', function () { $("#cs-detection-bias-value").text($(this).val()); });
     $(document).on('click', '#cs-reset', manualReset);
     $(document).on('click', '#cs-outfit-add-character', () => {
         const profile = getActiveProfile();
@@ -8609,6 +8921,13 @@ function wireUI() {
     $(document).on('click', '#cs-regex-test-button', testRegexPattern);
     $(document).on('click', '#cs-regex-test-copy', copyTesterReport);
     $(document).on('click', '#cs-stats-log', logLastMessageStats);
+
+    if (typeof window !== "undefined") {
+        state.autoSaveCleanup = registerAutoSaveGuards({
+            flushFn: flushScheduledProfileAutoSave,
+            target: window,
+        });
+    }
 
     updateTesterCopyButton();
 
@@ -8800,9 +9119,25 @@ function extractMessageIdFromKey(key) {
     return match ? Number(match[1]) : null;
 }
 
-function parseMessageReference(input) {
+function resolveMessageIdFromTimestamp(value) {
+    if (Number.isFinite(value)) {
+        return value;
+    }
+    if (value instanceof Date) {
+        const timestamp = value.getTime();
+        return Number.isFinite(timestamp) ? timestamp : null;
+    }
+    if (typeof value === "string") {
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+
+function parseMessageReference(input, seen = null) {
     let key = null;
     let messageId = null;
+    const visited = seen instanceof WeakSet ? seen : new WeakSet();
 
     const commitKey = (candidate) => {
         const normalized = normalizeMessageKey(candidate);
@@ -8832,21 +9167,80 @@ function parseMessageReference(input) {
         commitId(input);
     } else if (typeof input === 'string') {
         commitKey(input);
+    } else if (Array.isArray(input)) {
+        if (visited.has(input)) {
+            return { key: null, messageId: null };
+        }
+        visited.add(input);
+        for (const entry of input) {
+            const nested = parseMessageReference(entry, visited);
+            if (!key && nested.key) {
+                key = nested.key;
+            }
+            if (messageId == null && nested.messageId != null) {
+                messageId = nested.messageId;
+            }
+            if (key && messageId != null) {
+                break;
+            }
+        }
     } else if (typeof input === 'object') {
+        if (visited.has(input)) {
+            return { key: null, messageId: null };
+        }
+        visited.add(input);
         if (Number.isFinite(input.messageId)) commitId(input.messageId);
         if (Number.isFinite(input.mesId)) commitId(input.mesId);
         if (Number.isFinite(input.id)) commitId(input.id);
+        if (Number.isFinite(input.message_id)) commitId(input.message_id);
         if (typeof input.messageId === 'string') commitKey(input.messageId);
         if (typeof input.mesId === 'string') commitKey(input.mesId);
         if (typeof input.id === 'string') commitKey(input.id);
+        if (typeof input.message_id === 'string') commitKey(input.message_id);
         if (typeof input.key === 'string') commitKey(input.key);
         if (typeof input.bufKey === 'string') commitKey(input.bufKey);
         if (typeof input.messageKey === 'string') commitKey(input.messageKey);
         if (typeof input.generationType === 'string') commitKey(input.generationType);
+        if (input.extra && typeof input.extra === "object") {
+            const extra = input.extra;
+            if (Number.isFinite(extra.messageId)) commitId(extra.messageId);
+            if (Number.isFinite(extra.message_id)) commitId(extra.message_id);
+            if (Number.isFinite(extra.mesId)) commitId(extra.mesId);
+            if (Number.isFinite(extra.id)) commitId(extra.id);
+            if (typeof extra.messageId === "string") commitKey(extra.messageId);
+            if (typeof extra.message_id === "string") commitKey(extra.message_id);
+            if (typeof extra.mesId === "string") commitKey(extra.mesId);
+            if (typeof extra.id === "string") commitKey(extra.id);
+            if (typeof extra.message_key === "string") commitKey(extra.message_key);
+            if (typeof extra.messageKey === "string") commitKey(extra.messageKey);
+            if (typeof extra.key === "string") commitKey(extra.key);
+        }
+        if (messageId == null) {
+            const timestampId = resolveMessageIdFromTimestamp(input.send_date)
+                ?? resolveMessageIdFromTimestamp(input.gen_started)
+                ?? resolveMessageIdFromTimestamp(input.gen_finished);
+            if (timestampId != null) {
+                commitId(timestampId);
+            }
+        }
         if (typeof input.message === 'object' && input.message !== null) {
-            const nested = parseMessageReference(input.message);
+            const nested = parseMessageReference(input.message, visited);
             if (!key && nested.key) key = nested.key;
             if (messageId == null && nested.messageId != null) messageId = nested.messageId;
+        }
+        if (Array.isArray(input.messages)) {
+            for (const entry of input.messages) {
+                const nested = parseMessageReference(entry, visited);
+                if (!key && nested.key) {
+                    key = nested.key;
+                }
+                if (messageId == null && nested.messageId != null) {
+                    messageId = nested.messageId;
+                }
+                if (key && messageId != null) {
+                    break;
+                }
+            }
         }
     }
 
@@ -9204,6 +9598,92 @@ function areRankingsEqual(previousRanking, nextRanking) {
     return true;
 }
 
+function maskQuotes(text) {
+    if (!text) return text;
+    // Standard quotes: split by " and mask odd segments (inside quotes)
+    const parts = text.split('"');
+    for (let i = 1; i < parts.length; i += 2) {
+        parts[i] = " ".repeat(parts[i].length);
+    }
+    let masked = parts.join('"');
+    // Smart quotes: replace content between “ and ” with spaces
+    masked = masked.replace(/“[^”]*”/g, m => " ".repeat(m.length));
+    // Open Smart Quote to end (assuming dialogue continues to EOS)
+    masked = masked.replace(/“[^”]*$/g, m => " ".repeat(m.length));
+    return masked;
+}
+
+function updateQuoteContext(context, text) {
+    if (!context || !text) return;
+    for (const char of text) {
+        if (context.inQuote) {
+            if (char === context.quoteChar) {
+                context.inQuote = false;
+                context.quoteChar = null;
+            }
+        } else {
+            if (char === '"') {
+                context.inQuote = true;
+                context.quoteChar = '"'; // Standard toggle
+            } else if (char === '“') {
+                context.inQuote = true;
+                context.quoteChar = '”'; // Smart open -> close
+            }
+        }
+    }
+}
+
+function maskQuotesWithContext(text, context) {
+    if (!text) return text;
+    let inQuote = context?.inQuote || false;
+    let quoteChar = context?.quoteChar || null;
+    let chars = text.split('');
+
+    for (let i = 0; i < chars.length; i++) {
+        const char = chars[i];
+        if (inQuote) {
+            if (char === quoteChar) {
+                inQuote = false;
+                quoteChar = null;
+                chars[i] = ' '; // Mask closer too? Yes for safety
+            } else {
+                chars[i] = ' ';
+            }
+        } else {
+            if (char === '"') {
+                inQuote = true;
+                quoteChar = '"';
+                chars[i] = ' ';
+            } else if (char === '“') {
+                inQuote = true;
+                quoteChar = '”';
+                chars[i] = ' ';
+            }
+        }
+    }
+    return chars.join('');
+}
+
+function isMatchInsideQuote(text, match, quoteContext) {
+    if (!text || !match || !Number.isFinite(match.matchIndex)) return false;
+
+    // Create a temporary context copy to not mutate the real state during this check
+    // Actually, we pass the *starting* state of the buffer.
+    const tempContext = { inQuote: quoteContext?.inQuote || false, quoteChar: quoteContext?.quoteChar || null };
+
+    // We only need to mask up to the match end
+    const matchEnd = match.matchIndex + (match.matchLength || 0);
+    const segment = text.slice(0, matchEnd);
+    const masked = maskQuotesWithContext(segment, tempContext);
+
+    // Check if the match content is masked (space)
+    // We check the middle of the match to avoid edge cases with adjacent quotes
+    const checkPos = match.matchIndex + Math.floor((match.matchLength || 1) / 2);
+
+    // Since we sliced to matchEnd, checkPos is safe.
+    return masked[checkPos] === ' ';
+}
+
 function updateMessageAnalytics(bufKey, text, options = {}) {
     const {
         rosterSet,
@@ -9229,7 +9709,17 @@ function updateMessageAnalytics(bufKey, text, options = {}) {
         state.topSceneRanking = new Map();
     }
 
-    const normalizedText = typeof text === "string" ? (assumeNormalized ? text : normalizeStreamText(text)) : "";
+    let normalizedText = typeof text === "string" ? (assumeNormalized ? text : normalizeStreamText(text)) : "";
+
+    // FIX #4: Mask out reasoning/thinking blocks to prevent detection spam
+    // We replace content with spaces to preserve indices for consistency.
+    if (normalizedText) {
+        normalizedText = normalizedText.replace(
+            /<(think|reasoning)>[\s\S]*?(<\/\1>|$)/gi,
+            (match) => " ".repeat(match.length)
+        );
+    }
+
     const profile = getActiveProfile();
     const bufferOffset = Number.isFinite(explicitBufferOffset) ? Math.max(0, Math.floor(explicitBufferOffset)) : 0;
     const context = messageState ? ensureDetectionContext(messageState, bufferOffset) : null;
@@ -9244,6 +9734,9 @@ function updateMessageAnalytics(bufKey, text, options = {}) {
         const detectionOptions = {};
         if (explicitMinIndex != null) {
             detectionOptions.minIndex = explicitMinIndex;
+        }
+        if (messageState) {
+            detectionOptions.messageState = messageState;
         }
         if (context?.quoteState) {
             detectionOptions.quoteState = context.quoteState;
@@ -9279,11 +9772,17 @@ function updateMessageAnalytics(bufKey, text, options = {}) {
         const effectiveMinIndex = explicitMinIndex != null
             ? Math.max(explicitMinIndex, relativeStart)
             : relativeStart;
-        const scanStartIndex = Math.max(0, relativeStart - INCREMENTAL_SCAN_PADDING);
+        // NOTE: We intentionally do NOT pass startIndex here.
+        // startIndex causes incremental scanning that SKIPS earlier buffer content,
+        // breaking detection of characters mentioned before the processed position.
+        // minIndex is sufficient to filter already-processed matches.
         const detectionOptions = {
-            startIndex: scanStartIndex,
             minIndex: effectiveMinIndex,
         };
+
+        if (messageState) {
+            detectionOptions.messageState = messageState;
+        }
         if (context?.quoteState) {
             detectionOptions.quoteState = context.quoteState;
             detectionOptions.lastIndex = context.lastProcessedAbsolute;
@@ -9457,8 +9956,16 @@ function calculateFinalMessageStats(reference) {
         }
 
         const message = chat.find(m => m.mesId === resolvedMessageId);
-        if (!message || !message.mes) return;
-        fullText = normalizeStreamText(message.mes);
+        if (!message) {
+            return;
+        }
+        const snapshot = resolveStreamSnapshotSource(message);
+        const fallbackText = typeof message.mes === "string" ? message.mes : "";
+        const sourceText = snapshot || fallbackText;
+        if (!sourceText) {
+            return;
+        }
+        fullText = normalizeStreamText(sourceText);
     }
 
     const msgState = state.perMessageStates.get(normalizedKey);
@@ -9935,7 +10442,7 @@ function registerCommands() {
             showStatus('Invalid format. Use /cs-map (alias) to (folder).', 'error');
         }
     }, ["alias", "to", "folder"], "Maps a character alias to a costume folder. Append --persist to save immediately.", true);
-    
+
     registerSlashCommand("cs-stats", () => {
         return logLastMessageStats();
     }, [], "Logs mention statistics for the last generated message to the console.", true);
@@ -10315,7 +10822,9 @@ function createMessageState(profile, bufKey, options = {}) {
         processedLength: 0,
         lastAcceptedIndex: -1,
         bufferOffset: 0,
+        speakerPrefixLength: 0,
         removedRoster: new Set(oldState?.removedRoster || []),
+        quoteContext: { inQuote: false, quoteChar: null }, // FIX #12 Performance
     };
 
     let rosterCleared = false;
@@ -10355,6 +10864,7 @@ __testables.resolveAssistantHistoryMessage = resolveAssistantHistoryMessage;
 __testables.findChatMessageById = findChatMessageById;
 __testables.findChatMessageByKey = findChatMessageByKey;
 __testables.resolveHistoryTargetMessage = resolveHistoryTargetMessage;
+__testables.issueCostumeForName = issueCostumeForName;
 
 function remapMessageKey(oldKey, newKey) {
     if (!oldKey || !newKey || oldKey === newKey) return;
@@ -10428,11 +10938,124 @@ function remapMessageKey(oldKey, newKey) {
     debugLog(`Remapped message data from ${oldKey} to ${newKey}.`);
 }
 
+function resolveStreamMessageKeyFromChatMessage(message) {
+    if (!message || typeof message !== "object") {
+        debugLog("Stream message key resolution skipped; invalid chat message payload.", message);
+        return null;
+    }
+    const extra = message.extra && typeof message.extra === "object" ? message.extra : null;
+    const rawKey = message.message_key
+        || message.messageKey
+        || message.key
+        || extra?.message_key
+        || extra?.messageKey
+        || extra?.key
+        || (Number.isFinite(message.mesId) ? `m${message.mesId}` : null)
+        || (Number.isFinite(message.id) ? `m${message.id}` : null)
+        || (Number.isFinite(message.messageId) ? `m${message.messageId}` : null)
+        || (Number.isFinite(message.message_id) ? `m${message.message_id}` : null)
+        || (Number.isFinite(extra?.mesId) ? `m${extra.mesId}` : null)
+        || (Number.isFinite(extra?.id) ? `m${extra.id}` : null)
+        || (Number.isFinite(extra?.messageId) ? `m${extra.messageId}` : null)
+        || (Number.isFinite(extra?.message_id) ? `m${extra.message_id}` : null);
+    if (!rawKey) {
+        const timestampId = resolveMessageIdFromTimestamp(message.send_date)
+            ?? resolveMessageIdFromTimestamp(message.gen_started)
+            ?? resolveMessageIdFromTimestamp(message.gen_finished);
+        if (timestampId != null) {
+            const resolved = normalizeMessageKey(`m${timestampId}`) || `m${timestampId}`;
+            debugLog("Resolved stream message key from chat message timestamp.", { timestampId, resolved });
+            return resolved;
+        }
+        debugLog("Stream message key resolution found no usable key on chat message.", message);
+        return null;
+    }
+    const resolved = normalizeMessageKey(rawKey) || rawKey;
+    debugLog("Resolved stream message key from chat message.", { rawKey, resolved });
+    return resolved;
+}
+
+function resolveStreamingContext() {
+    let ctx = null;
+    if (typeof getContext === "function") {
+        ctx = getContext();
+    } else if (typeof window !== "undefined" && window.SillyTavern && typeof window.SillyTavern.getContext === "function") {
+        ctx = window.SillyTavern.getContext();
+    }
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat : null;
+    const streamingProcessor = ctx?.streamingProcessor || null;
+    if (Number.isFinite(streamingProcessor?.messageId)) {
+        debugLog("Resolved streaming processor context.", {
+            messageId: streamingProcessor.messageId,
+            chatLength: Array.isArray(chat) ? chat.length : 0,
+        });
+    }
+    return {
+        ctx,
+        chat,
+        streamingProcessor,
+    };
+}
+
+function resolveStreamingAssistantMessage(args = [], { chatOverride = null, streamingProcessor = null, allowFallback = true } = {}) {
+    const chat = resolveChatLog(chatOverride);
+    if (!Array.isArray(chat) || chat.length === 0) {
+        return null;
+    }
+    let candidate = null;
+    if (streamingProcessor && Number.isFinite(streamingProcessor.messageId)) {
+        const byProcessor = chat[streamingProcessor.messageId];
+        if (byProcessor) {
+            candidate = byProcessor;
+            debugLog("Resolved streaming assistant message from streaming processor index.", {
+                messageId: streamingProcessor.messageId,
+                key: resolveStreamMessageKeyFromChatMessage(byProcessor),
+            });
+        }
+    }
+    if (!candidate && Array.isArray(args) && args.length > 0) {
+        for (const value of args) {
+            const reference = parseMessageReference(value);
+            if (Number.isFinite(reference.messageId)) {
+                const resolved = findChatMessageById(reference.messageId);
+                if (resolved) {
+                    candidate = resolved;
+                    break;
+                }
+            }
+            if (reference.key) {
+                const resolved = findChatMessageByKey(reference.key);
+                if (resolved) {
+                    candidate = resolved;
+                    break;
+                }
+            }
+        }
+    }
+    if (!candidate && allowFallback) {
+        candidate = findAssistantMessageBeforeIndex(chat.length - 1, chat);
+        if (candidate) {
+            debugLog("Resolved streaming assistant message from fallback chat search.", {
+                key: resolveStreamMessageKeyFromChatMessage(candidate),
+            });
+        }
+    }
+    if (candidate && !isAssistantLikeMessage(candidate)) {
+        debugLog("Streaming assistant message rejected due to non-assistant role.", {
+            role: resolveMessageRoleFromArgs([candidate]),
+            key: resolveStreamMessageKeyFromChatMessage(candidate),
+        });
+        return null;
+    }
+    return candidate;
+}
+
 const handleGenerationStart = (...args) => {
     let messageRole = resolveMessageRoleFromArgs(args);
     if (messageRole && messageRole !== "assistant") {
-        debugLog(`Skipping generation start for ${messageRole} message.`, args);
+        debugLog("Skipping generation start due to non-assistant message role.", { messageRole, args });
         state.currentGenerationKey = null;
+        state.currentGenerationRole = messageRole;
         return;
     }
 
@@ -10444,15 +11067,18 @@ const handleGenerationStart = (...args) => {
             return;
         }
         const reference = parseMessageReference(value);
-        if (!bufKey && reference.key) {
-            bufKey = reference.key;
-        }
         if (!locatedMessage) {
             if (Number.isFinite(reference.messageId)) {
                 locatedMessage = findChatMessageById(reference.messageId);
             }
             if (!locatedMessage && reference.key) {
                 locatedMessage = findChatMessageByKey(reference.key);
+            }
+        }
+        if (!bufKey && locatedMessage) {
+            const derivedKey = resolveStreamMessageKeyFromChatMessage(locatedMessage);
+            if (derivedKey) {
+                bufKey = derivedKey;
             }
         }
     };
@@ -10499,10 +11125,34 @@ const handleGenerationStart = (...args) => {
         }
     }
 
+    const { chat, streamingProcessor } = resolveStreamingContext();
+    const streamingMessage = resolveStreamingAssistantMessage(args, {
+        chatOverride: chat,
+        streamingProcessor,
+        allowFallback: false,
+    });
+    if (streamingMessage) {
+        locatedMessage = streamingMessage;
+        const streamingKey = resolveStreamMessageKeyFromChatMessage(streamingMessage);
+        if (streamingKey) {
+            bufKey = streamingKey;
+        }
+        debugLog("Streaming message resolved during generation start.", {
+            streamingKey,
+            currentGenerationKey: state.currentGenerationKey,
+        });
+    }
+
     const locatedRole = locatedMessage ? resolveMessageRoleFromArgs([locatedMessage]) : null;
     if (locatedRole && locatedRole !== "assistant") {
-        debugLog(`Skipping generation start for ${locatedRole} chat message.`, args);
+        debugLog("Skipping generation start due to non-assistant chat message role.", {
+            locatedRole,
+            bufKey,
+            messageRole,
+            args,
+        });
         state.currentGenerationKey = null;
+        state.currentGenerationRole = locatedRole;
         return;
     }
     if (!messageRole && locatedRole) {
@@ -10584,6 +11234,7 @@ const handleGenerationStart = (...args) => {
 
     if (isUserInitiated) {
         debugLog("Skipping generation start for user-authored event.", args);
+        state.currentGenerationRole = "user";
         return;
     }
 
@@ -10600,13 +11251,31 @@ const handleGenerationStart = (...args) => {
         }
     }
 
+    if (!bufKey && Number.isFinite(streamingProcessor?.messageId)) {
+        const fallbackKey = `m${streamingProcessor.messageId}`;
+        const normalizedFallback = normalizeMessageKey(fallbackKey) || fallbackKey;
+        bufKey = normalizedFallback;
+        debugLog(`Adopted ${normalizedFallback} from streaming processor messageId for generation start.`);
+    }
+
     if (!bufKey) {
-        bufKey = 'live';
+        const hasChatAssistant = Array.isArray(chat) && findAssistantMessageBeforeIndex(chat.length - 1, chat);
+        if (!hasChatAssistant) {
+            bufKey = "live";
+        }
+    }
+
+    if (!bufKey) {
+        debugLog("Generation started without a resolvable chat message key.", args);
+        state.currentGenerationKey = null;
+        state.currentGenerationRole = messageRole || "assistant";
+        return;
     }
 
     const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
 
     state.currentGenerationKey = normalizedKey;
+    state.currentGenerationRole = messageRole || "assistant";
     debugLog(`Generation started for ${bufKey}, resetting state.`);
     state.focusLockNotice = createFocusLockNotice();
 
@@ -10626,13 +11295,616 @@ const handleGenerationStart = (...args) => {
         }
     } else {
         state.perMessageStates.delete(normalizedKey);
-        state.perMessageBuffers.set(normalizedKey, '');
+        state.perMessageBuffers.set(normalizedKey, "");
     }
+    startStreamSnapshotTimer();
     maybeAutoExpandScenePanel("stream");
 };
 
 __testables.handleGenerationStart = handleGenerationStart;
 __testables.restoreLatestSceneOutcome = restoreLatestSceneOutcome;
+__testables.flushStreamQueue = flushStreamQueue;
+__testables.flushStreamingDetectionPass = flushStreamingDetectionPass;
+
+function resolveStreamSnapshotMessage(bufKey, { fallbackLatest = false } = {}) {
+    if (!bufKey) {
+        return null;
+    }
+    const chat = resolveChatLog();
+    if (!Array.isArray(chat) || chat.length === 0) {
+        return null;
+    }
+    const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
+    const resolvedId = extractMessageIdFromKey(normalizedKey);
+    let resolvedMessage = null;
+    if (Number.isFinite(resolvedId)) {
+        resolvedMessage = findChatMessageById(resolvedId);
+    }
+    if (!resolvedMessage) {
+        resolvedMessage = findChatMessageByKey(normalizedKey);
+    }
+    if (!resolvedMessage && Number.isFinite(resolvedId)) {
+        resolvedMessage = chat.find((message) => Number.isFinite(message?.mesId) && message.mesId === resolvedId) || null;
+    }
+    if (!resolvedMessage && fallbackLatest) {
+        resolvedMessage = findAssistantMessageBeforeIndex(chat.length - 1, chat);
+    }
+    return resolvedMessage;
+}
+
+function resolveStreamSnapshotSource(message) {
+    if (!message || typeof message !== "object") {
+        return "";
+    }
+    // Note: We intentionally do NOT apply the speaker prefix here.
+    // Applying the prefix causes index mismatch between snapshot-based and token-based
+    // streaming paths, which breaks subsequent character detection after the first match.
+    // The speaker name will be detected naturally if it appears in the message content.
+    const candidates = [
+        message.mes,
+        message.text,
+        message.content,
+        message.message,
+        message.msg,
+        message.data?.mes,
+        message.data?.text,
+        message.data?.content,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate === "string" && candidate.length > 0) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
+
+function resolveStreamTokenText(args) {
+    if (!Array.isArray(args) || args.length === 0) {
+        return "";
+    }
+    for (const entry of args) {
+        if (typeof entry === "string") {
+            return entry;
+        }
+        if (!entry || typeof entry !== "object") {
+            continue;
+        }
+        if (typeof entry.token === "string") {
+            return entry.token;
+        }
+        if (typeof entry.text === "string") {
+            return entry.text;
+        }
+        if (typeof entry.content === "string") {
+            return entry.content;
+        }
+        if (typeof entry.delta === "string") {
+            return entry.delta;
+        }
+        if (typeof entry.delta?.text === "string") {
+            return entry.delta.text;
+        }
+        if (typeof entry.delta?.content === "string") {
+            return entry.delta.content;
+        }
+    }
+    return "";
+}
+
+function canUseStreamSnapshot(bufKey, { messageRole = "assistant" } = {}) {
+    if (!bufKey || messageRole !== "assistant") {
+        return false;
+    }
+    const resolvedMessage = resolveStreamSnapshotMessage(bufKey, { fallbackLatest: true });
+    if (!resolvedMessage || !isAssistantLikeMessage(resolvedMessage)) {
+        return false;
+    }
+    const snapshotSource = resolveStreamSnapshotSource(resolvedMessage);
+    if (!snapshotSource) {
+        return false;
+    }
+    const snapshotText = normalizeStreamText(snapshotSource);
+    return Boolean(snapshotText);
+}
+
+function processStreamSnapshotText(bufKey, snapshotSource, { messageRole = "assistant" } = {}) {
+    if (!bufKey || messageRole !== "assistant") {
+        return false;
+    }
+    const profile = getActiveProfile();
+    if (!profile) {
+        return false;
+    }
+    const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
+    const snapshotText = normalizeStreamText(snapshotSource);
+    if (!snapshotText) {
+        return false;
+    }
+
+    let msgState = state.perMessageStates.get(normalizedKey);
+    if (!msgState) {
+        const { state: createdState, rosterCleared } = createMessageState(profile, normalizedKey, { messageRole });
+        msgState = createdState;
+        if (rosterCleared && msgState) {
+            applySceneRosterUpdate({
+                key: normalizedKey,
+                messageId: extractMessageIdFromKey(normalizedKey),
+                roster: Array.from(msgState.sceneRoster || []),
+                turnsByMember: cloneRosterTurns(msgState.rosterTurns),
+                turnsRemaining: msgState.defaultRosterTTL,
+                updatedAt: Date.now(),
+            });
+            requestScenePanelRender("roster-prime", { immediate: true });
+        }
+    }
+    if (!msgState || msgState.vetoed) {
+        return false;
+    }
+
+    const previousProcessedLength = Number.isFinite(msgState.processedLength) ? msgState.processedLength : 0;
+    if (snapshotText.length <= previousProcessedLength) {
+        msgState.processedLength = Math.max(msgState.processedLength || 0, snapshotText.length);
+        return false;
+    }
+
+    const deltaText = snapshotText.slice(previousProcessedLength);
+    if (!deltaText) {
+        return false;
+    }
+
+    processStreamChunk(normalizedKey, deltaText, { messageRole });
+    return true;
+}
+
+function runStreamSnapshotTick({ forceKey = null, forceRole = null } = {}) {
+    const activeKey = forceKey || state.currentGenerationKey;
+    if (!activeKey) {
+        return false;
+    }
+    const normalizedKey = normalizeMessageKey(activeKey) || activeKey;
+    const profile = getActiveProfile();
+    if (!profile) {
+        return false;
+    }
+    const messageRole = forceRole || state.currentGenerationRole || "assistant";
+    if (messageRole !== "assistant") {
+        return false;
+    }
+    const resolvedMessage = resolveStreamSnapshotMessage(normalizedKey, { fallbackLatest: true });
+    if (!resolvedMessage || !isAssistantLikeMessage(resolvedMessage)) {
+        return false;
+    }
+    const snapshotSource = resolveStreamSnapshotSource(resolvedMessage);
+    if (!snapshotSource) {
+        return false;
+    }
+    return processStreamSnapshotText(normalizedKey, snapshotSource, { messageRole });
+}
+
+function startStreamSnapshotTimer() {
+    if (state.streamSnapshotTimer) {
+        return;
+    }
+    state.streamSnapshotTimer = setInterval(() => {
+        if (!state.currentGenerationKey) {
+            stopStreamSnapshotTimer();
+            return;
+        }
+        runStreamSnapshotTick();
+    }, STREAM_SNAPSHOT_INTERVAL_MS);
+}
+
+function stopStreamSnapshotTimer({ finalSnapshot = false, finalKey = null, finalRole = null } = {}) {
+    if (finalSnapshot) {
+        runStreamSnapshotTick({ forceKey: finalKey, forceRole: finalRole });
+    }
+    if (state.streamSnapshotTimer) {
+        clearInterval(state.streamSnapshotTimer);
+        state.streamSnapshotTimer = null;
+    }
+}
+
+function ensureStreamQueue() {
+    if (!(state.pendingStreamBuffers instanceof Map)) {
+        state.pendingStreamBuffers = new Map();
+    }
+    if (!(state.pendingStreamRoles instanceof Map)) {
+        state.pendingStreamRoles = new Map();
+    }
+    return {
+        buffers: state.pendingStreamBuffers,
+        roles: state.pendingStreamRoles,
+    };
+}
+
+function scheduleStreamQueueFlush() {
+    if (state.pendingStreamTimer) {
+        return;
+    }
+    state.pendingStreamTimer = setTimeout(() => {
+        state.pendingStreamTimer = null;
+        flushStreamQueue();
+    }, STREAM_QUEUE_FLUSH_MS);
+}
+
+function flushStreamQueue({ keys = null } = {}) {
+    if (!(state.pendingStreamBuffers instanceof Map) || state.pendingStreamBuffers.size === 0) {
+        return;
+    }
+    const targets = Array.isArray(keys) ? new Set(keys) : null;
+    const buffers = state.pendingStreamBuffers;
+    const roles = state.pendingStreamRoles instanceof Map ? state.pendingStreamRoles : new Map();
+    for (const [bufKey, chunk] of buffers.entries()) {
+        if (targets && !targets.has(bufKey)) {
+            continue;
+        }
+        if (typeof chunk === "string" && chunk.length > 0) {
+            const messageRole = roles.get(bufKey) || state.currentGenerationRole || "assistant";
+            processStreamChunk(bufKey, chunk, { messageRole });
+        }
+        buffers.delete(bufKey);
+        roles.delete(bufKey);
+    }
+    if (buffers.size === 0 && state.pendingStreamTimer) {
+        clearTimeout(state.pendingStreamTimer);
+        state.pendingStreamTimer = null;
+    }
+}
+
+function runStreamingDetectionPass(bufKey, { messageRole } = {}) {
+    if (!bufKey) {
+        return false;
+    }
+    const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
+    const profile = getActiveProfile();
+    if (!profile) {
+        return false;
+    }
+    const msgState = state.perMessageStates instanceof Map ? state.perMessageStates.get(normalizedKey) || null : null;
+    if (!msgState || msgState.vetoed) {
+        return false;
+    }
+    const effectiveRole = messageRole || state.currentGenerationRole || "assistant";
+    if (effectiveRole && effectiveRole !== "assistant") {
+        return false;
+    }
+    const buffer = state.perMessageBuffers instanceof Map ? (state.perMessageBuffers.get(normalizedKey) || "") : "";
+    if (!buffer.trim()) {
+        return false;
+    }
+    const bufferLength = buffer.length;
+    const lastKey = state.streamingDetectionLastKey;
+    const lastLength = state.streamingDetectionLastLength;
+    if (lastKey === normalizedKey && Number.isFinite(lastLength) && lastLength === bufferLength) {
+        return false;
+    }
+    const bufferOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
+    const rosterSet = msgState.sceneRoster instanceof Set ? msgState.sceneRoster : null;
+    let processed = false;
+    try {
+        updateMessageAnalytics(normalizedKey, buffer, {
+            rosterSet,
+            assumeNormalized: true,
+            bufferOffset,
+            incremental: true,
+            messageState: msgState,
+        });
+        processed = true;
+        return true;
+    } finally {
+        if (processed) {
+            state.streamingDetectionLastKey = normalizedKey;
+            state.streamingDetectionLastLength = bufferLength;
+        }
+    }
+}
+
+function scheduleStreamingDetectionPass(bufKey, { messageRole } = {}) {
+    if (!bufKey) {
+        return;
+    }
+    const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
+    state.streamingDetectionKey = normalizedKey;
+    if (messageRole) {
+        state.streamingDetectionRole = messageRole;
+    }
+    const now = Date.now();
+    const lastRun = Number.isFinite(state.streamingDetectionLastAt) ? state.streamingDetectionLastAt : 0;
+    const elapsed = now - lastRun;
+    if (elapsed >= STREAMING_DETECTION_INTERVAL_MS) {
+        if (runStreamingDetectionPass(normalizedKey, { messageRole: state.streamingDetectionRole })) {
+            state.streamingDetectionLastAt = Date.now();
+        }
+        return;
+    }
+    if (state.streamingDetectionTimer) {
+        return;
+    }
+    const delay = Math.max(0, STREAMING_DETECTION_INTERVAL_MS - elapsed);
+    state.streamingDetectionTimer = setTimeout(() => {
+        state.streamingDetectionTimer = null;
+        const key = state.streamingDetectionKey;
+        if (key && runStreamingDetectionPass(key, { messageRole: state.streamingDetectionRole })) {
+            state.streamingDetectionLastAt = Date.now();
+        }
+    }, delay);
+}
+
+function flushStreamingDetectionPass({ forceKey = null, forceRole = null } = {}) {
+    if (state.streamingDetectionTimer) {
+        clearTimeout(state.streamingDetectionTimer);
+        state.streamingDetectionTimer = null;
+    }
+    const key = forceKey || state.streamingDetectionKey;
+    if (!key) {
+        return false;
+    }
+    const role = forceRole || state.streamingDetectionRole || state.currentGenerationRole;
+    if (runStreamingDetectionPass(key, { messageRole: role })) {
+        state.streamingDetectionLastAt = Date.now();
+        return true;
+    }
+    return false;
+}
+
+function queueStreamChunk(bufKey, tokenText, { messageRole } = {}) {
+    if (!bufKey || typeof tokenText !== "string" || tokenText.length === 0) {
+        debugLog("[STREAM] Skipping queue for empty stream chunk or missing key.", {
+            messageKey: bufKey,
+            currentGenerationKey: state.currentGenerationKey,
+            rawToken: tokenText,
+        });
+        return;
+    }
+    const { buffers, roles } = ensureStreamQueue();
+    const existing = buffers.get(bufKey) || "";
+    const combined = existing + tokenText;
+    const normalizedToken = normalizeStreamText(tokenText);
+    buffers.set(bufKey, combined);
+    if (messageRole) {
+        roles.set(bufKey, messageRole);
+    }
+    const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
+    const currentKey = state.currentGenerationKey ? (normalizeMessageKey(state.currentGenerationKey) || state.currentGenerationKey) : null;
+    debugLog("[STREAM] Queued stream chunk.", {
+        messageKey: normalizedKey,
+        currentGenerationKey: currentKey,
+        matchesCurrentKey: currentKey ? currentKey === normalizedKey : false,
+        rawToken: tokenText,
+        normalizedToken,
+        bufferLength: combined.length,
+    });
+    if (combined.length >= STREAM_QUEUE_MAX_CHARS) {
+        flushStreamQueue({ keys: [bufKey] });
+        return;
+    }
+    scheduleStreamQueueFlush();
+}
+
+function processStreamChunk(bufKey, tokenText, { messageRole } = {}) {
+    if (!bufKey) {
+        debugLog("[STREAM] Skipping stream chunk without a message key.", {
+            currentGenerationKey: state.currentGenerationKey,
+            rawToken: tokenText,
+        });
+        return;
+    }
+    const normalizedKey = normalizeMessageKey(bufKey) || bufKey;
+    const profile = getActiveProfile();
+    if (!profile) {
+        return;
+    }
+
+    const normalizedToken = normalizeStreamText(tokenText);
+    if (!normalizedToken) {
+        debugLog("[STREAM] Normalized stream chunk is empty; skipping append.", {
+            messageKey: bufKey,
+            currentGenerationKey: state.currentGenerationKey,
+            rawToken: tokenText,
+            normalizedToken,
+        });
+        return;
+    }
+
+
+    let msgState = state.perMessageStates.get(normalizedKey);
+
+    if (!msgState) {
+        const { state: createdState, rosterCleared } = createMessageState(profile, normalizedKey, { messageRole: messageRole || "assistant" });
+        msgState = createdState;
+        if (rosterCleared && msgState) {
+            applySceneRosterUpdate({
+                key: normalizedKey,
+                messageId: extractMessageIdFromKey(normalizedKey),
+                roster: Array.from(msgState.sceneRoster || []),
+                turnsByMember: cloneRosterTurns(msgState.rosterTurns),
+                turnsRemaining: msgState.defaultRosterTTL,
+                updatedAt: Date.now(),
+            });
+            requestScenePanelRender("roster-prime", { immediate: true });
+        }
+    }
+    if (!msgState) return;
+
+    if (msgState.vetoed) return;
+
+    const prev = state.perMessageBuffers.get(normalizedKey) || "";
+    const previousOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
+    const previousProcessedLength = Number.isFinite(msgState.processedLength)
+        ? msgState.processedLength
+        : previousOffset + prev.length;
+    const { appended, detectionBuffer, trimmedChars, bufferOffset } = buildStreamingBuffers(prev, normalizedToken, profile, msgState);
+
+    // FIX #12 Performance: maintain incremental quote state
+    if (!msgState.quoteContext) {
+        msgState.quoteContext = { inQuote: false, quoteChar: null };
+    }
+
+    if (trimmedChars > 0) {
+        // We dropped text from the start. Update our state based on what was dropped.
+        const fullBuffer = prev + normalizedToken;
+        const droppedText = fullBuffer.slice(0, trimmedChars);
+        updateQuoteContext(msgState.quoteContext, droppedText);
+    }
+    const currentKey = state.currentGenerationKey ? (normalizeMessageKey(state.currentGenerationKey) || state.currentGenerationKey) : null;
+    debugLog("[STREAM] Appended stream chunk to buffer.", {
+        messageKey: normalizedKey,
+        currentGenerationKey: currentKey,
+        matchesCurrentKey: currentKey ? currentKey === normalizedKey : false,
+        rawToken: tokenText,
+        normalizedToken,
+        bufferLength: appended.length,
+        windowLength: detectionBuffer.length,
+        trimmedChars,
+    });
+    const combinedLength = detectionBuffer.length;
+    const deltaAbsoluteStart = Math.max(previousProcessedLength, bufferOffset);
+    const startIndex = Math.max(0, deltaAbsoluteStart - bufferOffset);
+    const newestAbsoluteIndex = combinedLength > 0
+        ? bufferOffset + combinedLength - 1
+        : bufferOffset;
+    const lastProcessedIndex = Number.isFinite(msgState.lastAcceptedIndex) ? msgState.lastAcceptedIndex : -1;
+    let windowUpdated = false;
+    const flushWindow = () => {
+        if (windowUpdated) {
+            return;
+        }
+        adjustWindowForTrim(msgState, trimmedChars, combinedLength);
+        state.perMessageBuffers.set(normalizedKey, appended);
+        windowUpdated = true;
+    };
+
+    if (newestAbsoluteIndex <= lastProcessedIndex) {
+        flushWindow();
+        return;
+    }
+
+    let minIndexRelative = null;
+    if (lastProcessedIndex >= bufferOffset) {
+        minIndexRelative = lastProcessedIndex - bufferOffset;
+    }
+
+    const matchOptions = {};
+    if (Number.isFinite(minIndexRelative) && minIndexRelative >= 0) {
+        matchOptions.minIndex = minIndexRelative;
+    }
+    matchOptions.messageState = msgState;
+    const detectionContext = ensureDetectionContext(msgState, bufferOffset);
+    if (detectionContext?.quoteState) {
+        matchOptions.quoteState = detectionContext.quoteState;
+        matchOptions.lastIndex = detectionContext.lastProcessedAbsolute;
+        matchOptions.bufferOffset = bufferOffset;
+    }
+
+    // FIX #4: Mask out reasoning/thinking blocks to prevent detection spam
+    // We replace content with spaces to preserve indices for lastAcceptedIndex consistency.
+    // Matches incomplete tags at end of string (open thinking block).
+    const maskedBuffer = detectionBuffer.replace(
+        /<(think|reasoning)>[\s\S]*?(<\/\1>|$)/gi,
+        (match) => " ".repeat(match.length)
+    );
+
+    // NOTE: We intentionally do NOT pass startIndex here (Fix #1).
+    // prompt: "ignore that not found error... I'd like to point out that... shido is the first one... only detect Fiore"
+    // Explanation: Without masking, the detector finds "Fiore" in the thinking block (buffer start).
+    // Because we process ONE match per chunk, we get stuck in the thinking block for seconds/minutes.
+    // By masking, we skip the thinking block entirely and reach the real message immediately.
+
+    const matches = findAllMatches(maskedBuffer, matchOptions);
+    const bestMatch = findBestMatch(maskedBuffer, matches, matchOptions);
+
+    if (bestMatch) {
+        debugLog(`[STREAM] Buffer len: ${appended.length} (window ${detectionBuffer.length}). Match: ${bestMatch.name} (${bestMatch.matchKind})`);
+    }
+
+
+    flushWindow();
+    scheduleStreamingDetectionPass(normalizedKey, { messageRole: messageRole || "assistant" });
+
+    if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(detectionBuffer)) {
+        debugLog("Veto phrase matched. Halting detection for this message.");
+        const vetoMatch = detectionBuffer.match(state.compiledRegexes.vetoRegex)?.[0] || 'unknown veto phrase';
+        const recordedVeto = recordLastVetoMatch(vetoMatch, { source: 'live', persist: true });
+        recordDecisionEvent({
+            type: 'veto',
+            match: recordedVeto.phrase,
+            charIndex: newestAbsoluteIndex,
+            timestamp: Date.now(),
+        });
+        showStatus(`Detection halted. Veto phrase <b>${escapeHtml(recordedVeto.phrase)}</b> matched.`, 'error', 5000);
+        msgState.vetoed = true;
+        return;
+    }
+
+    if (bestMatch) {
+        const { name: matchedName, matchKind } = bestMatch;
+        const now = Date.now();
+        const suppressMs = profile.repeatSuppressMs;
+
+        const matchLength = Number.isFinite(bestMatch.matchLength) && bestMatch.matchLength > 0
+            ? Math.floor(bestMatch.matchLength)
+            : 1;
+        const matchEndRelative = Number.isFinite(bestMatch.matchIndex)
+            ? bestMatch.matchIndex + matchLength
+            : null;
+
+        const absoluteIndex = Number.isFinite(matchEndRelative)
+            ? bufferOffset + matchEndRelative
+            : newestAbsoluteIndex;
+        msgState.lastAcceptedIndex = absoluteIndex;
+        msgState.processedLength = Math.max(msgState.processedLength || 0, absoluteIndex + 1);
+
+        if (profile.enableSceneRoster) {
+            const normalizedName = normalizeRosterKey(matchedName);
+            // FIX #12: Only update roster if match is OUTSIDE quotes (Narrative)
+            // Pass the current state (context at start of detectionBuffer)
+            const isNarrative = !isMatchInsideQuote(detectionBuffer, bestMatch, msgState.quoteContext);
+
+            if (normalizedName && isNarrative) {
+                msgState.sceneRoster.add(normalizedName);
+                if (!(msgState.rosterTurns instanceof Map)) {
+                    msgState.rosterTurns = new Map();
+                }
+                const resolvedTTL = sanitizeRosterTurnValue(msgState.defaultRosterTTL ?? profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
+                if (resolvedTTL != null) {
+                    msgState.rosterTurns.set(normalizedName, resolvedTTL);
+                }
+            } else if (!isNarrative && normalizedName) {
+                debugLog(`[ROSTER] Refusing update for ${normalizedName}: Match is inside quotes (Dialogue).`);
+            }
+            msgState.outfitTTL = sanitizeRosterTurnValue(profile?.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
+        }
+        if (matchKind !== 'pronoun') {
+            confirmMessageSubject(msgState, matchedName);
+        }
+
+        if (msgState.lastAcceptedName?.toLowerCase() === matchedName.toLowerCase() && (now - msgState.lastAcceptedTs < suppressMs)) {
+            if (matchKind !== 'pronoun') {
+                recordDecisionEvent({
+                    type: 'skipped',
+                    name: matchedName,
+                    matchKind,
+                    reason: 'repeat-suppression',
+                    charIndex: absoluteIndex,
+                    timestamp: now,
+                });
+            }
+            flushWindow();
+            return;
+        }
+
+        msgState.lastAcceptedName = matchedName;
+        msgState.lastAcceptedTs = now;
+        issueCostumeForName(matchedName, {
+            matchKind,
+            bufKey,
+            messageState: msgState,
+            context: { text: detectionBuffer, matchKind, roster: msgState.sceneRoster },
+            match: bestMatch,
+        });
+    }
+}
 
 const handleStream = (...args) => {
     try {
@@ -10654,216 +11926,103 @@ const handleStream = (...args) => {
             return;
         }
 
-        const messageRole = resolveMessageRoleFromArgs(args);
+        let messageRole = state.currentGenerationRole;
+        if (!messageRole) {
+            const hasRoleCandidates = Array.isArray(args)
+                && args.some((value) => value && typeof value === "object");
+            if (hasRoleCandidates) {
+                messageRole = resolveMessageRoleFromArgs(args);
+                if (messageRole) {
+                    state.currentGenerationRole = messageRole;
+                }
+            }
+        }
         if (messageRole && messageRole !== "assistant") {
+            debugLog("[STREAM] Skipping stream event due to role mismatch.", { messageRole });
+            stopStreamSnapshotTimer();
             return;
         }
 
-        if (!state.currentGenerationKey) {
-            let fallbackKey = null;
-            let fallbackReference = null;
-            for (const arg of args) {
-                const reference = parseMessageReference(arg);
-                const { key } = reference;
-                if (key) {
-                    fallbackKey = key;
-                    fallbackReference = reference;
-                    break;
-                }
-            }
-            if (fallbackKey) {
-                const normalizedFallbackCandidate = normalizeMessageKey(fallbackKey) || fallbackKey;
-                if (!isLikelyMessageKey(normalizedFallbackCandidate)) {
-                    debugLog(`Ignoring ${normalizedFallbackCandidate} from token payload due to invalid message key format.`);
-                    state.currentGenerationKey = null;
-                } else {
-                    const normalizedFallback = normalizedFallbackCandidate;
-                    let resolvedMessage = null;
-                    const resolvedId = Number.isFinite(fallbackReference?.messageId)
-                        ? fallbackReference.messageId
-                        : extractMessageIdFromKey(normalizedFallback);
-                    if (Number.isFinite(resolvedId)) {
-                        resolvedMessage = findChatMessageById(resolvedId);
-                    }
-                    if (!resolvedMessage) {
-                        resolvedMessage = findChatMessageByKey(normalizedFallback);
-                    }
-                    if (!resolvedMessage && Number.isFinite(resolvedId)) {
-                        const { chat } = getContext();
-                        if (Array.isArray(chat)) {
-                            resolvedMessage = chat.find((message) => Number.isFinite(message?.mesId) && message.mesId === resolvedId) || null;
-                        }
-                    }
+        const { chat, streamingProcessor } = resolveStreamingContext();
 
-                    let locatedRole = resolvedMessage ? resolveMessageRoleFromArgs([resolvedMessage]) : null;
-                    if (!locatedRole && resolvedMessage?.is_user) {
-                        locatedRole = "user";
-                    }
-
-                    if (locatedRole && locatedRole !== "assistant") {
-                        debugLog(`Skipping stream tracking for ${normalizedFallback} due to ${locatedRole} role.`);
-                    } else {
-                        state.currentGenerationKey = normalizedFallback;
-                        debugLog(`Adopted ${normalizedFallback} as stream key from token payload.`);
-                    }
-                }
-            }
-        }
-
-        const profile = getActiveProfile();
-        if (!profile) return;
-
-        let tokenText = "";
-        if (typeof args[0] === 'number') { tokenText = String(args[1] ?? ""); }
-        else if (typeof args[0] === 'object') { tokenText = String(args[0].token ?? args[0].text ?? ""); }
-        else { tokenText = String(args.join(' ') || ""); }
-        if (!tokenText) return;
-
-        const bufKey = state.currentGenerationKey;
-        if (!bufKey) return;
-
-        let msgState = state.perMessageStates.get(bufKey);
-        if (!msgState) {
-            const { state: createdState, rosterCleared } = createMessageState(profile, bufKey, { messageRole: messageRole || "assistant" });
-            msgState = createdState;
-            if (rosterCleared && msgState) {
-                const normalized = normalizeMessageKey(bufKey) || bufKey;
-                applySceneRosterUpdate({
-                    key: normalized,
-                    messageId: extractMessageIdFromKey(normalized),
-                    roster: Array.from(msgState.sceneRoster || []),
-                    turnsByMember: cloneRosterTurns(msgState.rosterTurns),
-                    turnsRemaining: msgState.defaultRosterTTL,
-                    updatedAt: Date.now(),
-                });
-                requestScenePanelRender("roster-prime", { immediate: true });
-            }
-        }
-        if (!msgState) return;
-
-        if (msgState.vetoed) return;
-
-        const prev = state.perMessageBuffers.get(bufKey) || "";
-        const previousOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
-        const previousProcessedLength = Number.isFinite(msgState.processedLength)
-            ? msgState.processedLength
-            : previousOffset + prev.length;
-        const normalizedToken = normalizeStreamText(tokenText);
-        const appended = prev + normalizedToken;
-        const maxBuffer = resolveMaxBufferChars(profile);
-        const combined = appended.slice(-maxBuffer);
-        const trimmedChars = appended.length - combined.length;
-        adjustWindowForTrim(msgState, trimmedChars, combined.length);
-        state.perMessageBuffers.set(bufKey, combined);
-
-        const bufferOffset = Number.isFinite(msgState.bufferOffset) ? msgState.bufferOffset : 0;
-        const deltaAbsoluteStart = Math.max(previousProcessedLength, bufferOffset);
-        const startIndex = Math.max(0, deltaAbsoluteStart - bufferOffset);
-        const newestAbsoluteIndex = combined.length > 0 ? bufferOffset + combined.length - 1 : bufferOffset;
-        const lastProcessedIndex = Number.isFinite(msgState.lastAcceptedIndex) ? msgState.lastAcceptedIndex : -1;
-
-        if (newestAbsoluteIndex <= lastProcessedIndex) {
-            return;
-        }
-
-        const rosterSet = msgState?.sceneRoster instanceof Set ? msgState.sceneRoster : null;
-        const analytics = updateMessageAnalytics(bufKey, combined, {
-            rosterSet,
-            assumeNormalized: true,
-            bufferOffset,
-            incremental: true,
-            startIndex,
-            previousProcessedAbsolute: Number.isFinite(previousProcessedLength)
-                ? previousProcessedLength - 1
-                : null,
-            messageState: msgState,
+        const streamingMessage = resolveStreamingAssistantMessage(args, {
+            chatOverride: chat,
+            streamingProcessor,
         });
-
-        let minIndexRelative = null;
-        if (lastProcessedIndex >= bufferOffset) {
-            minIndexRelative = lastProcessedIndex - bufferOffset;
+        let streamingKey = streamingMessage ? resolveStreamMessageKeyFromChatMessage(streamingMessage) : null;
+        if (!streamingKey) {
+            const parsedReference = parseMessageReference(args);
+            const candidateKey = parsedReference.key
+                ? normalizeMessageKey(parsedReference.key) || parsedReference.key
+                : (Number.isFinite(parsedReference.messageId) ? `m${parsedReference.messageId}` : null);
+            if (candidateKey && isLikelyMessageKey(candidateKey)) {
+                const resolvedMessage = Number.isFinite(parsedReference.messageId)
+                    ? (Array.isArray(chat) ? chat.find((message) => message?.mesId === parsedReference.messageId) : findChatMessageById(parsedReference.messageId))
+                    : (Array.isArray(chat) ? findChatMessageByKey(candidateKey) : findChatMessageByKey(candidateKey));
+                if (resolvedMessage && !isAssistantLikeMessage(resolvedMessage)) {
+                    stopStreamSnapshotTimer();
+                    return;
+                }
+                if (!resolvedMessage && Array.isArray(chat)) {
+                    streamingKey = null;
+                } else {
+                    streamingKey = candidateKey;
+                }
+            }
+        }
+        if (!streamingKey && Number.isFinite(streamingProcessor?.messageId)) {
+            const fallback = `m${streamingProcessor.messageId}`;
+            streamingKey = normalizeMessageKey(fallback) || fallback;
+        }
+        if (streamingKey && isLikelyMessageKey(streamingKey)) {
+            const normalizedKey = normalizeMessageKey(streamingKey) || streamingKey;
+            const existingKey = state.currentGenerationKey ? (normalizeMessageKey(state.currentGenerationKey) || state.currentGenerationKey) : null;
+            if (!existingKey || existingKey !== normalizedKey) {
+                if (existingKey) {
+                    remapMessageKey(existingKey, normalizedKey);
+                }
+                state.currentGenerationKey = normalizedKey;
+                const locatedRole = streamingMessage ? resolveMessageRoleFromArgs([streamingMessage]) : null;
+                state.currentGenerationRole = locatedRole || messageRole || "assistant";
+                debugLog(`Adopted ${normalizedKey} as stream key from chat state.`);
+            }
         }
 
-        const matchOptions = {};
-        if (Number.isFinite(minIndexRelative) && minIndexRelative >= 0) {
-            matchOptions.minIndex = minIndexRelative;
+        const tokenText = resolveStreamTokenText(args);
+
+        if (!tokenText) {
+            debugLog("[STREAM] No token text resolved from stream payload.", { messageKey: state.currentGenerationKey, messageRole });
         }
 
-        const bestMatch = findBestMatch(combined, analytics?.matches, matchOptions);
-        debugLog(`[STREAM] Buffer len: ${combined.length}. Match:`, bestMatch ? `${bestMatch.name} (${bestMatch.matchKind})` : 'None');
-
-        if (state.compiledRegexes.vetoRegex && state.compiledRegexes.vetoRegex.test(combined)) {
-            debugLog("Veto phrase matched. Halting detection for this message.");
-            const vetoMatch = combined.match(state.compiledRegexes.vetoRegex)?.[0] || 'unknown veto phrase';
-            const recordedVeto = recordLastVetoMatch(vetoMatch, { source: 'live', persist: true });
-            recordDecisionEvent({
-                type: 'veto',
-                match: recordedVeto.phrase,
-                charIndex: newestAbsoluteIndex,
-                timestamp: Date.now(),
-            });
-            showStatus(`Detection halted. Veto phrase <b>${escapeHtml(recordedVeto.phrase)}</b> matched.`, 'error', 5000);
-            msgState.vetoed = true; return;
+        if (tokenText && !state.currentGenerationKey) {
+            debugLog("[STREAM] Stream payload resolved token text without a current generation key.", { messageRole });
         }
 
-        if (bestMatch) {
-            const { name: matchedName, matchKind } = bestMatch;
-            const now = Date.now();
-            const suppressMs = profile.repeatSuppressMs;
+        if (state.currentGenerationKey) {
+            startStreamSnapshotTimer();
 
-            const matchLength = Number.isFinite(bestMatch.matchLength) && bestMatch.matchLength > 0
-                ? Math.floor(bestMatch.matchLength)
-                : 1;
-            const matchEndRelative = Number.isFinite(bestMatch.matchIndex)
-                ? bestMatch.matchIndex + matchLength - 1
-                : null;
-            const absoluteIndex = Number.isFinite(matchEndRelative)
-                ? bufferOffset + matchEndRelative
-                : newestAbsoluteIndex;
-            msgState.lastAcceptedIndex = absoluteIndex;
-            msgState.processedLength = Math.max(msgState.processedLength || 0, absoluteIndex + 1);
-
-            if (profile.enableSceneRoster) {
-                const normalizedName = normalizeRosterKey(matchedName);
-                if (normalizedName) {
-                    msgState.sceneRoster.add(normalizedName);
-                    if (!(msgState.rosterTurns instanceof Map)) {
-                        msgState.rosterTurns = new Map();
-                    }
-                    const resolvedTTL = sanitizeRosterTurnValue(msgState.defaultRosterTTL ?? profile.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
-                    if (resolvedTTL != null) {
-                        msgState.rosterTurns.set(normalizedName, resolvedTTL);
+            const effectiveRole = messageRole || "assistant";
+            const streamingText = typeof streamingProcessor?.result === "string" ? streamingProcessor.result : "";
+            if (streamingText) {
+                processStreamSnapshotText(state.currentGenerationKey, streamingText, { messageRole: effectiveRole });
+            } else if (tokenText) {
+                const normalizedTokenText = normalizeStreamText(tokenText);
+                const existingBuffer = state.perMessageBuffers instanceof Map
+                    ? (state.perMessageBuffers.get(state.currentGenerationKey) || "")
+                    : "";
+                const looksLikeSnapshot = normalizedTokenText
+                    && (!existingBuffer || normalizedTokenText.startsWith(existingBuffer));
+                if (looksLikeSnapshot) {
+                    processStreamSnapshotText(state.currentGenerationKey, normalizedTokenText, { messageRole: effectiveRole });
+                } else if (!canUseStreamSnapshot(state.currentGenerationKey, { messageRole: effectiveRole })) {
+                    const hasPendingQueue = state.pendingStreamBuffers instanceof Map && state.pendingStreamBuffers.size > 0;
+                    if (!streamingProcessor && !hasPendingQueue) {
+                        processStreamChunk(state.currentGenerationKey, tokenText, { messageRole: effectiveRole });
+                    } else {
+                        queueStreamChunk(state.currentGenerationKey, tokenText, { messageRole: effectiveRole });
                     }
                 }
-                msgState.outfitTTL = sanitizeRosterTurnValue(profile?.sceneRosterTTL ?? PROFILE_DEFAULTS.sceneRosterTTL);
             }
-            if (matchKind !== 'pronoun') {
-                confirmMessageSubject(msgState, matchedName);
-            }
-
-            if (msgState.lastAcceptedName?.toLowerCase() === matchedName.toLowerCase() && (now - msgState.lastAcceptedTs < suppressMs)) {
-                if (matchKind !== 'pronoun') {
-                    recordDecisionEvent({
-                        type: 'skipped',
-                        name: matchedName,
-                        matchKind,
-                        reason: 'repeat-suppression',
-                        charIndex: absoluteIndex,
-                        timestamp: now,
-                    });
-                }
-                return;
-            }
-
-            msgState.lastAcceptedName = matchedName;
-            msgState.lastAcceptedTs = now;
-            issueCostumeForName(matchedName, {
-                matchKind,
-                bufKey,
-                messageState: msgState,
-                context: { text: combined, matchKind, roster: msgState.sceneRoster },
-                match: bestMatch,
-            });
         }
     } catch (err) { console.error(`${logPrefix} stream handler error:`, err); }
 };
@@ -11264,24 +12423,29 @@ const handleMessageRendered = (...args) => {
         }
     };
 
-    args.forEach(arg => mergeReference(arg));
+    args.forEach((arg) => mergeReference(arg));
 
     if (!resolvedKey && tempKey) {
         mergeReference(tempKey);
     }
 
-    if (!resolvedKey && Number.isFinite(resolvedId)) {
-        resolvedKey = `m${resolvedId}`;
+    const resolvedFinalKey = Number.isFinite(resolvedId)
+        ? `m${resolvedId}`
+        : (resolvedKey || tempKey);
+    const finalKey = normalizeMessageKey(resolvedFinalKey) || resolvedFinalKey;
+
+    if (tempKey && finalKey && normalizeMessageKey(tempKey) !== finalKey) {
+        remapMessageKey(tempKey, finalKey);
     }
 
-    if (tempKey && resolvedKey && tempKey !== resolvedKey) {
-        remapMessageKey(tempKey, resolvedKey);
+    if (resolvedKey && finalKey && normalizeMessageKey(resolvedKey) !== finalKey) {
+        remapMessageKey(resolvedKey, finalKey);
     }
-
-    const finalKey = resolvedKey || tempKey;
     if (!finalKey) {
-        debugLog('Message rendered without a resolvable key.', args);
+        debugLog("Message rendered without a resolvable key.", args);
+        stopStreamSnapshotTimer();
         state.currentGenerationKey = null;
+        state.currentGenerationRole = null;
         return;
     }
 
@@ -11295,9 +12459,19 @@ const handleMessageRendered = (...args) => {
 
     if (renderedMessage?.is_user || isSystemOrNarratorMessage(renderedMessage)) {
         debugLog(`Skipping scene panel sync for non-assistant message ${finalKey}.`);
+        stopStreamSnapshotTimer();
         state.currentGenerationKey = null;
+        state.currentGenerationRole = null;
         return;
     }
+
+    stopStreamSnapshotTimer({
+        finalSnapshot: true,
+        finalKey,
+        finalRole: state.currentGenerationRole,
+    });
+    flushStreamQueue({ keys: [finalKey] });
+    flushStreamingDetectionPass({ forceKey: finalKey, forceRole: state.currentGenerationRole });
 
     const hasTrackedState = Boolean(
         (state.perMessageBuffers instanceof Map && state.perMessageBuffers.has(finalKey))
@@ -11307,17 +12481,52 @@ const handleMessageRendered = (...args) => {
 
     if (!renderedMessage && !hasTrackedState) {
         debugLog(`Skipping scene panel sync for ${finalKey}; no tracked generation state found.`, args);
+        stopStreamSnapshotTimer();
         state.currentGenerationKey = null;
+        state.currentGenerationRole = null;
         return;
     }
 
     debugLog(`Message ${finalKey} rendered, calculating final stats from buffer.`);
     calculateFinalMessageStats({ key: finalKey, messageId: resolvedId });
+    const rosterTimestamp = Date.now();
+    const sceneSnapshot = typeof getCurrentSceneSnapshot === "function" ? getCurrentSceneSnapshot() : null;
+    const messageState = state.perMessageStates instanceof Map ? state.perMessageStates.get(finalKey) || null : null;
+    const testersSnapshot = typeof getLiveTesterOutputsSnapshot === "function"
+        ? getLiveTesterOutputsSnapshot()
+        : null;
+    const derivedRoster = deriveSceneRosterState({
+        messageState,
+        sceneSnapshot: sceneSnapshot
+            ? {
+                ...sceneSnapshot,
+                key: finalKey,
+                messageId: Number.isFinite(resolvedId)
+                    ? resolvedId
+                    : (sceneSnapshot?.messageId ?? extractMessageIdFromKey(finalKey)),
+            }
+            : null,
+        testerSnapshot: testersSnapshot,
+        now: rosterTimestamp,
+    });
+    applySceneRosterUpdate({
+        key: derivedRoster.key,
+        messageId: derivedRoster.messageId,
+        roster: derivedRoster.roster,
+        displayNames: derivedRoster.displayNames,
+        lastMatch: derivedRoster.lastEvent,
+        updatedAt: rosterTimestamp,
+        turnsByMember: messageState?.rosterTurns,
+        turnsRemaining: messageState?.defaultRosterTTL,
+    });
     captureSceneOutcomeForMessage({ key: finalKey, messageId: resolvedId });
     pruneMessageCaches();
     state.currentGenerationKey = null;
+    state.currentGenerationRole = null;
     requestScenePanelRender("message-rendered", { immediate: true });
 };
+
+__testables.handleMessageRendered = handleMessageRendered;
 
 const resetGlobalState = ({ immediateRender = true } = {}) => {
     resetSceneState();
@@ -11328,6 +12537,18 @@ const resetGlobalState = ({ immediateRender = true } = {}) => {
     if (state.statusTimer) {
         clearTimeout(state.statusTimer);
         state.statusTimer = null;
+    }
+    if (state.pendingStreamTimer) {
+        clearTimeout(state.pendingStreamTimer);
+        state.pendingStreamTimer = null;
+    }
+    if (state.streamSnapshotTimer) {
+        clearInterval(state.streamSnapshotTimer);
+        state.streamSnapshotTimer = null;
+    }
+    if (state.streamingDetectionTimer) {
+        clearTimeout(state.streamingDetectionTimer);
+        state.streamingDetectionTimer = null;
     }
     if (Array.isArray(state.testerTimers)) {
         state.testerTimers.forEach(clearTimeout);
@@ -11352,12 +12573,23 @@ const resetGlobalState = ({ immediateRender = true } = {}) => {
         topSceneRankingUpdatedAt: new Map(),
         latestTopRanking: { bufKey: null, ranking: [], fullRanking: [], updatedAt: Date.now() },
         currentGenerationKey: null,
+        currentGenerationRole: null,
         messageKeyQueue: [],
         draftMappingIds: new Set(),
         draftPatternIds: new Set(),
         focusLockNotice: createFocusLockNotice(),
         lastSceneSwipeId: null,
         lastSceneDigest: null,
+        pendingStreamBuffers: new Map(),
+        pendingStreamRoles: new Map(),
+        pendingStreamTimer: null,
+        streamSnapshotTimer: null,
+        streamingDetectionTimer: null,
+        streamingDetectionKey: null,
+        streamingDetectionRole: null,
+        streamingDetectionLastAt: 0,
+        streamingDetectionLastKey: null,
+        streamingDetectionLastLength: null,
     });
     clearSessionTopCharacters();
     if (!immediateRender) {
@@ -11519,6 +12751,14 @@ function unload() {
         unregisterSillyTavernIntegration(state.integrationHandlers, { eventSource });
         state.integrationHandlers = null;
     }
+    if (typeof state.autoSaveCleanup === "function") {
+        try {
+            state.autoSaveCleanup();
+        } catch (err) {
+            console.warn(`${logPrefix} Failed to clean up auto-save guards:`, err);
+        }
+        state.autoSaveCleanup = null;
+    }
     resetGlobalState();
 }
 
@@ -11540,7 +12780,7 @@ function getSettingsObj() {
         if (oldSettings.hasOwnProperty('enabled')) newSettings.enabled = oldSettings.enabled;
         storeSource[extensionName] = newSettings;
     }
-    
+
     storeSource[extensionName] = Object.assign({}, structuredClone(DEFAULTS), storeSource[extensionName]);
     storeSource[extensionName].profiles = loadProfiles(storeSource[extensionName].profiles, PROFILE_DEFAULTS);
     ensureScenePanelSettings(storeSource[extensionName]);
@@ -11574,6 +12814,7 @@ if (typeof window !== "undefined" && typeof jQuery === "function") {
             $("#extensions_settings").append(settingsHtml);
 
             await mountScenePanelTemplate();
+            addSceneControlCenterMenuButton();
 
             const buildMeta = await fetchBuildMetadata();
             renderBuildMetadata(buildMeta);
@@ -11591,7 +12832,7 @@ if (typeof window !== "undefined" && typeof jQuery === "function") {
             console.log(`${logPrefix} ${buildMeta?.label || 'dev build'} loaded successfully.`);
         } catch (error) {
             console.error(`${logPrefix} failed to initialize:`, error);
-            alert(`Failed to initialize Costume Switcher. Check console (F12) for details.`);
+            alert(`Failed to initialize Character Visuals. Check console (F12) for details.`);
         }
     });
 }

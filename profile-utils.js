@@ -3,6 +3,10 @@ function safeClone(value) {
         return undefined;
     }
 
+    if (value instanceof RegExp) {
+        return new RegExp(value.source, value.flags || "");
+    }
+
     if (typeof structuredClone === 'function') {
         try {
             return structuredClone(value);
@@ -15,6 +19,9 @@ function safeClone(value) {
         const json = JSON.stringify(value);
         return json === undefined ? undefined : JSON.parse(json);
     } catch (err) {
+        if (value instanceof RegExp) {
+            return new RegExp(value.source, value.flags || "");
+        }
         if (Array.isArray(value)) {
             return value.map((item) => safeClone(item));
         }
@@ -28,6 +35,103 @@ function safeClone(value) {
     }
 }
 
+function normalizeOutfitVariantForSave(rawVariant = {}) {
+    if (rawVariant == null) {
+        return { folder: "", triggers: [] };
+    }
+
+    if (typeof rawVariant === "string") {
+        const folder = rawVariant.trim();
+        return { folder, triggers: [], priority: 0 };
+    }
+
+    const variant = safeClone(rawVariant) || {};
+
+    const folder = typeof variant.folder === "string" ? variant.folder.trim() : "";
+    const slot = typeof variant.slot === "string" ? variant.slot.trim() : "";
+    const name = typeof variant.name === "string" ? variant.name.trim() : "";
+    const label = typeof variant.label === "string" ? variant.label.trim() : (name || slot);
+
+    const triggers = cloneStringList([
+        variant.triggers,
+        variant.patterns,
+        variant.matchers,
+        variant.trigger,
+        variant.matcher,
+    ]);
+
+    const matchKinds = cloneStringList([
+        variant.matchKinds,
+        variant.matchKind,
+        variant.kinds,
+        variant.kind,
+    ]).map(value => value.toLowerCase());
+
+    const awarenessSource = typeof variant.awareness === "object" && variant.awareness !== null
+        ? variant.awareness
+        : {};
+    const awareness = {};
+    const requires = cloneStringList([
+        awarenessSource.requires,
+        awarenessSource.requiresAll,
+        awarenessSource.all,
+        variant.requires,
+        variant.requiresAll,
+        variant.all,
+    ]);
+    if (requires.length) {
+        awareness.requires = requires;
+    }
+    const requiresAny = cloneStringList([
+        awarenessSource.requiresAny,
+        awarenessSource.any,
+        awarenessSource.oneOf,
+        variant.requiresAny,
+        variant.any,
+        variant.oneOf,
+    ]);
+    if (requiresAny.length) {
+        awareness.requiresAny = requiresAny;
+    }
+    const excludes = cloneStringList([
+        awarenessSource.excludes,
+        awarenessSource.absent,
+        awarenessSource.none,
+        awarenessSource.forbid,
+        variant.excludes,
+        variant.absent,
+        variant.none,
+        variant.forbid,
+    ]);
+    if (excludes.length) {
+        awareness.excludes = excludes;
+    }
+
+    const prioritySource = variant.priority ?? variant.order ?? variant.weight ?? 0;
+    const priority = Number(prioritySource);
+
+    const normalized = {
+        folder,
+        triggers,
+        priority: Number.isFinite(priority) ? priority : 0,
+    };
+
+    if (slot) {
+        normalized.slot = slot;
+    }
+    if (label) {
+        normalized.label = label;
+    }
+    if (matchKinds.length) {
+        normalized.matchKinds = [...new Set(matchKinds)];
+    }
+    if (Object.keys(awareness).length) {
+        normalized.awareness = awareness;
+    }
+
+    return normalized;
+}
+
 function cloneOutfits(outfits) {
     if (!Array.isArray(outfits)) {
         return [];
@@ -38,17 +142,17 @@ function cloneOutfits(outfits) {
         if (item == null) {
             return;
         }
-        if (typeof item === 'string') {
-            const trimmed = item.trim();
-            if (trimmed) {
-                result.push(trimmed);
+        if (typeof item === "string") {
+            const normalized = normalizeOutfitVariantForSave(item);
+            if (normalized.folder) {
+                result.push(normalized);
             }
             return;
         }
-        if (typeof item === 'object') {
-            const cloned = safeClone(item);
-            if (cloned && typeof cloned === 'object') {
-                result.push(cloned);
+        if (typeof item === "object") {
+            const normalized = normalizeOutfitVariantForSave(item);
+            if (normalized && typeof normalized === "object") {
+                result.push(normalized);
             }
         }
     });
@@ -68,6 +172,19 @@ function cloneStringList(source) {
         }
         if (Array.isArray(item)) {
             item.forEach((nested) => {
+                if (nested == null) {
+                    return;
+                }
+                if (nested instanceof RegExp) {
+                    const pattern = nested.source;
+                    const flags = nested.flags || "";
+                    const literal = `/${pattern}/${flags}`;
+                    const trimmed = literal.trim();
+                    if (trimmed) {
+                        result.push(trimmed);
+                    }
+                    return;
+                }
                 if (typeof nested === 'string') {
                     const trimmed = nested.trim();
                     if (trimmed) {
@@ -75,6 +192,16 @@ function cloneStringList(source) {
                     }
                 }
             });
+            return;
+        }
+        if (item instanceof RegExp) {
+            const pattern = item.source;
+            const flags = item.flags || "";
+            const literal = `/${pattern}/${flags}`;
+            const trimmed = literal.trim();
+            if (trimmed) {
+                result.push(trimmed);
+            }
             return;
         }
         if (typeof item === 'string') {
@@ -125,8 +252,14 @@ export function normalizeScriptCollections(raw, defaults = []) {
 export function normalizePatternSlot(entry = {}) {
     const source = entry && typeof entry === 'object' ? entry : {};
     const cloned = safeClone(source) || {};
+    let fallbackName = '';
+    if (typeof entry === "string") {
+        fallbackName = entry.trim();
+    } else if (entry instanceof RegExp) {
+        fallbackName = `/${entry.source}/${entry.flags || ""}`;
+    }
 
-    const name = typeof cloned.name === 'string' ? cloned.name.trim() : '';
+    const name = typeof cloned.name === 'string' ? cloned.name.trim() : fallbackName;
     const folderCandidates = [cloned.folder, cloned.path, cloned.directory, cloned.defaultFolder];
     const folderList = cloneStringList(folderCandidates);
     const folder = folderList.length ? folderList[0] : '';

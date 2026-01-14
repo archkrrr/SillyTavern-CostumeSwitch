@@ -99,7 +99,14 @@ export function getTextTokens(tokenizerId, text) {
     return ids;
 }
 
+// FIX #9: Import global tokenizer for accuracy
+import { getTokenCountAsync as globalGetTokenCountAsync, getTokenCount as globalGetTokenCount } from "../../../tokenizers.js";
+
 export async function getTokenCountAsync(text, tokenizerId = null) {
+    if (typeof globalGetTokenCountAsync === "function") {
+        return globalGetTokenCountAsync(text);
+    }
+
     const tokens = getTextTokens(tokenizerId, text);
     if (Array.isArray(tokens) && tokens.length > 0) {
         return tokens.length;

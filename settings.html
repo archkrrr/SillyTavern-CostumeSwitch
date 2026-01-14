@@ -1,7 +1,7 @@
 <div id="costume-switcher-settings" class="extension_container cs-theme">
   <div class="inline-drawer is-open">
     <div class="inline-drawer-toggle inline-drawer-header">
-      <b>Costume Switcher</b>
+      <b>Character Visuals</b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
@@ -9,7 +9,7 @@
     <section class="cs-card cs-header-card">
       <div class="cs-header-ambient organic-flow" aria-hidden="true"></div>
       <div class="cs-header-intro">
-        <h2 class="cs-title">Costume Switcher</h2>
+        <h2 class="cs-title">Character Visuals</h2>
       </div>
       <div class="cs-header-meta">
         <div class="cs-build-meta" role="status" aria-live="polite">
@@ -20,7 +20,7 @@
           <input id="cs-enable" type="checkbox" />
           <span class="cs-switch-thumb" aria-hidden="true"></span>
           <div class="cs-switch-copy">
-            <strong>Enable Costume Switching</strong>
+            <strong>Enable Switching</strong>
             <small>Master toggle to pause detection without changing your settings.</small>
           </div>
         </label>
@@ -303,67 +303,6 @@
                     <p>The preprocessor runs in live streams before detections score, and the Live Tester simply mirrors what already happened.</p>
                   </div>
                 </div>
-                <div class="cs-field-group cs-field-group--stacked cs-zone-off" aria-disabled="true" aria-describedby="cs-fuzzy-lockout">
-                  <div id="cs-fuzzy-lockout" class="cs-zone-off-banner" role="note">
-                    <strong>Fuzzy name matching is cooling off.</strong>
-                    <span>Finalized controls land in v3.6.1, so this area is zoned off for now.</span>
-                  </div>
-                  <label class="cs-inline-label" for="cs-fuzzy-tolerance">Name Matching</label>
-                  <div class="cs-number-field">
-                    <label for="cs-fuzzy-tolerance">Fuzzy Tolerance Preset</label>
-                    <select id="cs-fuzzy-tolerance" class="text_pole" title="Choose how aggressively to re-map near-miss names before scoring." data-change-notice="Updates how fuzzy name matching behaves before detections score candidates.">
-                      <option value="off">Off — exact matches only</option>
-                      <option value="auto">Auto — fix accents &amp; low-confidence hits</option>
-                      <option value="accent">Accent-only — strip diacritics</option>
-                      <option value="always">Always — always translate/fuzz</option>
-                      <option value="low">Low Confidence — only when scores dip</option>
-                      <option value="custom">Custom threshold</option>
-                    </select>
-                  </div>
-                  <small class="cs-helper-text">Fuzzy tolerance needs live detections to normalize. Keep Detect General Name Mentions on or make sure Detect Attribution and Detect Action stay enabled so fuzzy rescue has names to compare.</small>
-                  <div id="cs-fuzzy-tolerance-custom-wrapper" class="cs-number-field" hidden>
-                    <label for="cs-fuzzy-tolerance-custom">Custom Low-Confidence Threshold</label>
-                    <input id="cs-fuzzy-tolerance-custom" class="text_pole" type="number" min="0" step="1" inputmode="numeric" placeholder="e.g., 3" title="Only use fuzzy matching when a detector scores at or below this priority value." />
-                    <small>Lower values limit fuzzy fallback to only the weakest detections; higher values allow more aggressive rescue attempts when low-confidence cues appear.</small>
-                  </div>
-                  <label class="cs-toggle cs-toggle--inline" title="Attempt to translate or strip diacritics before comparing names when fuzzy fallback is triggered.">
-                    <input id="cs-translate-fuzzy-names" type="checkbox" />
-                    <span class="cs-toggle-indicator"></span>
-                    <span>
-                      <strong>Translate Accents</strong>
-                      <small>Swap accented/translated characters (Á → A, ゆり → Yuri) before comparing.</small>
-                    </span>
-                  </label>
-                  <label class="cs-toggle cs-toggle--inline" title="Allow fuzzy fallback to scan lowercase speaker cues or system prompts when chats intentionally strip capitalization.">
-                    <input id="cs-scan-lowercase-fallback" type="checkbox" />
-                    <span class="cs-toggle-indicator"></span>
-                    <span>
-                      <strong>Scan Lowercase Cues</strong>
-                      <small>Let fuzzy fallback scan lowercase speaker cues and system prompts. Keep off unless your scripts intentionally lowercase names.</small>
-                    </span>
-                  </label>
-                  <div class="cs-number-field">
-                    <label for="cs-fuzzy-fallback-max-score">Max fuzzy fallback score</label>
-                    <input id="cs-fuzzy-fallback-max-score" class="text_pole" type="number" min="0" max="1" step="0.01" inputmode="decimal" placeholder="Optional (0–1)" title="Clamp Fuse-powered fallback rescues to scores at or below this value. Leave blank to rely on the active tolerance and block only distant outliers." data-change-notice="Auto-saving fuzzy fallback score cap." />
-                    <small>Limit fuzzy rescues to the nearest matches. Set a cap near 0.4–0.6 to prevent distant capitalized words from mapping to live characters.</small>
-                  </div>
-                  <div class="cs-number-field">
-                    <label for="cs-fuzzy-fallback-cooldown">Fallback cooldown (characters)</label>
-                    <input id="cs-fuzzy-fallback-cooldown" class="text_pole" type="number" min="0" step="1" inputmode="numeric" placeholder="Default: 200" title="Require this many characters to pass before the same name can be rescued again. Leave blank to rely on the built-in 200 character guard." data-change-notice="Auto-saving fuzzy fallback cooldown." />
-                    <small>Throttle repeated rescues. Keep the default 200-character padding to stop spammy repeats, or lower it for tight call-and-response logs.</small>
-                  </div>
-                  <div class="cs-helper-text">
-                    <p><strong>How each preset behaves:</strong></p>
-                    <ul>
-                      <li><strong>Off</strong> is for debugging or strict chats where names never drift.</li>
-                      <li><strong>Auto/Low Confidence</strong> only attempts rescue when scores sag, keeping confident matches exact.</li>
-                      <li><strong>Accent-only</strong> focuses on translating diacritics so bilingual logs stay aligned.</li>
-                      <li><strong>Always</strong> keeps fast, typo-heavy chats stable by remapping every near miss.</li>
-                      <li><strong>Custom</strong> lets you set the score that must be met before fuzzy fallback triggers.</li>
-                    </ul>
-                    <p>Pair the preset with <strong>Translate Accents</strong> whenever a scene swaps alphabets; the shared buffer feeds both live detections and the tester.</p>
-                  </div>
-                </div>
                 <div class="cs-field-group">
                   <label class="cs-inline-label" for="cs-scene-roster-enable">Scene Awareness</label>
                   <label class="cs-toggle cs-toggle--inline" title="Improves group scenario accuracy by tracking recently active characters.">
@@ -422,6 +361,7 @@
                     </label>
                   </div>
                   <small class="cs-helper-text">Experimental: The scene panel mirrors the live tester timeline for actual chat replies and may evolve as we refine it.</small>
+                  <small class="cs-helper-text">Tip: Use the Extensions (magic wand) menu in chat to open the Scene Control Center popup, handy for mobile layouts.</small>
                 </div>
                 <div class="cs-field-group">
                   <label for="cs-attribution-verbs">Attribution Verbs</label>
@@ -462,10 +402,9 @@
                   <input id="cs-per-trigger-cooldown" class="text_pole" type="number" min="0" title="How long to wait before the same detection type can fire again." />
                   <label for="cs-failed-trigger-cooldown">Failed Trigger Cooldown (ms)</label>
                   <input id="cs-failed-trigger-cooldown" class="text_pole" type="number" min="0" title="Backoff delay after a failed switch attempt before trying again." />
-                  <label for="cs-max-buffer-chars">Max Buffer Size (chars)</label>
-                  <input id="cs-max-buffer-chars" class="text_pole" type="number" min="0" title="Maximum characters of recent text to keep while scanning the stream." />
-                  <label for="cs-token-process-threshold">Token Process Threshold (chars)</label>
-                  <input id="cs-token-process-threshold" class="text_pole" type="number" min="0" title="How many characters to wait before checking. Lower is more reactive but uses more CPU." />
+                  <label for="cs-max-buffer-chars">Stream Buffer Safety (chars)</label>
+                  <input id="cs-max-buffer-chars" class="text_pole" type="number" min="0" title="Full streamed messages are kept; this value only caps extremely long outputs to protect memory usage." />
+                  <small class="cs-helper-text">Raise this if long replies mention characters early; lower it on low-end devices to conserve memory.</small>
                 </div>
                 <div class="cs-slider-field">
                   <label for="cs-detection-bias">Detection Bias <span id="cs-detection-bias-value">0</span></label>
@@ -635,10 +574,6 @@
                                         <li class="cs-tester-list-placeholder">No scripts executed.</li>
                                     </ul>
                                 </div>
-                                <div class="cs-preprocessor-column cs-preprocessor-column--badge">
-                                    <div class="cs-tester-title cs-tester-title--sub">Name Normalization</div>
-                                    <div id="cs-fuzzy-summary" class="cs-fuzzy-pill" title="Fuzzy normalization disabled.">Fuzzy: Off</div>
-                                </div>
                             </div>
                         </div>
                         <div class="cs-tester-split">
@@ -743,139 +678,3 @@
     </div>
   </div>
 </div>
-
-<script>
-    (function initHeaderNebulaAmbient() {
-        const ambient = document.querySelector("#costume-switcher-settings.cs-theme .cs-header-ambient");
-
-        if (!ambient || ambient.dataset.nebulaInitialized === "true") {
-            return;
-        }
-
-        ambient.dataset.nebulaInitialized = "true";
-
-        ambient.textContent = "";
-
-        const cloudBlueprints = [
-            {
-                sizeRatio: 1.44,
-                left: 30,
-                top: 60,
-                duration: 52,
-                delay: 0,
-                opacity: 0.36,
-                blur: 42,
-                rotationStart: "-18deg",
-                rotationMid: "4deg",
-                rotationEnd: "26deg",
-                scaleStart: 0.92,
-                scaleMid: 1.18,
-                scaleEnd: 0.9,
-                colorPrimary: "rgba(126, 196, 248, 0.32)",
-                colorSecondary: "rgba(214, 156, 242, 0.24)",
-            },
-            {
-                sizeRatio: 1.12,
-                left: 64,
-                top: 46,
-                duration: 46,
-                delay: -12.5,
-                opacity: 0.32,
-                blur: 36,
-                rotationStart: "14deg",
-                rotationMid: "36deg",
-                rotationEnd: "58deg",
-                scaleStart: 0.88,
-                scaleMid: 1.1,
-                scaleEnd: 0.94,
-                colorPrimary: "rgba(108, 232, 198, 0.26)",
-                colorSecondary: "rgba(110, 184, 246, 0.28)",
-            },
-            {
-                sizeRatio: 0.94,
-                left: 22,
-                top: 38,
-                duration: 38,
-                delay: -7.5,
-                opacity: 0.34,
-                blur: 28,
-                rotationStart: "-8deg",
-                rotationMid: "18deg",
-                rotationEnd: "32deg",
-                scaleStart: 0.9,
-                scaleMid: 1.16,
-                scaleEnd: 0.96,
-                colorPrimary: "rgba(226, 166, 242, 0.26)",
-                colorSecondary: "rgba(104, 188, 242, 0.26)",
-            },
-        ];
-
-        const starBlueprints = [
-            { sizeRatio: 0.06, left: 18, top: 34, duration: 14, delay: -4, opacity: 0.66 },
-            { sizeRatio: 0.08, left: 46, top: 28, duration: 18, delay: -9, opacity: 0.58 },
-            { sizeRatio: 0.05, left: 64, top: 62, duration: 16, delay: -6, opacity: 0.62 },
-            { sizeRatio: 0.07, left: 74, top: 38, duration: 20, delay: -10, opacity: 0.54 },
-            { sizeRatio: 0.05, left: 36, top: 58, duration: 17, delay: -3.2, opacity: 0.6 },
-            { sizeRatio: 0.04, left: 54, top: 72, duration: 22, delay: -12.6, opacity: 0.5 },
-        ];
-
-        const clouds = cloudBlueprints.map((blueprint) => {
-            const layer = document.createElement("div");
-            layer.className = "nebula-cloud";
-            layer.dataset.sizeRatio = String(blueprint.sizeRatio);
-            layer.style.setProperty("--cloud-left", `${blueprint.left}%`);
-            layer.style.setProperty("--cloud-top", `${blueprint.top}%`);
-            layer.style.setProperty("--cloud-duration", `${blueprint.duration}s`);
-            layer.style.setProperty("--cloud-delay", `${blueprint.delay}s`);
-            layer.style.setProperty("--cloud-opacity", `${blueprint.opacity}`);
-            layer.style.setProperty("--cloud-blur", `${blueprint.blur}px`);
-            layer.style.setProperty("--cloud-rotation-start", blueprint.rotationStart);
-            layer.style.setProperty("--cloud-rotation-mid", blueprint.rotationMid);
-            layer.style.setProperty("--cloud-rotation-end", blueprint.rotationEnd);
-            layer.style.setProperty("--cloud-scale-start", `${blueprint.scaleStart}`);
-            layer.style.setProperty("--cloud-scale-mid", `${blueprint.scaleMid}`);
-            layer.style.setProperty("--cloud-scale-end", `${blueprint.scaleEnd}`);
-            layer.style.setProperty("--cloud-color-primary", blueprint.colorPrimary);
-            layer.style.setProperty("--cloud-color-secondary", blueprint.colorSecondary);
-            ambient.appendChild(layer);
-            return { element: layer, blueprint };
-        });
-
-        const stars = starBlueprints.map((blueprint) => {
-            const star = document.createElement("div");
-            star.className = "nebula-star";
-            star.dataset.sizeRatio = String(blueprint.sizeRatio);
-            star.style.setProperty("--star-left", `${blueprint.left}%`);
-            star.style.setProperty("--star-top", `${blueprint.top}%`);
-            star.style.setProperty("--star-duration", `${blueprint.duration}s`);
-            star.style.setProperty("--star-delay", `${blueprint.delay}s`);
-            star.style.setProperty("--star-opacity", `${blueprint.opacity}`);
-            ambient.appendChild(star);
-            return { element: star, blueprint };
-        });
-
-        const updateDimensions = () => {
-            const { width, height } = ambient.getBoundingClientRect();
-            const reference = Math.max(width, height, 1);
-
-            clouds.forEach(({ element, blueprint }) => {
-                const baseSize = reference * blueprint.sizeRatio;
-                element.style.setProperty("--cloud-size", `${baseSize}px`);
-            });
-
-            stars.forEach(({ element, blueprint }) => {
-                const baseSize = reference * blueprint.sizeRatio;
-                element.style.setProperty("--star-size", `${baseSize}px`);
-            });
-        };
-
-        updateDimensions();
-
-        if (typeof ResizeObserver === "function") {
-            const observer = new ResizeObserver(updateDimensions);
-            observer.observe(ambient);
-        } else {
-            window.addEventListener("resize", updateDimensions, { passive: true });
-        }
-    })();
-</script>

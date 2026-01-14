@@ -13,6 +13,7 @@ import {
     getSceneCoverageAttribution,
     getSceneCoverageAction,
     getSceneSectionsContainer,
+    getScenePanelContent,
 } from "../scenePanelState.js";
 import { renderSceneRoster } from "./sceneRoster.js";
 import { renderActiveCharacters } from "./activeCharacters.js";
@@ -25,6 +26,12 @@ let scenePanelSummonButtonObserver = null;
 let scenePanelSummonParentObserver = null;
 let scenePanelSummonParentObserverTarget = null;
 let scenePanelSummonRestoring = false;
+let scenePanelViewportQuery = null;
+let scenePanelSheetMode = false;
+let scenePanelSheetReturnFocus = null;
+let scenePanelContentHome = null;
+let lastPanelEnabledState = false;
+let lastPanelCollapsedState = false;
 let lastScenePanelSummonState = {
     enabled: false,
     collapsed: false,
@@ -51,6 +58,198 @@ function getScenePanelSummonParent() {
         return null;
     }
     return document.body || null;
+}
+
+function getScenePanelLayerElement() {
+    if (typeof document === "undefined") {
+        return null;
+    }
+    return document.getElementById("cs-scene-panel-layer");
+}
+
+function getScenePanelLayerSheetBody() {
+    const layer = getScenePanelLayerElement();
+    if (!layer) {
+        return null;
+    }
+    return layer.querySelector('[data-scene-panel="sheet-body"]');
+}
+
+function getScenePanelLayerCloseButton() {
+    const layer = getScenePanelLayerElement();
+    if (!layer) {
+        return null;
+    }
+    return layer.querySelector('[data-scene-panel="close-layer"]');
+}
+
+function rememberScenePanelContentHome(element) {
+    if (!element || scenePanelContentHome) {
+        return;
+    }
+    const parent = element.parentNode;
+    const nextSibling = element.nextSibling;
+    if (parent) {
+        scenePanelContentHome = { parent, nextSibling };
+    }
+}
+
+function restoreScenePanelContentHome(element) {
+    if (!element || !scenePanelContentHome?.parent) {
+        return;
+    }
+    const { parent, nextSibling } = scenePanelContentHome;
+    if (nextSibling && nextSibling.parentNode === parent) {
+        parent.insertBefore(element, nextSibling);
+    } else {
+        parent.appendChild(element);
+    }
+}
+
+function moveScenePanelContentToSheet() {
+    const content = getScenePanelContent?.();
+    const { el } = resolveContainer(content);
+    const sheetBody = getScenePanelLayerSheetBody();
+    if (!el || !sheetBody) {
+        return false;
+    }
+    rememberScenePanelContentHome(el);
+    if (el.parentNode !== sheetBody) {
+        sheetBody.appendChild(el);
+    }
+    return true;
+}
+
+function updateScenePanelSummonTarget() {
+    const button = ensureScenePanelSummonButton();
+    if (!button) {
+        return;
+    }
+    const targetId = scenePanelSheetMode ? "cs-scene-panel-layer" : "cs-scene-panel";
+    button.setAttribute("aria-controls", targetId);
+    button.dataset.viewport = scenePanelSheetMode ? "compact" : "default";
+}
+
+function focusScenePanelLayerClose() {
+    const closeButton = getScenePanelLayerCloseButton();
+    if (!closeButton || typeof closeButton.focus !== "function") {
+        return;
+    }
+    setTimeout(() => {
+        try {
+            closeButton.focus({ preventScroll: true });
+        } catch (err) {
+            closeButton.focus();
+        }
+    }, 0);
+}
+
+function openScenePanelSheetLayer() {
+    const layer = getScenePanelLayerElement();
+    if (!layer) {
+        return;
+    }
+    layer.dataset.panelSheet = "true";
+    layer.dataset.panelSheetState = "open";
+    layer.hidden = false;
+    layer.setAttribute("aria-hidden", "false");
+    if (typeof document !== "undefined" && !scenePanelSheetReturnFocus) {
+        scenePanelSheetReturnFocus = document.activeElement;
+    }
+    focusScenePanelLayerClose();
+}
+
+function closeScenePanelSheetLayer({ restoreFocus = true } = {}) {
+    const layer = getScenePanelLayerElement();
+    if (!layer || layer.dataset.panelSheet !== "true") {
+        return;
+    }
+    layer.dataset.panelSheetState = "closed";
+    layer.setAttribute("aria-hidden", "true");
+    layer.hidden = true;
+    if (restoreFocus && scenePanelSheetReturnFocus && typeof scenePanelSheetReturnFocus.focus === "function") {
+        try {
+            scenePanelSheetReturnFocus.focus({ preventScroll: true });
+        } catch (err) {
+            try {
+                scenePanelSheetReturnFocus.focus();
+            } catch (innerErr) {
+            }
+        }
+    }
+    scenePanelSheetReturnFocus = null;
+}
+
+function enterScenePanelSheetMode() {
+    scenePanelSheetMode = true;
+    const moved = moveScenePanelContentToSheet();
+    const layer = getScenePanelLayerElement();
+    if (moved && layer) {
+        layer.dataset.panelSheet = "true";
+        layer.dataset.panelSheetState = lastPanelEnabledState ? "open" : "closed";
+        layer.hidden = !lastPanelEnabledState;
+        layer.setAttribute("aria-hidden", lastPanelEnabledState ? "false" : "true");
+    }
+    updateScenePanelSummonTarget();
+}
+
+function exitScenePanelSheetMode() {
+    scenePanelSheetMode = false;
+    const content = getScenePanelContent?.();
+    const { el } = resolveContainer(content);
+    if (el) {
+        restoreScenePanelContentHome(el);
+    }
+    const layer = getScenePanelLayerElement();
+    if (layer) {
+        delete layer.dataset.panelSheet;
+        delete layer.dataset.panelSheetState;
+        layer.setAttribute("aria-hidden", "true");
+        layer.hidden = true;
+    }
+    scenePanelSheetReturnFocus = null;
+    updateScenePanelSummonTarget();
+}
+
+function handleScenePanelViewportChange() {
+    updateScenePanelViewportMode();
+}
+
+function setupScenePanelViewportQuery() {
+    if (scenePanelViewportQuery || typeof window === "undefined" || typeof window.matchMedia !== "function") {
+        return;
+    }
+    scenePanelViewportQuery = window.matchMedia("(max-width: 900px)");
+    if (scenePanelViewportQuery?.addEventListener) {
+        scenePanelViewportQuery.addEventListener("change", handleScenePanelViewportChange, { passive: true });
+    } else if (scenePanelViewportQuery?.addListener) {
+        scenePanelViewportQuery.addListener(handleScenePanelViewportChange);
+    }
+}
+
+function updateScenePanelViewportMode() {
+    setupScenePanelViewportQuery();
+
+    // Check if the panel is currently in a popup
+    const container = getScenePanelContainer?.();
+    const { el } = resolveContainer(container);
+    const isPopup = el?.dataset?.csPopup === "true";
+
+    // If in popup mode, force sheet mode off
+    const shouldUseSheetMode = !isPopup && Boolean(scenePanelViewportQuery?.matches);
+
+    if (shouldUseSheetMode === scenePanelSheetMode) {
+        updateScenePanelSummonTarget();
+        return shouldUseSheetMode;
+    }
+    if (shouldUseSheetMode) {
+        enterScenePanelSheetMode();
+    } else {
+        closeScenePanelSheetLayer({ restoreFocus: false });
+        exitScenePanelSheetMode();
+    }
+    applyPanelEnabledState(lastPanelEnabledState, { collapsed: lastPanelCollapsedState });
+    return shouldUseSheetMode;
 }
 
 function restoreScenePanelSummonButton() {
@@ -214,6 +413,7 @@ function ensureScenePanelSummonButton() {
     if (existing) {
         scenePanelSummonButton = existing;
         startScenePanelSummonGuards(scenePanelSummonButton);
+        updateScenePanelSummonTarget();
         return scenePanelSummonButton;
     }
     const button = createElement("button", "cs-scene-panel__summon");
@@ -247,6 +447,7 @@ function ensureScenePanelSummonButton() {
     }
     scenePanelSummonButton = button;
     startScenePanelSummonGuards(scenePanelSummonButton);
+    updateScenePanelSummonTarget();
     return scenePanelSummonButton;
 }
 
@@ -255,6 +456,7 @@ function updateScenePanelSummonVisibility(enabled, { collapsed = false } = {}) {
         enabled: Boolean(enabled),
         collapsed: Boolean(collapsed),
     };
+    updateScenePanelSummonTarget();
     const button = ensureScenePanelSummonButton();
     if (!button) {
         return;
@@ -314,6 +516,8 @@ function applyCollapsedState(collapsed) {
 }
 
 function applyPanelEnabledState(enabled, { collapsed = false } = {}) {
+    lastPanelEnabledState = Boolean(enabled);
+    lastPanelCollapsedState = Boolean(collapsed);
     const container = getScenePanelContainer?.();
     const { $, el } = resolveContainer(container);
     const value = enabled ? "false" : "true";
@@ -332,6 +536,26 @@ function applyPanelEnabledState(enabled, { collapsed = false } = {}) {
         } else {
             el.setAttribute("hidden", "");
         }
+    }
+    if (scenePanelSheetMode) {
+        const layer = getScenePanelLayerElement();
+        if (layer) {
+            layer.dataset.panelSheet = "true";
+            layer.dataset.panelSheetState = enabled ? "open" : "closed";
+            layer.setAttribute("aria-hidden", enabled ? "false" : "true");
+            if (enabled) {
+                layer.removeAttribute("hidden");
+            } else {
+                layer.setAttribute("hidden", "");
+            }
+        }
+        if (enabled) {
+            openScenePanelSheetLayer();
+        } else {
+            closeScenePanelSheetLayer();
+        }
+    } else {
+        closeScenePanelSheetLayer({ restoreFocus: false });
     }
     updateScenePanelSummonVisibility(enabled, { collapsed });
 }
@@ -478,12 +702,18 @@ export function renderScenePanel(panelState = {}, { source = "scene" } = {}) {
     if (!container || (typeof container.length === "number" && container.length === 0)) {
         return;
     }
+    const { el: containerElement } = resolveContainer(container);
+    const isPopup = containerElement?.dataset?.csPopup === "true";
 
     const collapsed = Boolean(panelState.collapsed);
-    applyCollapsedState(collapsed);
-
     const settings = panelState.settings || {};
-    const enabled = settings.enabled !== false;
+    const enabled = isPopup ? true : settings.enabled !== false;
+
+    lastPanelEnabledState = enabled;
+    lastPanelCollapsedState = collapsed;
+    updateScenePanelViewportMode();
+
+    applyCollapsedState(collapsed);
     applyPanelEnabledState(enabled, { collapsed });
     applyAutoPinMode(settings.autoPinActive !== false);
     updateStatusCopy(enabled);

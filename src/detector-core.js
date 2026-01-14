@@ -1,5 +1,5 @@
 import { collectProfilePreprocessorScripts, applyPreprocessorScripts } from "./core/script-preprocessor.js";
-import { createNamePreprocessor, resolveFuzzyTolerance, stripDiacritics } from "./core/name-preprocessor.js";
+import { createNamePreprocessor, stripDiacritics } from "./core/name-preprocessor.js";
 import { getTextTokens, getTokenCountAsync } from "../tokenizers.js";
 
 const DEFAULT_UNICODE_WORD_PATTERN = "[\\p{L}\\p{M}\\p{N}_]";
@@ -8,10 +8,6 @@ const DEFAULT_BOUNDARY_LOOKBEHIND = "(?<![A-Za-z0-9_'’])";
 const PROPER_NOUN_CHAR_REGEX = /\p{Lu}/u;
 
 const PROFILE_TOKENIZER_CACHE = new WeakMap();
-const FALLBACK_RANGE_CHAR_PADDING = 10;
-const FALLBACK_RANGE_TOKEN_PADDING = 2;
-const DEFAULT_FALLBACK_MATCH_COOLDOWN = 200;
-
 function normalizeTokenizerPreference(value) {
     if (typeof value === "string") {
         const trimmed = value.trim();
@@ -435,363 +431,6 @@ function rangesOverlap(existingRanges, start, end) {
     });
 }
 
-function expandRangeWithPadding(start, end, tokenOffsets, {
-    charPadding = FALLBACK_RANGE_CHAR_PADDING,
-    tokenPadding = FALLBACK_RANGE_TOKEN_PADDING,
-} = {}) {
-    const safeStart = Number.isFinite(start) ? Math.max(0, Math.floor(start)) : 0;
-    const safeEndExclusive = Number.isFinite(end) ? Math.max(safeStart, Math.floor(end)) : safeStart;
-    let paddedStart = Math.max(0, safeStart - Math.max(0, charPadding));
-    let paddedEnd = safeEndExclusive + Math.max(0, charPadding);
-    const offsets = Array.isArray(tokenOffsets) && tokenOffsets.length ? tokenOffsets : null;
-    if (offsets && tokenPadding > 0) {
-        const inclusiveEnd = Math.max(safeStart, safeEndExclusive - 1);
-        const tokenStart = findTokenIndexCeil(offsets, safeStart);
-        if (tokenStart != null && tokenStart >= 0) {
-            const paddedTokenStart = Math.max(0, tokenStart - tokenPadding);
-            const startOffset = offsets[paddedTokenStart]?.start;
-            if (Number.isFinite(startOffset)) {
-                paddedStart = Math.min(paddedStart, startOffset);
-            }
-        }
-        const tokenEnd = findTokenIndexFloor(offsets, inclusiveEnd);
-        if (tokenEnd != null && tokenEnd >= 0) {
-            const paddedTokenEnd = Math.min(offsets.length - 1, tokenEnd + tokenPadding);
-            const endOffset = offsets[paddedTokenEnd]?.end;
-            if (Number.isFinite(endOffset)) {
-                paddedEnd = Math.max(paddedEnd, endOffset);
-            }
-        }
-    }
-    return { start: paddedStart, end: paddedEnd };
-}
-
-function createFallbackMatchHash(canonicalName, tokenIndex) {
-    if (!canonicalName || !Number.isFinite(tokenIndex)) {
-        return null;
-    }
-    return `${canonicalName.toLowerCase()}#${Math.max(0, Math.floor(tokenIndex))}`;
-}
-
-function createFallbackCooldownTracker({ fallbackCooldown, existingMatches }) {
-    const cooldownDistance = Number.isFinite(fallbackCooldown)
-        ? Math.max(0, Math.floor(fallbackCooldown))
-        : DEFAULT_FALLBACK_MATCH_COOLDOWN;
-    const hashTracker = new Map();
-    const nameTracker = new Map();
-
-    const seedFromMatch = (match) => {
-        if (!match) {
-            return;
-        }
-        const tokenIndex = Number.isFinite(match.tokenIndex) ? match.tokenIndex : null;
-        const canonicalName = typeof match.__preResolved?.canonical === "string"
-            ? match.__preResolved.canonical
-            : (typeof match.normalizedName === "string"
-                ? match.normalizedName
-                : (typeof match.name === "string" ? match.name : null));
-        const startIndex = Number.isFinite(match.matchIndex) ? match.matchIndex : 0;
-        const hash = createFallbackMatchHash(canonicalName, tokenIndex);
-        if (hash) {
-            hashTracker.set(hash, startIndex);
-        }
-        if (canonicalName) {
-            nameTracker.set(canonicalName.toLowerCase(), startIndex);
-        }
-    };
-
-    if (Array.isArray(existingMatches)) {
-        existingMatches.forEach(seedFromMatch);
-    }
-
-    return {
-        cooldown: cooldownDistance,
-        shouldSkip(hash, canonicalName, index) {
-            if (!Number.isFinite(index)) {
-                return false;
-            }
-            if (hash) {
-                const lastIndex = hashTracker.get(hash);
-                if (Number.isFinite(lastIndex) && index - lastIndex < cooldownDistance) {
-                    return true;
-                }
-            }
-            if (canonicalName) {
-                const nameKey = canonicalName.toLowerCase();
-                const lastIndex = nameTracker.get(nameKey);
-                if (Number.isFinite(lastIndex) && index - lastIndex < cooldownDistance) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        record(hash, canonicalName, index) {
-            if (!Number.isFinite(index)) {
-                return;
-            }
-            if (hash) {
-                hashTracker.set(hash, index);
-            }
-            if (canonicalName) {
-                nameTracker.set(canonicalName.toLowerCase(), index);
-            }
-        },
-    };
-}
-
-function clampScoreLimit(value) {
-    if (value == null) {
-        return null;
-    }
-    const number = Number(value);
-    if (!Number.isFinite(number)) {
-        return null;
-    }
-    if (number <= 0) {
-        return 0;
-    }
-    if (number >= 1) {
-        return 1;
-    }
-    return number;
-}
-
-function resolveFuzzyScoreLimit(tolerance, fallbackMaxScore) {
-    const toleranceLimit = clampScoreLimit(tolerance?.maxScore);
-    const profileLimit = clampScoreLimit(fallbackMaxScore);
-    if (toleranceLimit != null && profileLimit != null) {
-        return Math.min(toleranceLimit, profileLimit);
-    }
-    return toleranceLimit ?? profileLimit;
-}
-
-function collectSimpleFuzzyFallbackMatches({
-    text,
-    preprocessName,
-    tolerance,
-    existingMatches,
-    unicodeWordPattern,
-    fallbackPriority,
-    tokenOffsets,
-    allowLowercaseFallbackTokens,
-    fallbackMaxScore,
-    fallbackCooldown,
-}) {
-    if (!text || !preprocessName || !tolerance?.enabled) {
-        return [];
-    }
-    const ranges = Array.isArray(existingMatches)
-        ? existingMatches
-            .map((match) => {
-                if (!Number.isFinite(match?.matchIndex) || !Number.isFinite(match?.matchLength)) {
-                    return null;
-                }
-                const rawStart = Math.max(0, Math.floor(match.matchIndex));
-                const rawEnd = Math.max(0, Math.floor(match.matchIndex + match.matchLength));
-                return expandRangeWithPadding(rawStart, rawEnd, tokenOffsets);
-            })
-            .filter(Boolean)
-        : [];
-    const fallbackPriorityValue = Number.isFinite(fallbackPriority) ? fallbackPriority : 0;
-    const scoreLimit = resolveFuzzyScoreLimit(tolerance, fallbackMaxScore);
-    const tokens = scanNameLikeTokens(text, unicodeWordPattern, { allowLowercaseTokens: allowLowercaseFallbackTokens });
-    const fallbackMatches = [];
-    const cooldownTracker = createFallbackCooldownTracker({ fallbackCooldown, existingMatches });
-    tokens.forEach((token) => {
-        if (!token || !token.value) {
-            return;
-        }
-        const start = token.index;
-        const end = start + token.length;
-        if (rangesOverlap(ranges, start, end)) {
-            return;
-        }
-        const matchSpan = tokenOffsets ? computeMatchTokenSpan(tokenOffsets, start, token.length) : null;
-        const isLowercaseToken = token.value === token.value.toLowerCase();
-        const hasSpeakerCue = hasSpeakerCueContext(text, tokenOffsets, start, token.length, matchSpan);
-        if (allowLowercaseFallbackTokens && isLowercaseToken && !hasSpeakerCue) {
-            if (token.value.length < 4) {
-                return;
-            }
-            if (!tokenLooksLikeProperNoun(token.value)) {
-                return;
-            }
-        }
-        const sourceSlice = sliceTextRange(text, start, end);
-        const hasSourceUppercase = PROPER_NOUN_CHAR_REGEX.test(sourceSlice);
-        const allowLooseFuzzyMatch = allowLowercaseFallbackTokens
-            && isLowercaseToken
-            && (hasSourceUppercase || hasSpeakerCue);
-        const resolution = preprocessName(token.value, {
-            priority: fallbackPriorityValue,
-            allowLooseFuzzyMatch,
-        });
-        if (!resolution || !resolution.canonical || resolution.method !== "fuzzy" || !resolution.changed) {
-            return;
-        }
-        const resolutionScore = typeof resolution.score === "number" ? resolution.score : null;
-        if (resolutionScore == null) {
-            return;
-        }
-        if (scoreLimit != null && resolutionScore > scoreLimit) {
-            return;
-        }
-        const tokenIndex = Number.isFinite(matchSpan?.start) ? matchSpan.start : null;
-        const tokenLength = Number.isFinite(matchSpan?.length) ? matchSpan.length : null;
-        const canonicalName = typeof resolution.canonical === "string" ? resolution.canonical : null;
-        const matchHash = createFallbackMatchHash(canonicalName, tokenIndex);
-        if (cooldownTracker.shouldSkip(matchHash, canonicalName, start)) {
-            return;
-        }
-        const matchEntry = {
-            name: token.value,
-            rawName: token.value,
-            matchKind: "fuzzy-fallback",
-            matchIndex: start,
-            priority: fallbackPriorityValue,
-            matchLength: token.length,
-            tokenIndex,
-            tokenLength,
-            nameResolution: null,
-            __preResolved: resolution,
-            __fallbackHash: matchHash,
-        };
-        fallbackMatches.push(matchEntry);
-        cooldownTracker.record(matchHash, canonicalName, start);
-        ranges.push(expandRangeWithPadding(start, end, tokenOffsets));
-    });
-    return fallbackMatches;
-}
-
-function collectContextualFuzzyFallbackMatches({
-    text,
-    preprocessName,
-    tolerance,
-    existingMatches,
-    contexts,
-    tokenOffsets,
-    quoteRanges,
-    matchOptions,
-    allowLowercaseFallbackTokens,
-    fallbackMaxScore,
-    fallbackCooldown,
-}) {
-    if (!text || !preprocessName || !tolerance?.enabled) {
-        return [];
-    }
-    const detectors = Array.isArray(contexts) ? contexts.filter((context) => context?.regex) : [];
-    if (!detectors.length) {
-        return [];
-    }
-    const ranges = Array.isArray(existingMatches)
-        ? existingMatches
-            .map((match) => {
-                if (!Number.isFinite(match?.matchIndex) || !Number.isFinite(match?.matchLength)) {
-                    return null;
-                }
-                const rawStart = Math.max(0, Math.floor(match.matchIndex));
-                const rawEnd = Math.max(0, Math.floor(match.matchIndex + match.matchLength));
-                return expandRangeWithPadding(rawStart, rawEnd, tokenOffsets);
-            })
-            .filter(Boolean)
-        : [];
-    const scoreLimit = resolveFuzzyScoreLimit(tolerance, fallbackMaxScore);
-    const fallbackMatches = [];
-    const cooldownTracker = createFallbackCooldownTracker({ fallbackCooldown, existingMatches });
-
-    const resolveCandidate = (match) => {
-        if (!match) {
-            return null;
-        }
-        if (Array.isArray(match.groups)) {
-            for (const group of match.groups) {
-                if (typeof group === "string" && group.trim()) {
-                    return group.trim();
-                }
-            }
-        }
-        return null;
-    };
-
-    detectors.forEach((context) => {
-        const contextMatches = findMatches(
-            text,
-            context.regex,
-            quoteRanges,
-            { ...matchOptions, ...(context.options || {}) },
-        );
-        contextMatches.forEach((match) => {
-            const candidate = resolveCandidate(match);
-            if (!candidate || candidate.length < 3) {
-                return;
-            }
-            if (!tokenLooksLikeProperNoun(candidate, { allowLowercaseTokens: allowLowercaseFallbackTokens })) {
-                return;
-            }
-            const localIndex = typeof match.match === "string"
-                ? match.match.indexOf(candidate)
-                : -1;
-            const start = match.index + (localIndex >= 0 ? localIndex : 0);
-            const end = start + candidate.length;
-            if (rangesOverlap(ranges, start, end)) {
-                return;
-            }
-            const resolutionPriority = Number.isFinite(context.resolutionPriority)
-                ? context.resolutionPriority
-                : context.priority;
-            const isLowercaseCandidate = candidate === candidate.toLowerCase();
-            const matchSpan = tokenOffsets ? computeMatchTokenSpan(tokenOffsets, start, candidate.length) : null;
-            const hasSpeakerCue = allowLowercaseFallbackTokens
-                && isLowercaseCandidate
-                && hasSpeakerCueContext(text, tokenOffsets, start, candidate.length, matchSpan);
-            const sourceSlice = sliceTextRange(text, start, end);
-            const hasSourceUppercase = PROPER_NOUN_CHAR_REGEX.test(sourceSlice);
-            const allowLooseFuzzyMatch = allowLowercaseFallbackTokens
-                && isLowercaseCandidate
-                && (hasSourceUppercase || hasSpeakerCue);
-            const resolution = preprocessName(candidate, {
-                priority: resolutionPriority,
-                allowLooseFuzzyMatch,
-            });
-            if (!resolution || !resolution.canonical || resolution.method !== "fuzzy" || !resolution.changed) {
-                return;
-            }
-            const resolutionScore = typeof resolution.score === "number" ? resolution.score : null;
-            if (resolutionScore == null) {
-                return;
-            }
-            if (scoreLimit != null && resolutionScore > scoreLimit) {
-                return;
-            }
-            const tokenIndex = Number.isFinite(matchSpan?.start) ? matchSpan.start : null;
-            const tokenLength = Number.isFinite(matchSpan?.length) ? matchSpan.length : null;
-            const canonicalName = typeof resolution.canonical === "string" ? resolution.canonical : null;
-            const matchHash = createFallbackMatchHash(canonicalName, tokenIndex);
-            if (cooldownTracker.shouldSkip(matchHash, canonicalName, start)) {
-                return;
-            }
-            const matchEntry = {
-                name: candidate,
-                rawName: candidate,
-                matchKind: context.matchKind || "fuzzy-fallback",
-                matchIndex: start,
-                priority: Number.isFinite(context.priority) ? context.priority : 0,
-                matchLength: candidate.length,
-                tokenIndex,
-                tokenLength,
-                nameResolution: null,
-                __preResolved: resolution,
-                __fallbackHash: matchHash,
-            };
-            fallbackMatches.push(matchEntry);
-            cooldownTracker.record(matchHash, canonicalName, start);
-            ranges.push(expandRangeWithPadding(start, end, tokenOffsets));
-        });
-    });
-
-    return fallbackMatches;
-}
-
 function gatherProfilePatterns(profile) {
     const result = [];
     const seen = new Set();
@@ -812,6 +451,10 @@ function gatherProfilePatterns(profile) {
             }
             if (typeof slot === "string") {
                 add(slot);
+                return;
+            }
+            if (Array.isArray(slot)) {
+                slot.forEach(add);
                 return;
             }
             const name = typeof slot.name === "string" ? slot.name : null;
@@ -1256,66 +899,23 @@ function sanitizeAppliedScripts(applied = []) {
     return sanitized;
 }
 
-function describeFuzzyModeLabel(setting, tolerance) {
-    if (typeof setting === "string" && setting.trim()) {
-        return setting.trim();
-    }
-    if (typeof setting === "number" && Number.isFinite(setting)) {
-        return `≤${Math.floor(setting)}`;
-    }
-    if (setting && typeof setting === "object") {
-        if (typeof setting.mode === "string" && setting.mode.trim()) {
-            return setting.mode.trim();
-        }
-        if (typeof setting.label === "string" && setting.label.trim()) {
-            return setting.label.trim();
-        }
-        return "custom";
-    }
-    if (typeof setting === "boolean") {
-        return setting ? "custom" : "off";
-    }
-    if (tolerance && tolerance.enabled) {
-        return tolerance.accentSensitive ? "auto" : "always";
-    }
-    return "off";
-}
-
 export function collectDetections(text, profile = {}, regexes = {}, options = {}) {
     const matches = [];
-    const originalText = typeof text === "string" ? text : String(text ?? "");
+    const rawText = typeof text === "string" ? text : String(text ?? "");
+    const originalText = typeof options.originalText === "string"
+        ? options.originalText
+        : rawText;
     matches.originalText = originalText;
-    matches.preprocessedText = originalText;
+    matches.preprocessedText = rawText;
     matches.preprocessorScripts = [];
-    const toleranceSetting = options?.fuzzyTolerance ?? profile?.fuzzyTolerance ?? null;
-    const tolerance = resolveFuzzyTolerance(toleranceSetting);
-    const translateNames = Boolean(options?.translateFuzzyNames ?? profile?.translateFuzzyNames ?? profile?.translateNames ?? false);
-    const fallbackScoreLimit = clampScoreLimit(options?.fuzzyFallbackMaxScore ?? profile?.fuzzyFallbackMaxScore);
-    const configuredFallbackCooldown = options?.fuzzyFallbackCooldown ?? profile?.fuzzyFallbackCooldown;
-    const fallbackMatchCooldown = Number.isFinite(configuredFallbackCooldown)
-        ? Math.max(0, Math.floor(configuredFallbackCooldown))
-        : DEFAULT_FALLBACK_MATCH_COOLDOWN;
-    const fuseOverrides = options?.fuseOptions && typeof options.fuseOptions === "object"
-        ? options.fuseOptions
-        : null;
+    const translateNames = Boolean(options?.translateNames ?? profile?.translateNames ?? false);
     const candidateList = Array.isArray(regexes?.effectivePatterns) ? regexes.effectivePatterns : [];
     const aliasMap = buildAliasCanonicalMap(profile);
     const preprocessName = createNamePreprocessor({
         candidates: candidateList,
-        tolerance,
         translate: translateNames,
         aliasMap,
-        fuseOptions: fuseOverrides || undefined,
     });
-    const fuzzyMode = describeFuzzyModeLabel(toleranceSetting, tolerance);
-    matches.fuzzyResolution = {
-        tolerance,
-        translateNames,
-        candidateCount: candidateList.length,
-        used: false,
-        aliasCount: aliasMap.size,
-        mode: fuzzyMode,
-    };
     if (!originalText || !profile) {
         return matches;
     }
@@ -1350,13 +950,7 @@ export function collectDetections(text, profile = {}, regexes = {}, options = {}
         quoteRanges = getQuoteRanges(sourceText);
     }
     const priorityWeights = options.priorityWeights || {};
-    const fallbackWordPattern = typeof options?.unicodeWordPattern === "string" && options.unicodeWordPattern.trim()
-        ? options.unicodeWordPattern.trim()
-        : DEFAULT_UNICODE_WORD_PATTERN;
     const scanDialogueActions = Boolean(options.scanDialogueActions);
-    const allowLowercaseFallbackTokens = Boolean(
-        options?.scanLowercaseFallbackTokens ?? profile?.scanLowercaseFallbackTokens,
-    );
     const tokenProjection = buildTokenProjection(profile, sourceText);
     const tokenOffsets = Array.isArray(tokenProjection?.offsets) && tokenProjection.offsets.length
         ? tokenProjection.offsets
@@ -1494,87 +1088,18 @@ export function collectDetections(text, profile = {}, regexes = {}, options = {}
         });
     }
 
-    const fallbackPriority = Number.isFinite(priorityWeights.name) ? priorityWeights.name : 0;
-
-    if (tolerance?.enabled) {
-        const fallbackContexts = [];
-        if (profile.detectAttribution !== false && regexes.attributionFallbackRegex) {
-            fallbackContexts.push({
-                regex: regexes.attributionFallbackRegex,
-                matchKind: "attribution",
-                priority: priorityWeights.attribution,
-                resolutionPriority: fallbackPriority,
-                options: { searchInsideQuotes: scanDialogueActions },
-            });
-        }
-        if (profile.detectAction !== false && regexes.actionFallbackRegex) {
-            fallbackContexts.push({
-                regex: regexes.actionFallbackRegex,
-                matchKind: "action",
-                priority: priorityWeights.action,
-                resolutionPriority: fallbackPriority,
-                options: { searchInsideQuotes: scanDialogueActions },
-            });
-        }
-        if (profile.detectVocative !== false && regexes.vocativeFallbackRegex) {
-            fallbackContexts.push({
-                regex: regexes.vocativeFallbackRegex,
-                matchKind: "vocative",
-                priority: priorityWeights.vocative,
-                resolutionPriority: fallbackPriority,
-                options: { searchInsideQuotes: true },
-            });
-        }
-        if (profile.detectPossessive && regexes.possessiveFallbackRegex) {
-            fallbackContexts.push({
-                regex: regexes.possessiveFallbackRegex,
-                matchKind: "possessive",
-                priority: priorityWeights.possessive,
-                resolutionPriority: fallbackPriority,
-            });
-        }
-        if (regexes.speakerFallbackRegex) {
-            fallbackContexts.push({
-                regex: regexes.speakerFallbackRegex,
-                matchKind: "speaker",
-                priority: priorityWeights.speaker,
-                resolutionPriority: fallbackPriority,
-            });
-        }
-
-        const contextualFallbacks = collectContextualFuzzyFallbackMatches({
-            text: sourceText,
-            preprocessName,
-            tolerance,
-            existingMatches: matches,
-            contexts: fallbackContexts,
-            tokenOffsets,
-            quoteRanges,
-            matchOptions,
-            allowLowercaseFallbackTokens,
-            fallbackMaxScore: fallbackScoreLimit,
-            fallbackCooldown: fallbackMatchCooldown,
+    if (regexes.vetoRegex) {
+        findMatches(sourceText, regexes.vetoRegex, quoteRanges, matchOptions).some(match => {
+            matches.vetoMatch = {
+                phrase: match.groups?.[0] || match.match,
+                index: match.index,
+                length: typeof match.match === "string" ? match.match.length : 0,
+            };
+            matches.vetoPhrase = matches.vetoMatch.phrase;
+            return true;
         });
-        if (contextualFallbacks.length) {
-            matches.push(...contextualFallbacks);
-        }
-
-        const fallbackMatches = collectSimpleFuzzyFallbackMatches({
-            text: sourceText,
-            preprocessName,
-            tolerance,
-            existingMatches: matches,
-            unicodeWordPattern: fallbackWordPattern,
-            fallbackPriority,
-            tokenOffsets,
-            allowLowercaseFallbackTokens,
-            fallbackMaxScore: fallbackScoreLimit,
-            fallbackCooldown: fallbackMatchCooldown,
-        });
-        if (fallbackMatches.length) {
-            matches.push(...fallbackMatches);
-        }
     }
+
 
     matches.forEach((match) => {
         const preResolved = match.__preResolved;
@@ -1589,14 +1114,7 @@ export function collectDetections(text, profile = {}, regexes = {}, options = {}
             match.rawName = resolution.raw || match.rawName || match.name;
             match.name = resolution.canonical || match.name;
             match.normalizedName = resolution.normalized || match.name;
-            match.nameResolution = {
-                ...resolution,
-                tolerance,
-                translateNames,
-            };
-            if (resolution.applied && resolution.changed) {
-                matches.fuzzyResolution.used = true;
-            }
+            match.nameResolution = resolution;
         }
     });
 
