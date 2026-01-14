@@ -94,7 +94,7 @@ import { renderScenePanel, createScenePanelRefreshHandler } from "./src/ui/rende
 import { formatRelativeTime } from "./src/ui/render/utils.js";
 import { registerAutoSaveGuards } from "./src/ui/autoSaveGuards.js";
 
-const extensionName = "SillyTavern-CostumeSwitch";
+const extensionName = "SillyTavern-CharacterVisuals";
 const extensionTemplateNamespace = `third-party/${extensionName}`;
 const extensionFolderPath = `scripts/extensions/${extensionTemplateNamespace}`;
 const logPrefix = "[CharacterVisuals]";
