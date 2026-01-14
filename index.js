@@ -94,7 +94,17 @@ import { renderScenePanel, createScenePanelRefreshHandler } from "./src/ui/rende
 import { formatRelativeTime } from "./src/ui/render/utils.js";
 import { registerAutoSaveGuards } from "./src/ui/autoSaveGuards.js";
 
-const extensionName = "SillyTavern-CharacterVisuals";
+// Detect usage of either "SillyTavern-CharacterVisuals" or "SillyTavern-CostumeSwitch"
+// based on the script load path, defaulting to the new standard if ambiguous.
+const extensionName = (() => {
+    try {
+        const url = import.meta.url;
+        if (url.includes("SillyTavern-CostumeSwitch")) {
+            return "SillyTavern-CostumeSwitch";
+        }
+    } catch (e) { /* ignore */ }
+    return "SillyTavern-CharacterVisuals";
+})();
 const extensionTemplateNamespace = `third-party/${extensionName}`;
 const extensionFolderPath = `scripts/extensions/${extensionTemplateNamespace}`;
 const logPrefix = "[CharacterVisuals]";
