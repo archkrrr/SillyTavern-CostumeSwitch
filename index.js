@@ -4310,8 +4310,9 @@ async function issueCostumeForName(name, opts = {}) {
             const charId = Number(ctx.characterId);
             if (!Number.isNaN(charId) && ctx.characters[charId]) {
                 const char = ctx.characters[charId];
-                const mainName = char.avatar || char.name;
+                let mainName = char.avatar || char.name;
                 if (mainName) {
+                    mainName = mainName.replace(/\.[^/.]+$/, "");
                     const normMain = String(mainName).trim().replace(/\\/g, '/').toLowerCase();
                     const normFolder = String(finalFolder).trim().replace(/\\/g, '/').toLowerCase();
                     if (!normFolder.startsWith(normMain + '/')) {
