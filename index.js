@@ -4798,6 +4798,7 @@ function renderScorePresetPreview(presetName) {
 
     const weights = preset.weights || {};
     const maxValue = SCORE_WEIGHT_KEYS.reduce((max, key) => {
+        if (key === 'rosterBonus') return max;
         const presetVal = Math.abs(Number(weights[key] ?? 0));
         const currentVal = Math.abs(Number(currentWeights[key] ?? 0));
         return Math.max(max, presetVal, currentVal);
@@ -4813,6 +4814,7 @@ function renderScorePresetPreview(presetName) {
     table.append(head);
     const tbody = $('<tbody>');
     SCORE_WEIGHT_KEYS.forEach((key) => {
+        if (key === 'rosterBonus') return;
         const label = SCORE_WEIGHT_LABELS[key] || key;
         const presetVal = Number(weights[key] ?? 0);
         const currentVal = Number(currentWeights[key] ?? 0);
